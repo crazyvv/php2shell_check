@@ -1,0 +1,6 @@
+.git
+target
+config.json
+data
+state
+*.sqlite3*

@@ -1,0 +1,42 @@
+[package]
+name = "php-selfcheck"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.99"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+csv = "1"
+hex = "0.4"
+ipnet = "2"
+pbkdf2 = "0.12"
+rand = "0.8"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "stream", "json"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+tokio = { version = "1", features = ["full"] }
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+strip = true
+lto = "thin"
+
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3
+[profile.dev.package.hmac]
+opt-level = 3
+[profile.dev.package.digest]
+opt-level = 3

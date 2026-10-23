@@ -1,0 +1,10 @@
+# Place inside your company's HTTPS server block (SSO can be added here).
+# public_origin in config.json must match https://YOUR-INTERNAL-HOST exactly.
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_http_version 1.1;
+    client_max_body_size 256k;
+    proxy_read_timeout 30s;
+}
