@@ -509,3 +509,33 @@ async fn anonymous_http_shared_workspace_and_scope_options() {
         .unwrap();
     assert_eq!(invalid.status(), 403);
 }
+
+#[test]
+fn underscore_hosts_are_accepted_without_changing_authority() {
+    for (input, expected) in [
+        ("http://erp_api.xxxx.com", "http://erp_api.xxxx.com/"),
+        ("erp_api.xxxx.com", "https://erp_api.xxxx.com/"),
+        (
+            "http://erp_api.xxxx.com:8080/login?next=index.php",
+            "http://erp_api.xxxx.com:8080/login?next=index.php",
+        ),
+        ("http://ERP_API.xxxx.com.\u{a0}", "http://erp_api.xxxx.com/"),
+    ] {
+        let u = scanner::normalize(input).unwrap();
+        assert_eq!(u.as_str(), expected);
+        assert_eq!(u.host_str(), Some("erp_api.xxxx.com"));
+    }
+    for input in [
+        "http://user:password@erp_api.xxxx.com",
+        "http://erp_api.xxxx.com/\r\nX:x",
+        "http://erp_api.xxxx.com/\\evil",
+    ] {
+        assert!(scanner::normalize(input).is_err());
+    }
+    let mut c = cfg();
+    c.allowed_domains = vec!["xxxx.com".into()];
+    let u = scanner::normalize("http://erp_api.xxxx.com").unwrap();
+    assert!(scanner::validate_addresses(&u, &c, &["10.1.2.3".parse().unwrap()]).is_ok());
+    c.allowed_domains = vec!["other.example".into()];
+    assert!(scanner::validate_addresses(&u, &c, &["10.1.2.3".parse().unwrap()]).is_err());
+}

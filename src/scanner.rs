@@ -57,7 +57,7 @@ pub fn normalize(value: &str) -> Result<Url> {
             !host.is_empty()
                 && host
                     .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || b".-".contains(&c)),
+                    .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c)),
             "域名格式错误"
         );
         u.set_host(Some(&host))?;
