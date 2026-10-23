@@ -1,0 +1,15 @@
+{
+  "state": "published",
+  "tag": "v0.2.0",
+  "repository": "crazyvv/php2shell_check",
+  "source_commit": "09c9d9adefb5ad3a0219ec9a095e18be91d39dc8",
+  "release_url": "https://github.com/crazyvv/php2shell_check/releases/tag/v0.2.0",
+  "published_at": "2026-10-23T11:45:28Z",
+  "checksums": {
+    "php-selfcheck-v0.2.0-linux-x86_64.tar.gz": "7a1af611d777b4fa37243e2d0a8c254e59597cd3c7fc3b4fe6e2d46b99ec3480",
+    "php-selfcheck-v0.2.0-windows-x86_64.zip": "4c6071c85116e9f2b522648ee9bd10c594d7b456b8f308869bf8404ff613874c"
+  },
+  "verified_by_download": true,
+  "workflow_run": "https://github.com/crazyvv/php2shell_check/actions/runs/39947139307",
+  "recorded_at": "2026-10-23T11:45:28.852962+00:00"
+}
