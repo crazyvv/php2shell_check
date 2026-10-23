@@ -10,6 +10,7 @@ fn cfg() -> Config {
         admins: BTreeMap::new(),
         allow_anonymous: false,
         probe_multipart: false,
+        headers_only: false,
         allow_without_whitelist: false,
         allowed_networks: vec!["10.0.0.0/8".into()],
         allowed_domains: vec![],
@@ -519,11 +520,20 @@ async fn anonymous_http_isolated_workspace_and_scope_options() {
     assert!(me["user"].as_str().unwrap().starts_with("visitor:"));
     assert_eq!(me["scope_configured"], true);
     assert_eq!(me["allow_anonymous"], true);
+    let invalid = client
+        .post(format!("{}/api/scan", p.base))
+        .header("origin", &p.base)
+        .header("x-requested-with", "PHP-SelfCheck")
+        .json(&json!({"targets":["https://example.com"],"headers_only":"true"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), 400);
     let r = client
         .post(format!("{}/api/scan", p.base))
         .header("origin", &p.base)
         .header("x-requested-with", "PHP-SelfCheck")
-        .json(&json!({"targets":["http://169.254.169.254/"]}))
+        .json(&json!({"targets":["http://169.254.169.254/"],"headers_only":true}))
         .send()
         .await
         .unwrap();
@@ -549,6 +559,11 @@ async fn anonymous_http_isolated_workspace_and_scope_options() {
     }
     assert_eq!(record["owner"], me["user"]);
     assert_eq!(record["state"], "done");
+    assert_eq!(record["results"][0]["scan_mode"], "headers_only");
+    assert_eq!(
+        record["results"][0]["assessment"]["multipart"]["source"],
+        "not_tested"
+    );
     assert!(
         record["results"][0]["reason"]
             .as_str()

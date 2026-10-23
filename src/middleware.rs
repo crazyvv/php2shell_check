@@ -249,7 +249,7 @@ async fn collect_at(options: &CollectOptions, proc: &Path) -> Value {
         let binary = if let Some(cached) = cache.get(&exe) {
             cached.clone()
         } else if !exe.is_empty() && cache.len() < 16 {
-            let value = inspect_binary(&exe, kind, options.php_modules).await;
+            let value = inspect_binary(&exe, kind, options.php_modules, options.php_command).await;
             cache.insert(exe.clone(), value.clone());
             value
         } else {
@@ -333,15 +333,19 @@ async fn collect_at(options: &CollectOptions, proc: &Path) -> Value {
                 let kind = family(name, &key).unwrap_or("unknown");
                 cache.insert(
                     key.clone(),
-                    inspect_binary(&key, kind, options.php_modules).await,
+                    inspect_binary(&key, kind, options.php_modules, options.php_command).await,
                 );
             }
         }
     }
     json!({"status":if errors.is_empty(){"completed"}else{"partial"},"instances":instances,"binaries":cache,"web_probes":probes,"errors":errors,"web_probe_limit_reached":options.web_probe && seen.len()>=options.max_web_probes,"limitations":["进程、FD 或 maps 权限不足时结果不完整，未知不等于没有中间件/模块/端口。","Apache -M 是磁盘默认配置的模块声明，不保证与正在运行的进程配置一致。","nginx/Tengine 通常通过 FastCGI 连接 PHP-FPM，不要求加载 mod_php。","仅探测同一网络命名空间中已关联进程的监听地址；PHP-FPM 端口不发送 HTTP。","默认 Host/路径可能命中默认虚拟主机，TLS 证书验证保持开启。"]})
 }
-async fn inspect_binary(exe: &str, kind: &str, modules: bool) -> Value {
-    let version = run(Path::new(exe), version_args(kind)).await;
+async fn inspect_binary(exe: &str, kind: &str, modules: bool, php_command: bool) -> Value {
+    let version = if kind == "php-fpm" && !php_command {
+        json!({"status":"disabled","error":"PHP 命令采集未开启；不运行 PHP-FPM -v"})
+    } else {
+        run(Path::new(exe), version_args(kind)).await
+    };
     let output = version["output"].as_str().unwrap_or("");
     let lines = output.lines().take(2).collect::<Vec<_>>().join(" ");
     let module = if !modules {

@@ -377,7 +377,7 @@ fn get(state: &State, user: &str, path: &str, query: &str) -> Result<Response> {
         "/api/me" => {
             return Ok(json_response(
                 200,
-                json!({"user":user,"rule_date":scanner::RULE_DATE,"allowed_ports":state.config.allowed_ports,"scope_configured":state.config.allow_without_whitelist || !state.config.allowed_networks.is_empty(),"allow_anonymous":state.config.allow_anonymous,"allow_without_whitelist":state.config.allow_without_whitelist}),
+                json!({"headers_only":state.config.headers_only,"user":user,"rule_date":scanner::RULE_DATE,"allowed_ports":state.config.allowed_ports,"scope_configured":state.config.allow_without_whitelist || !state.config.allowed_networks.is_empty(),"allow_anonymous":state.config.allow_anonymous,"allow_without_whitelist":state.config.allow_without_whitelist}),
             ));
         }
         _ => {}
@@ -487,6 +487,11 @@ fn post(state: Arc<State>, user: &str, path: &str, body: Value) -> Result<Respon
             else {
                 return Ok(error(400, "每次提交 1–50 个目标"));
             };
+            if body.get("headers_only").is_some_and(|v| !v.is_boolean()) {
+                return Ok(error(400, "headers_only 必须为布尔值"));
+            }
+            let mut scan_config = state.config.clone();
+            scan_config.headers_only |= body["headers_only"].as_bool().unwrap_or(false);
             let mut targets = vec![];
             for t in raw {
                 let Some(t) = t.as_str() else {
@@ -521,7 +526,11 @@ fn post(state: Arc<State>, user: &str, path: &str, body: Value) -> Result<Respon
                     params![id, user, now(), "queued", "[]"],
                 )?;
             }
-            state.audit(user, "scan_submit", json!({"job":id,"targets":targets}))?;
+            state.audit(
+                user,
+                "scan_submit",
+                json!({"job":id,"targets":targets,"headers_only":scan_config.headers_only}),
+            )?;
             let job_id = id.clone();
             tokio::spawn(async move {
                 let done: Result<()> = async {
@@ -533,7 +542,7 @@ fn post(state: Arc<State>, user: &str, path: &str, body: Value) -> Result<Respon
                         .execute("UPDATE jobs SET state='running' WHERE id=?", [&job_id])?;
                     let mut results = vec![];
                     for target in targets {
-                        results.push(scanner::scan(&target, &state.config).await);
+                        results.push(scanner::scan(&target, &scan_config).await);
                         state.db.lock().unwrap().execute(
                             "UPDATE jobs SET results=? WHERE id=?",
                             params![serde_json::to_string(&results)?, job_id],
@@ -606,6 +615,7 @@ mod tests {
             admins: Default::default(),
             allow_anonymous: false,
             probe_multipart: false,
+            headers_only: false,
             allow_without_whitelist: false,
             allowed_networks: vec![],
             allowed_domains: vec![],

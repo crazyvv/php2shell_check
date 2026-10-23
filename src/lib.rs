@@ -9,3 +9,5 @@ pub mod admin;
 pub mod session;
 
 pub mod middleware;
+
+pub mod hostaudit;

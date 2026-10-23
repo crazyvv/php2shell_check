@@ -32,11 +32,16 @@ fn eol_does_not_mean_missing_patch_and_fixed_header_is_not_verified() {
 #[test]
 fn runtime_scope_and_untrusted_claims_are_preserved() {
     let a = assessment::host(&json!({"report":{"runtime_observations":[
-        {"sapi":"cli","scope":"web_runtime","settings":{"session.upload_progress.enabled":"1"}},
+        {"sapi":"cli","scope":"web_runtime","binary":"/opt/php/bin/php","loaded_ini":"/etc/php/cli/php.ini","settings":{"session.upload_progress.enabled":"1"}},
         {"sapi":"fpm-fcgi","settings":{"session.upload_progress.enabled":"0"}},
         {"sapi":"apache2handler","settings":{"session.upload_progress.enabled":null}}
     ]},"review":{"patch_status":"fixed_claimed"}}));
     assert_eq!(a["runtime_observations"][0]["scope"], "cli_only");
+    assert_eq!(a["runtime_observations"][0]["binary"], "/opt/php/bin/php");
+    assert_eq!(
+        a["runtime_observations"][0]["loaded_ini"],
+        "/etc/php/cli/php.ini"
+    );
     assert_eq!(a["runtime_observations"][0]["upload_progress"], "enabled");
     assert_eq!(a["runtime_observations"][1]["upload_progress"], "disabled");
     assert_eq!(a["runtime_observations"][2]["upload_progress"], "unknown");
@@ -69,5 +74,20 @@ fn middleware_import_is_scoped_unverified_and_bounded() {
             .as_array()
             .unwrap()
             .is_empty()
+    );
+}
+
+#[test]
+fn vendor_reference_import_never_becomes_verified_or_promotes_verdict() {
+    let a = assessment::host(
+        &json!({"report":{"package_audit":{"status":"completed","rules_independently_verified":true,"instances":[{"pid":"123","artifacts":[{"running_patch_status":"meets_vendor_reference","package":{"patch_status":"meets_vendor_reference"}}]}]}}}),
+    );
+    assert_eq!(a["package_audit"]["rules_independently_verified"], false);
+    assert_eq!(a["package_audit"]["confidence"], "unverified");
+    assert_eq!(a["patch_status"], "unverified");
+    assert_eq!(a["verdict_promoted"], false);
+    assert_eq!(
+        a["package_audit"]["instances"][0]["artifacts"][0]["running_patch_status"],
+        "meets_vendor_reference"
     );
 }

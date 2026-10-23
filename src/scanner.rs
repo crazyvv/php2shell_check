@@ -15,7 +15,7 @@ pub const SOURCE: &str = "https://www.php.net/archive/2026.php#2026-10-21-5";
 pub const MAX_BODY: usize = 131072;
 static PHP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bPHP\b").unwrap());
 static VERSION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\bPHP[/\s]+(\d+\.\d+\.\d+)\b").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)\bPHP[/\s]+([^\s,;)]+)").unwrap());
 static WEAK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)(?:href|src|action)\s*=\s*["'][^"']{0,500}\.php(?:[?"'/])"#).unwrap()
 });
@@ -170,9 +170,16 @@ pub struct Reply {
     pub truncated: bool,
 }
 async fn request_pinned(u: &Url, ip: IpAddr) -> Result<Reply> {
-    request_method(u, ip, false).await
+    request_method(u, ip, RequestKind::Get).await
 }
-async fn request_method(u: &Url, ip: IpAddr, multipart: bool) -> Result<Reply> {
+#[derive(Clone, Copy)]
+enum RequestKind {
+    Get,
+    Head,
+    GetHeaders,
+    Multipart,
+}
+async fn request_method(u: &Url, ip: IpAddr, kind: RequestKind) -> Result<Reply> {
     let host = u.host_str().unwrap();
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -184,9 +191,11 @@ async fn request_method(u: &Url, ip: IpAddr, multipart: bool) -> Result<Reply> {
             SocketAddr::new(ip, u.port_or_known_default().unwrap()),
         )
         .build()?;
-    let request = if multipart {
+    let request = if matches!(kind, RequestKind::Multipart) {
         client.post(u.clone()).header("Content-Type","multipart/form-data; boundary=PHPSELFCheckControl")
             .body("--PHPSELFCheckControl\r\nContent-Disposition: form-data; name=\"selfcheck_control\"\r\n\r\n1\r\n--PHPSELFCheckControl--\r\n")
+    } else if matches!(kind, RequestKind::Head) {
+        client.head(u.clone())
     } else {
         client.get(u.clone())
     };
@@ -208,6 +217,14 @@ async fn request_method(u: &Url, ip: IpAddr, multipart: bool) -> Result<Reply> {
             )
         })
         .collect();
+    if matches!(kind, RequestKind::Head | RequestKind::GetHeaders) {
+        return Ok(Reply {
+            status,
+            headers,
+            body: vec![],
+            truncated: false,
+        });
+    }
     let body = tokio::time::timeout(Duration::from_secs(8), async {
         let mut body = Vec::new();
         while let Some(chunk) = response.chunk().await? {
@@ -228,17 +245,32 @@ async fn request_method(u: &Url, ip: IpAddr, multipart: bool) -> Result<Reply> {
         truncated,
     })
 }
-pub fn version_risk(v: &str) -> (&'static str, &'static str) {
-    let p = v
-        .split('.')
-        .map(str::parse::<u32>)
-        .collect::<std::result::Result<Vec<_>, _>>();
-    let Ok(p) = p else {
-        return ("无法判断", "版本格式错误");
-    };
-    if p.len() != 3 {
-        return ("无法判断", "版本格式错误");
+/// Preserve the raw banner; distro revisions are not evidence of a vendor backport.
+pub fn stable_version(value: &str) -> Option<[u32; 3]> {
+    static STABLE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^(\d+)\.(\d+)\.(\d+)([-+~][A-Za-z0-9.+~:_-]+)?$").unwrap());
+    static PRE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)(?:^|[-+~._])(?:dev|alpha|beta|rc)").unwrap());
+    let c = STABLE.captures(value)?;
+    if c.get(4).is_some_and(|s| PRE.is_match(s.as_str())) {
+        return None;
     }
+    Some([c[1].parse().ok()?, c[2].parse().ok()?, c[3].parse().ok()?])
+}
+pub fn check_exit_code(result: &Value) -> u8 {
+    match result["verdict"].as_str() {
+        Some("版本达到修复基线（待核验）") => 0,
+        Some("疑似受影响") => 1,
+        _ => 3,
+    }
+}
+pub fn version_risk(v: &str) -> (&'static str, &'static str) {
+    let Some(p) = stable_version(v) else {
+        return (
+            "无法判断",
+            "预发布、格式不明或未识别的版本声明，不按正式修复版判断",
+        );
+    };
     let fix = match (p[0], p[1]) {
         (8, 2) => Some(35),
         (8, 3) => Some(36),
@@ -258,7 +290,7 @@ pub fn version_risk(v: &str) -> (&'static str, &'static str) {
             "仅为远程版本声明；需核验实际 Web 实例与厂商补丁",
         );
     }
-    if p.as_slice() >= [5, 4, 0].as_slice() && p.as_slice() < [8, 2, 0].as_slice() {
+    if matches!((p[0], p[1]), (5, 4..=6) | (7, 0..=4) | (8, 0..=1)) {
         return (
             "疑似受影响",
             "已停止上游维护的 PHP；补丁状态未知，需核验厂商或源码回补",
@@ -310,16 +342,85 @@ pub fn inspect(headers: &[(String, String)], body: &[u8]) -> Value {
     } else {
         ("未发现 PHP 特征", "不代表未使用 PHP，也不代表无漏洞")
     };
-    let assessment = crate::assessment::remote(headers, body, &versions);
-    json!({"assessment":assessment,"verdict":verdict,"reason":reason,"versions":versions,"evidence":evidence,"cves":["CVE-2026-109618","CVE-2026-109619"],"rule_date":RULE_DATE,"source":SOURCE,"rule_provenance":"2026-10-23 已核对 PHP 官方 GHSA 与 php-src NEWS","exploitation_verified":false})
+    let mut assessment = crate::assessment::remote(headers, body, &versions);
+    let warnings: Vec<_> = versions
+        .iter()
+        .filter(|v| version_risk(v).0 == "疑似受影响")
+        .cloned()
+        .collect();
+    if !warnings.is_empty() {
+        assessment["review_priority"] = json!("high");
+    }
+
+    json!({"version_warnings":warnings,"assessment":assessment,"verdict":verdict,"reason":reason,"versions":versions,"evidence":evidence,"cves":["CVE-2026-109618","CVE-2026-109619"],"rule_date":RULE_DATE,"source":SOURCE,"rule_provenance":"2026-10-23 已核对 PHP 官方 GHSA 与 php-src NEWS","exploitation_verified":false})
+}
+async fn headers_using<F, Fut>(mut fetch: F) -> Result<(Reply, IpAddr, Vec<Value>)>
+where
+    F: FnMut(RequestKind) -> Fut,
+    Fut: std::future::Future<Output = Result<(Reply, IpAddr)>>,
+{
+    let (mut reply, mut ip) = fetch(RequestKind::Head).await?;
+    let mut trace = vec![
+        json!({"method":"HEAD","http_status":reply.status,"ip":ip.to_string(),"body_read":false}),
+    ];
+    if matches!(reply.status, 405 | 501) {
+        let (mut fallback, next_ip) = fetch(RequestKind::GetHeaders).await?;
+        trace.push(json!({"method":"GET","http_status":fallback.status,"ip":next_ip.to_string(),"body_read":false}));
+        fallback.headers.extend(reply.headers);
+        reply = fallback;
+        ip = next_ip;
+    }
+    Ok((reply, ip, trace))
 }
 pub async fn scan(target: &str, cfg: &Config) -> Value {
-    let mut result = scan_using(target, |u: Url| async move {
-        let ips = resolve(&u, cfg).await?;
-        Ok((request_pinned(&u, ips[0]).await?, ips[0]))
-    })
-    .await;
+    let trace = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let mut result = if cfg.headers_only {
+        let trace = trace.clone();
+        scan_using_mode(
+            target,
+            move |u: Url| {
+                let trace = trace.clone();
+                async move {
+                    let (reply, ip, requests) = headers_using(|kind| {
+                        let u = u.clone();
+                        async move {
+                            let ips = resolve(&u, cfg).await?;
+                            Ok((request_method(&u, ips[0], kind).await?, ips[0]))
+                        }
+                    })
+                    .await?;
+                    *trace.lock().unwrap() = requests;
+                    Ok((reply, ip))
+                }
+            },
+            false,
+        )
+        .await
+    } else {
+        scan_using(target, |u: Url| async move {
+            let ips = resolve(&u, cfg).await?;
+            Ok((request_pinned(&u, ips[0]).await?, ips[0]))
+        })
+        .await
+    };
+    if cfg.headers_only {
+        result["requests"] = json!(*trace.lock().unwrap());
+    }
+    result["scan_mode"] = json!(if cfg.headers_only {
+        "headers_only"
+    } else {
+        "full"
+    });
+    if cfg.headers_only {
+        result["assessment"]["multipart"] = crate::assessment::observation(
+            "unknown",
+            "not_tested",
+            "none",
+            "仅响应头模式，不读取页面或发送 multipart POST",
+        );
+    }
     if cfg.probe_multipart
+        && !cfg.headers_only
         && result["http_status"]
             .as_u64()
             .is_some_and(|s| (200..300).contains(&s))
@@ -332,7 +433,11 @@ pub async fn scan(target: &str, cfg: &Config) -> Value {
                     .ok_or_else(|| anyhow::anyhow!("缺少目标"))?,
             )?;
             let ips = resolve(&u, cfg).await?;
-            Ok((request_method(&u, ips[0], true).await?, ips[0], u))
+            Ok((
+                request_method(&u, ips[0], RequestKind::Multipart).await?,
+                ips[0],
+                u,
+            ))
         }
         .await;
         result["assessment"]["multipart"] = match probe {
@@ -366,7 +471,14 @@ pub async fn scan(target: &str, cfg: &Config) -> Value {
     }
     result
 }
-async fn scan_using<F, Fut>(target: &str, mut fetch: F) -> Value
+async fn scan_using<F, Fut>(target: &str, fetch: F) -> Value
+where
+    F: FnMut(Url) -> Fut,
+    Fut: std::future::Future<Output = Result<(Reply, IpAddr)>>,
+{
+    scan_using_mode(target, fetch, true).await
+}
+async fn scan_using_mode<F, Fut>(target: &str, mut fetch: F, follow_redirects: bool) -> Value
 where
     F: FnMut(Url) -> Fut,
     Fut: std::future::Future<Output = Result<(Reply, IpAddr)>>,
@@ -391,7 +503,8 @@ where
                 .headers
                 .iter()
                 .find(|(k, _)| k.eq_ignore_ascii_case("location"));
-            if matches!(r.status, 301 | 302 | 303 | 307 | 308)
+            if follow_redirects
+                && matches!(r.status, 301 | 302 | 303 | 307 | 308)
                 && let Some((_, loc)) = location
             {
                 if hop == 3 {
@@ -421,12 +534,111 @@ where
 mod tests {
     use super::*;
     #[tokio::test]
+    async fn headers_mode_falls_back_only_on_405_501_and_never_reads_body() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+        for fallback_status in [405, 501] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                for method in ["HEAD", "GET"] {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut bytes = [0; 4096];
+                    let n = socket.read(&mut bytes).await.unwrap();
+                    let text = String::from_utf8_lossy(&bytes[..n]);
+                    assert!(text.starts_with(&format!("{method} / ")));
+                    assert!(!text.to_lowercase().contains("authorization:"));
+                    if method == "HEAD" {
+                        socket.write_all(format!("HTTP/1.1 {fallback_status} Unsupported\r\nX-Powered-By: PHP/8.4.26\r\nContent-Length: 0\r\n\r\n").as_bytes()).await.unwrap();
+                    } else {
+                        socket.write_all(b"HTTP/1.1 200 OK\r\nX-Powered-By: PHP/8.4.27\r\nContent-Length: 999999\r\n\r\nPHP/8.2.34").await.unwrap();
+                    }
+                }
+            });
+            let u = Url::parse(&format!("http://headers.invalid:{port}/")).unwrap();
+            let (reply, _, trace) = tokio::time::timeout(
+                Duration::from_secs(2),
+                headers_using(|kind| {
+                    let u = u.clone();
+                    async move {
+                        Ok((
+                            request_method(&u, "127.0.0.1".parse().unwrap(), kind).await?,
+                            "127.0.0.1".parse().unwrap(),
+                        ))
+                    }
+                }),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(reply.body.is_empty());
+            assert_eq!(trace.len(), 2);
+            assert_eq!(trace[1]["method"], "GET");
+            let finding = inspect(&reply.headers, &reply.body);
+            assert_eq!(finding["verdict"], "无法判断");
+            assert_eq!(finding["version_warnings"][0], "8.4.26");
+            server.await.unwrap();
+        }
+        for status in [200, 302, 403, 500] {
+            let mut calls = 0;
+            let (reply, _, trace) = headers_using(|kind| {
+                calls += 1;
+                assert!(matches!(kind, RequestKind::Head));
+                async move {
+                    Ok((
+                        Reply {
+                            status,
+                            headers: vec![],
+                            body: vec![],
+                            truncated: false,
+                        },
+                        "10.0.0.1".parse().unwrap(),
+                    ))
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(calls, 1);
+            assert_eq!(trace.len(), 1);
+            assert_eq!(reply.status, status);
+        }
+    }
+    #[tokio::test]
+    async fn headers_mode_does_not_follow_redirects() {
+        let mut calls = 0;
+        let result = scan_using_mode(
+            "https://example.com",
+            |_| {
+                calls += 1;
+                async {
+                    Ok((
+                        Reply {
+                            status: 302,
+                            headers: vec![("Location".into(), "https://elsewhere.invalid/".into())],
+                            body: vec![],
+                            truncated: false,
+                        },
+                        "10.0.0.1".parse().unwrap(),
+                    ))
+                }
+            },
+            false,
+        )
+        .await;
+        assert_eq!(calls, 1);
+        assert_eq!(result["hops"].as_array().unwrap().len(), 1);
+        assert_eq!(result["final_url"], "https://example.com/");
+    }
+    #[tokio::test]
     async fn redirect_revalidates_scope() {
         let cfg = Config {
             public_origin: "http://localhost".into(),
             admins: Default::default(),
             allow_anonymous: false,
             probe_multipart: false,
+            headers_only: false,
             allow_without_whitelist: false,
             allowed_networks: vec!["10.0.0.0/8".into()],
             allowed_domains: vec![],
@@ -546,7 +758,7 @@ mod tests {
         let reply = request_method(
             &Url::parse(&format!("http://control.invalid:{port}/check")).unwrap(),
             "127.0.0.1".parse().unwrap(),
-            true,
+            RequestKind::Multipart,
         )
         .await
         .unwrap();

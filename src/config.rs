@@ -16,6 +16,9 @@ pub struct Config {
     pub allow_anonymous: bool,
     #[serde(default)]
     pub probe_multipart: bool,
+    /// HEAD first, GET only for 405/501, no redirects or response bodies.
+    #[serde(default)]
+    pub headers_only: bool,
     #[serde(default)]
     pub allow_without_whitelist: bool,
     #[serde(default)]

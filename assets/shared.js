@@ -25,6 +25,8 @@ function assessmentView(a) {
 function hostEvidenceView(e) {
   const wrap=node('div');
   wrap.append(node('b','主机材料 / 手工复核：未经独立核验'));
+  if(e.report_limits?.truncated) wrap.append(node('p','报告因大小限制省略了部分条目，结果不完整；未列出不代表不存在。','fine'));
+  if(e.php_command?.status === 'disabled') wrap.append(node('p','本次未开启 PHP 命令采集。','fine'));
   for(const r of e.runtime_observations || []) {
     wrap.append(node('p',`${r.scope === 'cli_only' ? '仅 CLI，不能代表 Web' : r.scope === 'web_runtime_claimed' ? '提交人声明为 Web 实例' : '运行环境归属未知'} · SAPI ${r.sapi} · PHP ${r.version || '未知'} · upload_progress ${statusNames[r.upload_progress] || '未知'}`,'fine'));
   }
@@ -40,6 +42,20 @@ function hostEvidenceView(e) {
     }
     for(const probe of e.middleware.web_probes || []) {
       wrap.append(node('p',`本机 Web：${probe.scheme || ''} ${probe.host || probe.bind_address || ''}:${probe.port || ''}${probe.path || '/'} · ${probe.status} · HTTP ${probe.response?.http_status || '未知'} · ${probe.response?.findings?.verdict || probe.reason || '无法完成请求或证据不足'}`,'fine'));
+    }
+  }
+  if(e.package_audit && !['not_collected','disabled'].includes(e.package_audit.status)) {
+    const audit=e.package_audit;
+    wrap.append(node('b','运行实例与厂商补丁参考核验（提交材料，未经独立核验）'));
+    const labels={unknown:'未知',matches_disk_image:'运行映像与磁盘一致',restart_required:'运行映像已删除或替换，需要重启复核',meets_vendor_reference:'达到厂商参考修订号，待核验',below_vendor_reference:'低于厂商参考修订号，需处理'};
+    for(const m of audit.instances || []) {
+      wrap.append(node('p',`PID ${m.pid || '未知'} · ${m.name || ''} · ${m.executable || '路径未知'}`,'fine'));
+      for(const a of m.artifacts || []) {
+        const p=a.package || {};
+        wrap.append(node('p',`${a.path || ''} · ${labels[a.running_image_status] || '未知'} · 包 ${p.name || '未知'} ${p.version || ''} · ${labels[a.running_patch_status] || '未知'} · ${p.reason || p.detail || ''}`,'fine'));
+        if(p.reference_rule?.advisory) wrap.append(node('p',`参考公告：${p.reference_rule.advisory}；阈值 ${p.reference_rule.fixed_version || '未知'}。参考表匹配不等于公告或修复已核实。`,'fine'));
+      }
+      if(!m.php_maps_readable || !m.process_identity_stable) wrap.append(node('p','进程或模块信息不完整，不能确认当前运行状态。','fine'));
     }
   }
   if(e.review && Object.keys(e.review).length) {
@@ -74,6 +90,7 @@ function renderJobs(jobs, endpoint='/api/jobs', showOwners=false, options={}) {
         target.append(node('div',r.target),node('p',`${r.connected_ip || '—'} · HTTP ${r.http_status || '—'}`,'fine'));
         verdict.append(badge(r.verdict)); evidence.append(node('div',r.reason));
         evidence.append(assessmentView(r.assessment));
+        if(r.version_warnings?.length) evidence.append(node('p',`需优先复核的版本声明：${r.version_warnings.join('、')}。多版本冲突时仍需确认实际后端。`,'fine'));
         for(const h of r.host_evidence || []) evidence.append(hostEvidenceView(h.assessment));
         evidence.append(details('查看完整检测依据',r));
         row.append(target,verdict,evidence); tbody.append(row);

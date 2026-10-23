@@ -8,5 +8,6 @@
   "database": "data/selfcheck.sqlite3",
   "users": {},
   "probe_multipart": false,
+  "headers_only": false,
   "admins": {}
 }

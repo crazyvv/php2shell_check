@@ -1,0 +1,132 @@
+{
+  "schema": "php-selfcheck-vendor-reference/v1",
+  "reference_source": "https://github.com/openai/php2shell-checker/blob/ffcd3fc82e5b404f2a04a95b2805ca7639d530fa/skills/phpcheck-server/SKILL.md",
+  "reference_date": "2026-10-22",
+  "independently_verified": false,
+  "cves": [
+    "CVE-2026-109618",
+    "CVE-2026-109619"
+  ],
+  "rules": [
+    {
+      "os_id": "debian",
+      "os_version": "12",
+      "branch": "8.2",
+      "source_package": "php8.2",
+      "manager": "dpkg",
+      "fixed_version": "8.2.35-1~deb12u1",
+      "advisory": "https://security-tracker.debian.org/tracker/DLA-4848-1",
+      "required_stream": ""
+    },
+    {
+      "os_id": "debian",
+      "os_version": "13",
+      "branch": "8.4",
+      "source_package": "php8.4",
+      "manager": "dpkg",
+      "fixed_version": "8.4.27-1~deb13u1",
+      "advisory": "https://security-tracker.debian.org/tracker/DSA-6574-1",
+      "required_stream": ""
+    },
+    {
+      "os_id": "ubuntu",
+      "os_version": "26.10",
+      "branch": "8.5",
+      "source_package": "php8.5",
+      "manager": "dpkg",
+      "fixed_version": "8.5.9-0ubuntu2.1",
+      "advisory": "https://ubuntu.com/security/notices/USN-8948-1",
+      "required_stream": ""
+    },
+    {
+      "os_id": "ubuntu",
+      "os_version": "26.04",
+      "branch": "8.5",
+      "source_package": "php8.5",
+      "manager": "dpkg",
+      "fixed_version": "8.5.4-0ubuntu1.5",
+      "advisory": "https://ubuntu.com/security/notices/USN-8948-1",
+      "required_stream": ""
+    },
+    {
+      "os_id": "ubuntu",
+      "os_version": "24.04",
+      "branch": "8.3",
+      "source_package": "php8.3",
+      "manager": "dpkg",
+      "fixed_version": "8.3.6-0ubuntu0.24.04.13",
+      "advisory": "https://ubuntu.com/security/notices/USN-8948-1",
+      "required_stream": ""
+    },
+    {
+      "os_id": "ubuntu",
+      "os_version": "22.04",
+      "branch": "8.1",
+      "source_package": "php8.1",
+      "manager": "dpkg",
+      "fixed_version": "8.1.2-1ubuntu2.28",
+      "advisory": "https://ubuntu.com/security/notices/USN-8948-1",
+      "required_stream": ""
+    },
+    {
+      "os_id": "ubuntu",
+      "os_version": "20.04",
+      "branch": "7.4",
+      "source_package": "php7.4",
+      "manager": "dpkg",
+      "fixed_version": "7.4.3-4ubuntu2.29+esm5",
+      "advisory": "https://ubuntu.com/security/notices/USN-8948-2",
+      "required_stream": ""
+    },
+    {
+      "os_id": "ubuntu",
+      "os_version": "18.04",
+      "branch": "7.2",
+      "source_package": "php7.2",
+      "manager": "dpkg",
+      "fixed_version": "7.2.24-0ubuntu0.18.04.17+esm14",
+      "advisory": "https://ubuntu.com/security/notices/USN-8948-2",
+      "required_stream": ""
+    },
+    {
+      "os_id": "ubuntu",
+      "os_version": "16.04",
+      "branch": "7.0",
+      "source_package": "php7.0",
+      "manager": "dpkg",
+      "fixed_version": "7.0.33-0ubuntu0.16.04.16+esm22",
+      "advisory": "https://ubuntu.com/security/notices/USN-8948-2",
+      "required_stream": ""
+    },
+    {
+      "os_id": "ubuntu",
+      "os_version": "14.04",
+      "branch": "5.5",
+      "source_package": "php5",
+      "manager": "dpkg",
+      "fixed_version": "5.5.9+dfsg-1ubuntu4.29+esm18",
+      "advisory": "https://ubuntu.com/security/notices/USN-8948-2",
+      "required_stream": ""
+    },
+    {
+      "os_id": "rhel",
+      "os_version": "8.10",
+      "branch": "7.4",
+      "source_package": "php",
+      "manager": "rpm",
+      "fixed_version": "0:7.4.33-8.module+el8.10.0+25117+30337cca",
+      "advisory": "https://access.redhat.com/errata/RHSA-2026:87080",
+      "required_stream": "7.4"
+    },
+    {
+      "os_id": "rhel",
+      "os_version": "9.8",
+      "branch": "8.0",
+      "source_package": "php",
+      "manager": "rpm",
+      "fixed_version": "0:8.0.30-8.el9_8.1",
+      "advisory": "https://access.redhat.com/errata/RHSA-2026:87151",
+      "required_stream": ""
+    }
+  ]
+}

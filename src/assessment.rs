@@ -35,51 +35,45 @@ pub fn remote(headers: &[(String, String)], body: &[u8], versions: &[String]) ->
         "none",
         "缺少唯一且可识别的版本声明",
     );
-    if versions.len() == 1 {
-        let parts = versions[0]
-            .split('.')
-            .map(str::parse::<u32>)
-            .collect::<Result<Vec<_>, _>>();
-        if let Ok(p) = parts
-            && p.len() == 3
-        {
-            let fixed = match (p[0], p[1]) {
-                (8, 2) => Some(35),
-                (8, 3) => Some(36),
-                (8, 4) => Some(27),
-                (8, 5) => Some(12),
-                _ => None,
+    if versions.len() == 1
+        && let Some(p) = crate::scanner::stable_version(&versions[0])
+    {
+        let fixed = match (p[0], p[1]) {
+            (8, 2) => Some(35),
+            (8, 3) => Some(36),
+            (8, 4) => Some(27),
+            (8, 5) => Some(12),
+            _ => None,
+        };
+        if let Some(f) = fixed {
+            patch = if p[2] < f {
+                observation(
+                    "below_upstream_fix",
+                    "response_header",
+                    "low",
+                    "声明版本低于官方修复基线；回补补丁状态未知",
+                )
+            } else {
+                observation(
+                    "meets_upstream_fix",
+                    "response_header",
+                    "low",
+                    "声明版本达到上游基线，不证明实际实例已修复",
+                )
             };
-            if let Some(f) = fixed {
-                patch = if p[2] < f {
-                    observation(
-                        "below_upstream_fix",
-                        "response_header",
-                        "low",
-                        "声明版本低于官方修复基线；回补补丁状态未知",
-                    )
-                } else {
-                    observation(
-                        "meets_upstream_fix",
-                        "response_header",
-                        "low",
-                        "声明版本达到上游基线，不证明实际实例已修复",
-                    )
-                };
-                lifecycle = observation(
-                    "supported_branch",
-                    "response_header",
-                    "low",
-                    "截至 2026-10-23 的上游支持分支，仍须检查补丁",
-                );
-            } else if (5..=7).contains(&p[0]) || (p[0] == 8 && p[1] <= 1) {
-                lifecycle = observation(
-                    "eol",
-                    "response_header",
-                    "low",
-                    "已停止上游维护；发行版、商业 LTS 或源码回补状态未知",
-                );
-            }
+            lifecycle = observation(
+                "supported_branch",
+                "response_header",
+                "low",
+                "截至 2026-10-23 的上游支持分支，仍须检查补丁",
+            );
+        } else if (5..=7).contains(&p[0]) || (p[0] == 8 && p[1] <= 1) {
+            lifecycle = observation(
+                "eol",
+                "response_header",
+                "low",
+                "已停止上游维护；发行版、商业 LTS 或源码回补状态未知",
+            );
         }
     }
     let priority = if patch["status"] == "below_upstream_fix" || lifecycle["status"] == "eol" {
@@ -175,7 +169,7 @@ pub fn host(payload: &Value) -> Value {
             },
             _ => None,
         };
-        observations.push(json!({"scope":scope,"sapi":sapi,"version":runtime["version"],"upload_progress":enabled.map(|b|if b{"enabled"}else{"disabled"}).unwrap_or("unknown"),"settings":runtime["settings"],"confidence":"unverified","source":"developer_supplied_runtime_report"}));
+        observations.push(json!({"scope":scope,"sapi":sapi,"version":runtime["version"],"command_binary":runtime["command_binary"],"binary":runtime["binary"],"loaded_ini":runtime["loaded_ini"],"scanned_ini":runtime["scanned_ini"],"upload_progress":enabled.map(|b|if b{"enabled"}else{"disabled"}).unwrap_or("unknown"),"settings":runtime["settings"],"confidence":"unverified","source":"developer_supplied_runtime_report"}));
     }
     let raw = &payload["report"]["middleware"];
     let entries = |key: &str, limit: usize| {
@@ -192,5 +186,24 @@ pub fn host(payload: &Value) -> Value {
             .unwrap_or_default()
     };
     let middleware = json!({"status":raw["status"].as_str().unwrap_or("not_collected"),"instances":entries("instances",128),"web_probes":entries("web_probes",64),"source":"developer_supplied_host_report","confidence":"unverified"});
-    json!({"middleware":middleware,"trust":"开发者提交，未经独立核验","association":"用户指定关联目标，未验证实例归属","runtime_observations":observations,"review":payload["review"],"patch_status":"unverified","confidence":"unverified","verdict_promoted":false})
+    let audit = &payload["report"]["package_audit"];
+    let instances = audit["instances"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter(|v| v.is_object())
+                .take(128)
+                .map(|v| {
+                    let mut v = v.clone();
+                    if let Some(a) = v["artifacts"].as_array_mut() {
+                        a.truncate(16);
+                    }
+                    v
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let audit = json!({"status":audit["status"].as_str().unwrap_or("not_collected"),"os":audit["os"],"instances":instances,"reference_source":audit["reference_source"],"reference_date":audit["reference_date"],"rules_independently_verified":false,"confidence":"unverified","detail":"提交材料中的参考匹配，不提升远程结论或确认修复"});
+    json!({"report_limits":payload["report"]["report_limits"],"php_command":payload["report"]["php_command"],"package_audit":audit,"middleware":middleware,"trust":"开发者提交，未经独立核验","association":"用户指定关联目标，未验证实例归属","runtime_observations":observations,"review":payload["review"],"patch_status":"unverified","confidence":"unverified","verdict_promoted":false})
 }

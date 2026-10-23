@@ -1,4 +1,7 @@
 {
+  "php_command": false,
+  "php_binary": null,
+  "package_audit": false,
   "middleware": false,
   "php_modules": false,
   "ports": false,

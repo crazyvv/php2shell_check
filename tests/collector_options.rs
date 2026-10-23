@@ -44,7 +44,14 @@ fn cli_and_json_options_override_and_dependencies() {
     .unwrap();
     assert!(options.ports && !options.web_probe);
     let default = Cli::parse_from(["collect"]).collect.resolve().unwrap();
-    assert!(!default.middleware && !default.web_probe);
+    assert!(
+        !default.middleware && !default.web_probe && !default.php_command && !default.package_audit
+    );
+    let enabled = Cli::parse_from(["collect", "--php-command", "--package-audit"])
+        .collect
+        .resolve()
+        .unwrap();
+    assert!(enabled.php_command && enabled.package_audit && !enabled.middleware);
 }
 #[test]
 fn invalid_host_path_protocol_and_limits_are_rejected() {

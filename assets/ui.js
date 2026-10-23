@@ -18,7 +18,7 @@ $('scan').onclick = async () => {
   try {
     const targets=$('targets').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
     if (!targets.length || targets.length>50) throw new Error('请输入 1–50 个目标，每行一个');
-    const submitted=await api('/api/scan',{targets});currentJob=submitted.id;try{sessionStorage.setItem('php-selfcheck-current-job',currentJob);}catch(_){}renderJobs([]); notice('任务已提交，检测结果会自动更新。'); await refresh();
+    const submitted=await api('/api/scan',{targets,headers_only:Boolean($('headersOnly').checked)});currentJob=submitted.id;try{sessionStorage.setItem('php-selfcheck-current-job',currentJob);}catch(_){}renderJobs([]); notice('任务已提交，检测结果会自动更新。'); await refresh();
   } catch(e) { notice(e.message,true); } finally { $('scan').disabled=false; }
 };
 $('refresh').onclick=()=>refresh().catch(e=>notice(e.message,true));
@@ -35,6 +35,7 @@ $('import').onclick=async()=>{
 async function boot() {
   try {
     const me=await api('/api/me'); $('account').textContent=me.allow_anonymous ? '免密码访问 · 当前浏览器独立会话' : `${me.user} · 个人工作台`;
+    if(me.headers_only) { $('account').textContent+=' · 仅响应头检测'; $('headersOnly').checked=true; $('headersOnly').disabled=true; }
     if(!me.scope_configured) notice('管理员尚未配置资产网段白名单，检测将被拒绝。请先按部署说明配置。',true);
     await refresh();
   } catch(e) { notice(e.message,true); }
@@ -48,11 +49,11 @@ function updateCollectCommand(){
   $('collectWeb').disabled=!middleware || !$('collectPorts').checked;if($('collectWeb').disabled)$('collectWeb').checked=false;
   $('collectHost').disabled=!$('collectWeb').checked;
   const command=['php-selfcheck collect'];
-  for(const [id,flag] of [['collectMiddleware','--middleware'],['collectModules','--php-modules'],['collectPorts','--ports'],['collectWeb','--web-probe']])if($(id).checked)command.push(flag);
+  for(const [id,flag] of [['collectPhpCommand','--php-command'],['collectPackageAudit','--package-audit'],['collectMiddleware','--middleware'],['collectModules','--php-modules'],['collectPorts','--ports'],['collectWeb','--web-probe']])if($(id).checked)command.push(flag);
   const host=$('collectHost').value.trim();
   if($('collectWeb').checked && host){if(!/^[a-zA-Z0-9._:[\]-]+$/.test(host)){$('collectCommand').textContent='请输入不含端口、凭据或路径的 Host；IPv6 使用方括号。';return;}command.push("--web-host '"+host+"'");}
   $('collectCommand').textContent=command.join(' ')+' > host-report.json';
 }
-for(const id of ['collectMiddleware','collectModules','collectPorts','collectWeb'])$(id).onchange=updateCollectCommand;
+for(const id of ['collectPhpCommand','collectPackageAudit','collectMiddleware','collectModules','collectPorts','collectWeb'])$(id).onchange=updateCollectCommand;
 $('collectHost').oninput=updateCollectCommand;
 updateCollectCommand();

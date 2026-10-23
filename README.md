@@ -117,6 +117,30 @@ cargo build --release --locked -j 4
 - JSON/CSV 导出；CSV 单元格对公式前缀进行中和。服务重启时将旧的 queued/running 任务标记为 interrupted。
 - 主机材料 JSON 导入保留“开发者提交，未经独立核验”标记，不提升远程检测结论。
 
+## 轻量扫描与 CI 命令
+
+扫描页可勾选“仅检查响应头”，只发送 HEAD；收到 405/501 才回退 GET，回退请求也不读取正文。此模式不跟随跳转、不进行页面特征分析或 multipart POST，隐藏版本时保持未知。每次请求仍校验资产范围、重新解析 DNS 并固定已校验的 IP，保持 TLS 验证。
+
+服务端 `config.json` 可设置 `"headers_only": true` 并重启，为全部扫描强制启用此模式；开发者无法通过取消勾选覆盖管理员设置。默认 `false`，开发者可按次选择。API 提交 `POST /api/scan` 时可附 `"headers_only": true`，结果记录 `scan_mode`；轻量模式还记录 HEAD/GET 请求方法和状态。
+
+命令行检查复用相同的资产范围及检测规则，不启动 Web 服务、不写入扫描历史：
+
+```bash
+./target/release/php-selfcheck check https://app.example.com/ --config config.json --json
+./target/release/php-selfcheck check https://app.example.com/ --config config.json --headers-only --json
+```
+
+命令读取已初始化的配置，范围限制与 Web 扫描一致；目标可不写协议，默认 HTTPS。退出码用于 CI：
+
+| 退出码 | JSON patch_status | 含义 |
+| --- | --- | --- |
+| 0 | `ok` | 声明的正式版本达到上游修复基线，实际实例和回补情况仍待核验 |
+| 1 | `potentially_vulnerable` | 版本命中疑似受影响范围，不代表漏洞已确认 |
+| 2 | 无检测结果 | 参数或配置错误 |
+| 3 | `unknown` | 版本未知、声明冲突、规则未覆盖、范围拒绝或传输失败 |
+
+版本保留完整原值，RC、alpha、beta、dev 等预发布声明不会按正式修复版判断。发行版后缀会保留，但不会仅凭后缀断定已回补。出现多个不同声明时保留“无法判断”；若其中包含疑似受影响版本，`version_warnings` 和复核优先级会保留风险提示。
+
 ## 主机采集
 
 把匹配目标机器操作系统和架构的二进制拷贝到目标 Linux 主机，以普通账号执行：
@@ -125,11 +149,49 @@ cargo build --release --locked -j 4
 php-selfcheck collect > host-report.json
 ```
 
-只读取可见进程名称/可执行文件路径和 PHP 包信息，对 PATH 中的常见 PHP/FPM 二进制执行 `-n -v`，并使用 PHP CLI 的正常配置读取选定 INI 项（不调用 phpinfo 或输出环境）。CLI 观测始终标为 `cli_only`。外部命令有 10 秒超时与输出保留上限；不读取进程环境或命令行，不自动上传。通过 Web 界面关联业务 URL 并导入报告。CLI 版本不能证明 Web/FPM、容器及所有后端实例的版本与补丁状态，报告未签名，关联关系由提交人指定。
+默认读取可见进程名称、可执行文件路径和 PHP 包信息，**不执行 PHP 命令**，不自动上传。通过 Web 界面关联业务 URL 并导入报告。采集与命令查询有数量、时间和输出上限；权限不足时保留未知。报告按网页上传限制控制体积，过大时优先省略原始命令输出等条目，在 `report_limits` 记录省略数量，页面提示结果不完整。
+
+### 可选 PHP 命令采集
+
+```bash
+# 调用 PATH 中的 PHP/FPM 程序查询版本，并读取 PHP CLI 的选定配置
+php-selfcheck collect --php-command > host-report.json
+
+# 指定实际使用的 PHP CLI 路径
+php-selfcheck collect --php-command --php-binary /opt/php/bin/php > host-report.json
+
+# 配置文件开启时，也可在命令行显式关闭
+php-selfcheck collect --options collector.options.example.json --php-command=false > host-report.json
+```
+
+`--php-command` 默认关闭，独立于中间件采集。`--php-binary` 需要同时开启此选项，接受存在的绝对文件路径；不指定时检查常见 PHP/FPM 程序并去重，最多 16 个。版本查询使用 `-n -v`；CLI 配置使用 `-r` 读取选定 INI 项、SAPI、版本、PHP 程序及加载的 INI 文件路径，不调用 phpinfo 或输出环境。FPM 不执行 CLI 配置脚本。PHP-FPM 的中间件版本查询也受此开关控制。
+
+PHP 命令所得配置始终标为 `cli_only`，不能证明 Web/FPM、容器或全部后端实例的配置与补丁状态。外部命令超时 10 秒，保留输出最多 24 KB。不读取进程环境或完整命令行，报告未签名，业务关联由提交人指定。
+
+### 可选运行实例与厂商补丁参考核验
+
+```bash
+# 独立启用，不执行 PHP 命令
+php-selfcheck collect --package-audit > host-report.json
+
+# 与 CLI 配置及中间件采集一起使用
+php-selfcheck collect --php-command --package-audit --middleware --php-modules --ports > host-report.json
+```
+
+`--package-audit` 默认关闭。它从可见的 PHP-FPM/CGI 程序和 Apache/Nginx 等进程的 PHP 模块映射反查所属软件包，不使用 CLI 或 `php` 元包代替 Web 实例：
+
+- Debian/Ubuntu 记录二进制包、源包、完整修订号，检查已安装修订号对应的官方归档来源及发行版代号，用 `dpkg --compare-versions` 比较源包修订号；候选更新的来源不能代替已安装包的来源。
+- RHEL 记录包名、Epoch、Version、Release、架构、源 RPM、Vendor 和模块流；先比较 Epoch，再分别使用 RPM 原生规则比较 Version 与 Release。其他发行版或第三方仓库不能套用 RHEL 阈值。
+- 对照进程映像/模块与磁盘文件的设备及 inode，发现已删除或替换的运行映像时提示重启复核；采集前后复核进程身份和映射。磁盘包已更新不等于运行程序已更新。
+- 不同或未知挂载命名空间、根目录、进程变化、权限不足、来源不明、无适用规则均保留未知；容器应在对应环境采集。即使映像一致，也不能证明它服务于所提交的 URL。
+
+参考规则见 [`rules/vendor-patches.json`](rules/vendor-patches.json)，涵盖 Debian 12/13、Ubuntu 所列 LTS/Pro 与当前发行版、RHEL 8.10 PHP 7.4 和 9.8 PHP 8.0 的特定范围。数据来自固定提交的外部参考表，保留公告链接与日期，**尚未独立核实全部厂商公告**。输出只表示 `meets_vendor_reference`（达到参考修订号）、`below_vendor_reference`（低于参考修订号）或 `unknown`，不会生成“已确认修复”。`running_patch_status` 只有在运行映像与磁盘一致且检查完整时才沿用参考匹配，否则为未知。主机报告导入后仍作为未经独立核验的材料展示，不提升远程结论。
+
+本项最多检查 128 个相关进程、每进程 16 个映像/模块、32 个不同文件路径的软件包归属。规则来源及许可见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 ## 可选 Web 中间件、PHP 模块与端口采集
 
-中间件、PHP 模块、端口与 Web 探测开关**默认全部关闭**。不添加这些选项时，`php-selfcheck collect` 仅执行 PHP 基础采集。页面“主机采集”区域可勾选功能，生成在目标主机手工执行的命令；不会通过网页远程执行系统命令。
+PHP 命令、软件包核验、中间件、PHP 模块、端口与 Web 探测六个开关**默认全部关闭**。不添加这些选项时，仅读取基础进程和包信息。页面“主机采集”区域可勾选功能，生成在目标主机手工执行的命令；不会通过网页远程执行系统命令。
 
 ```bash
 # 仅识别 Web 中间件
@@ -147,7 +209,7 @@ php-selfcheck collect --middleware --ports --web-probe \
   --max-web-probes 8 > host-report.json
 ```
 
-四个开关均接受显式 `=true` / `=false`。模块、端口与 Web 功能需要 `--middleware`，Web 功能还需要 `--ports`；不满足依赖会给出错误，不会静默扩大采集。Web Host 用于虚拟主机和证书校验，不用于指定远端地址；IP Host 必须与已关联的本机连接地址一致。
+六个开关均接受显式 `=true` / `=false`。模块、端口与 Web 功能需要 `--middleware`，Web 功能还需要 `--ports`；不满足依赖会给出错误，不会静默扩大采集。Web Host 用于虚拟主机和证书校验，不用于指定远端地址；IP Host 必须与已关联的本机连接地址一致。
 
 也可复制 `collector.options.example.json`，修改布尔值后使用：
 
@@ -155,7 +217,7 @@ php-selfcheck collect --middleware --ports --web-probe \
 php-selfcheck collect --options collector.options.example.json --web-probe=false > host-report.json
 ```
 
-命令行显式值覆盖文件。采集器配置与服务端 `config.json` 分开，示例文件包含四个开关、web_host、web_path、web_schemes、max_web_probes。
+命令行显式值覆盖文件。采集器配置与服务端 `config.json` 分开，示例文件包含六个开关、php_binary、web_host、web_path、web_schemes、max_web_probes。
 
 检测范围与证据边界：
 
@@ -230,7 +292,7 @@ docker run -d --name php-selfcheck --restart unless-stopped \
 - PHP 公告：https://www.php.net/archive/2026.php#2026-10-21-5
 - CVE：CVE-2026-109618、CVE-2026-109619
 
-默认检测只发起指定入口的常规 GET；可选小型 multipart POST 见“可选 multipart 可达性检查”。远程扫描不执行目标主机命令、不发送漏洞利用载荷，不自动发现目录、phpinfo、FastCGI 或额外端口。“疑似受影响”需要核实回补补丁；“达到修复基线”“版本未知”“未发现特征”和“检测受阻”均不能证明无漏洞或已修复。提交只读业务页面，URL 中不要包含令牌。主机采集器在本地运行已有 PHP 获取版本与选定配置；启用中间件采集时，也会运行相应程序的版本或模块查询命令，不接受网络用户提供任意命令。
+默认检测只发起指定入口的常规 GET；可选小型 multipart POST 见“可选 multipart 可达性检查”。远程扫描不执行目标主机命令、不发送漏洞利用载荷，不自动发现目录、phpinfo、FastCGI 或额外端口。“疑似受影响”需要核实回补补丁；“达到修复基线”“版本未知”“未发现特征”和“检测受阻”均不能证明无漏洞或已修复。提交只读业务页面，URL 中不要包含令牌。主机采集器仅在启用 `--php-command` 后运行已有 PHP 获取版本与选定配置；启用中间件采集时，也会运行相应程序的版本或模块查询命令，不接受网络用户提供任意命令。
 
 ## 开发验证
 

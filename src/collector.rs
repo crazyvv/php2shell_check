@@ -73,21 +73,45 @@ pub async fn collect() -> Value {
 pub async fn collect_with_options(options: &CollectOptions) -> Value {
     let mut checks = vec![];
     let mut runtime_observations = vec![];
-    for name in [
-        "php",
-        "php8.2",
-        "php8.3",
-        "php8.4",
-        "php8.5",
-        "php-fpm",
-        "php-fpm8.2",
-        "php-fpm8.3",
-        "php-fpm8.4",
-        "php-fpm8.5",
-    ] {
-        if let Some(exe) = which(name) {
+    if options.php_command {
+        let mut binaries = std::collections::BTreeSet::new();
+        if let Some(path) = &options.php_binary {
+            binaries.insert(path.clone());
+        } else {
+            for name in [
+                "php",
+                "php5.6",
+                "php7.0",
+                "php7.1",
+                "php7.2",
+                "php7.3",
+                "php7.4",
+                "php8.0",
+                "php8.1",
+                "php8.2",
+                "php8.3",
+                "php8.4",
+                "php8.5",
+                "php-fpm",
+                "php-fpm7.4",
+                "php-fpm8.0",
+                "php-fpm8.1",
+                "php-fpm8.2",
+                "php-fpm8.3",
+                "php-fpm8.4",
+                "php-fpm8.5",
+            ] {
+                if let Some(path) = which(name) {
+                    binaries.insert(std::fs::canonicalize(&path).unwrap_or(path));
+                }
+            }
+        }
+        for exe in binaries.into_iter().take(16) {
             checks.push(run(&exe, &["-n", "-v"]).await);
-            if !name.contains("fpm") {
+            if !exe
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().contains("fpm"))
+            {
                 let runtime = run(&exe, &["-r", PHP_RUNTIME]).await;
                 if runtime["exit_code"] == 0
                     && let Some(output) = runtime["output"].as_str()
@@ -95,8 +119,11 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
                     && parsed.is_object()
                 {
                     parsed["scope"] = json!("cli_only");
-                    parsed["source"] = json!("local_cli_configuration");
+                    parsed["source"] = json!("local_php_command");
+                    parsed["command_binary"] = json!(exe);
                     runtime_observations.push(parsed);
+                } else {
+                    checks.push(runtime);
                 }
             }
         }
@@ -108,7 +135,12 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
         checks.push(
             run(
                 &exe,
-                &["-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\n", "*php*"],
+                &[
+                    "-qa",
+                    "--qf",
+                    "%{NAME}\t%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\t%{VENDOR}\n",
+                    "*php*",
+                ],
             )
             .await,
         )
@@ -134,15 +166,77 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
         }
     }
     let middleware = crate::middleware::collect(options).await;
-    json!({"collection_options":options,"middleware":middleware,"schema":"php-selfcheck-host/v1","hostname":std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim(),"collected_at":chrono::Utc::now().to_rfc3339(),"platform":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"source":"developer_supplied_unverified","checks":checks,"runtime_observations":runtime_observations,"processes":processes,"limitations":["CLI 版本不等于 Web/FPM 实例版本；报告不自动证明补丁或漏洞状态。","仅检查当前主机可见进程与标准路径；容器、远端主机、自定义安装目录需另行核验。","此报告未签名，平台记录为开发者提交材料。"]})
+    let package_audit = crate::hostaudit::collect(options.package_audit).await;
+    bounded_report(
+        json!({"php_command":{"status":if options.php_command {"enabled"}else{"disabled"},"scope":"cli_only","detail":"显式开启才运行 PHP；CLI 配置不能代表 Web/FPM"},"package_audit":package_audit,"collection_options":options,"middleware":middleware,"schema":"php-selfcheck-host/v1","hostname":std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim(),"collected_at":chrono::Utc::now().to_rfc3339(),"platform":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"source":"developer_supplied_unverified","checks":checks,"runtime_observations":runtime_observations,"processes":processes,"limitations":["CLI 版本不等于 Web/FPM 实例版本；报告不自动证明补丁或漏洞状态。","仅检查当前主机可见进程与标准路径；容器、远端主机、自定义安装目录需另行核验。","此报告未签名，平台记录为开发者提交材料。"]}),
+    )
+}
+
+// Keep the pretty JSON below the browser upload limit, and make every omission explicit.
+fn bounded_report(mut report: Value) -> Value {
+    let mut omitted = std::collections::BTreeMap::<String, usize>::new();
+    for pointer in [
+        "/checks",
+        "/middleware/binaries",
+        "/middleware/instances",
+        "/processes",
+        "/middleware/web_probes",
+        "/runtime_observations",
+        "/package_audit/instances",
+    ] {
+        while serde_json::to_vec_pretty(&report).map_or(usize::MAX, |v| v.len()) > 190_000 {
+            let removed = match report.pointer_mut(pointer) {
+                Some(Value::Array(a)) => a.pop().is_some(),
+                Some(Value::Object(m)) => {
+                    let key = m.keys().next_back().cloned();
+                    key.is_some_and(|k| m.remove(&k).is_some())
+                }
+                _ => false,
+            };
+            if !removed {
+                break;
+            }
+            *omitted.entry(pointer.into()).or_default() += 1;
+        }
+    }
+    let truncated = !omitted.is_empty();
+    report["report_limits"] =
+        json!({"truncated":truncated,"omitted_items":omitted,"pretty_json_budget":190000});
+    if truncated && let Some(a) = report["limitations"].as_array_mut() {
+        a.push(json!("报告超过大小预算，已按 report_limits 省略部分条目；结果不完整，未知或未列出不代表不存在。"));
+    }
+    report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn oversized_reports_remain_importable_and_explain_omissions() {
+        let r = bounded_report(
+            json!({"schema":"php-selfcheck-host/v1","checks":vec![json!({"output":"X".repeat(24000)});20],"runtime_observations":[{"sapi":"cli"}],"limitations":[]}),
+        );
+        assert!(serde_json::to_vec_pretty(&r).unwrap().len() < 200000);
+        assert_eq!(r["report_limits"]["truncated"], true);
+        assert!(
+            r["report_limits"]["omitted_items"]["/checks"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
+        assert_eq!(r["runtime_observations"][0]["sapi"], "cli");
+    }
 }
 
 // Selected configuration only, never phpinfo() or the process environment.
-const PHP_RUNTIME: &str = r#"$settings=[]; foreach(['session.upload_progress.enabled','file_uploads','enable_post_data_reading','memory_limit','post_max_size','upload_max_filesize','max_file_uploads','max_multipart_body_parts','fatal_error_backtraces'] as $key){$value=ini_get($key);$settings[$key]=$value===false?null:$value;} echo json_encode(['sapi'=>PHP_SAPI,'version'=>PHP_VERSION,'settings'=>$settings]);"#;
+const PHP_RUNTIME: &str = r#"$settings=[]; foreach(['session.upload_progress.enabled','file_uploads','enable_post_data_reading','memory_limit','post_max_size','upload_max_filesize','max_file_uploads','max_multipart_body_parts','fatal_error_backtraces'] as $key){$value=ini_get($key);$settings[$key]=$value===false?null:$value;} echo json_encode(['sapi'=>PHP_SAPI,'version'=>PHP_VERSION,'binary'=>PHP_BINARY,'loaded_ini'=>php_ini_loaded_file(),'scanned_ini'=>php_ini_scanned_files(),'settings'=>$settings]);"#;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CollectOptions {
+    pub php_command: bool,
+    pub php_binary: Option<PathBuf>,
+    pub package_audit: bool,
     pub middleware: bool,
     pub php_modules: bool,
     pub ports: bool,
@@ -155,6 +249,9 @@ pub struct CollectOptions {
 impl Default for CollectOptions {
     fn default() -> Self {
         Self {
+            php_command: false,
+            php_binary: None,
+            package_audit: false,
             middleware: false,
             php_modules: false,
             ports: false,
@@ -168,6 +265,17 @@ impl Default for CollectOptions {
 }
 impl CollectOptions {
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.php_binary.is_none() || self.php_command,
+            "--php-binary 需要启用 --php-command"
+        );
+        if let Some(path) = &self.php_binary {
+            anyhow::ensure!(
+                path.is_absolute() && path.is_file(),
+                "PHP 程序必须是存在的绝对文件路径"
+            );
+        }
+
         anyhow::ensure!(
             self.middleware || !(self.php_modules || self.ports || self.web_probe),
             "模块、端口与 Web 探测需要先启用 --middleware"
@@ -207,6 +315,16 @@ impl CollectOptions {
 }
 #[derive(clap::Args, Debug)]
 pub struct CollectArgs {
+    /// 显式运行 PHP 获取版本和选定 CLI 配置；默认关闭
+    #[arg(long,num_args=0..=1,default_missing_value="true",require_equals=true)]
+    pub php_command: Option<bool>,
+    /// 自定义 PHP CLI 的绝对路径（需要 --php-command）
+    #[arg(long)]
+    pub php_binary: Option<PathBuf>,
+    /// 从运行进程/模块反查软件包，核对厂商参考规则与旧进程状态
+    #[arg(long,num_args=0..=1,default_missing_value="true",require_equals=true)]
+    pub package_audit: Option<bool>,
+
     /// 采集器 JSON 开关配置；命令行显式开关优先
     #[arg(long)]
     pub options: Option<PathBuf>,
@@ -234,6 +352,15 @@ impl CollectArgs {
             Some(path) => serde_json::from_slice(&std::fs::read(path)?)?,
             None => CollectOptions::default(),
         };
+        if let Some(value) = self.php_command {
+            options.php_command = value;
+        }
+        if let Some(value) = self.php_binary {
+            options.php_binary = Some(value);
+        }
+        if let Some(value) = self.package_audit {
+            options.package_audit = value;
+        }
         if let Some(value) = self.middleware {
             options.middleware = value;
         }

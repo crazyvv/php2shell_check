@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use php_selfcheck::{
     collector,
     config::{self, Config},
-    portal,
+    portal, scanner,
 };
 use std::{collections::BTreeMap, net::IpAddr, path::PathBuf};
 #[derive(Parser)]
@@ -50,8 +50,24 @@ enum Command {
         #[arg(long, default_value_t = 8080)]
         port: u16,
     },
+    /// 检测单个 URL，退出码 0=达到上游基线，1=疑似受影响，2=参数/配置错误，3=未知
+    Check {
+        #[arg(value_parser = check_target)]
+        target: String,
+        #[arg(long, default_value = "config.json")]
+        config: PathBuf,
+        #[arg(long)]
+        headers_only: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// 在当前 Linux 主机执行只读采集，JSON 输出至 stdout
     Collect(collector::CollectArgs),
+}
+fn check_target(value: &str) -> std::result::Result<String, String> {
+    scanner::normalize(value)
+        .map(|u| u.to_string())
+        .map_err(|e| e.to_string())
 }
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -72,6 +88,7 @@ async fn main() -> Result<()> {
                 admins: BTreeMap::from([(user.clone(), config::password_hash(&password, None)?)]),
                 allow_anonymous,
                 probe_multipart: false,
+                headers_only: false,
                 allow_without_whitelist,
                 allowed_networks: vec![],
                 allowed_domains: vec![],
@@ -132,6 +149,45 @@ async fn main() -> Result<()> {
             let mut cfg = config::load(&path)?;
             cfg.validate(&path, bind)?;
             portal::serve(cfg, std::net::SocketAddr::new(bind, port)).await?;
+        }
+        Command::Check {
+            target,
+            config: path,
+            headers_only,
+            json: as_json,
+        } => {
+            let loaded: Result<config::Config> = (|| {
+                let mut cfg = config::load(&path)?;
+                cfg.validate(&path, "127.0.0.1".parse()?)?;
+                cfg.headers_only |= headers_only;
+                Ok(cfg)
+            })();
+            let cfg = match loaded {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("配置错误: {e}");
+                    std::process::exit(2);
+                }
+            };
+            let mut result = scanner::scan(&target, &cfg).await;
+            let code = scanner::check_exit_code(&result);
+            result["exit_code"] = serde_json::json!(code);
+            result["patch_status"] = serde_json::json!(match code {
+                0 => "ok",
+                1 => "potentially_vulnerable",
+                _ => "unknown",
+            });
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!(
+                    "{}: {}\n{}",
+                    result["verdict"].as_str().unwrap_or("无法判断"),
+                    target,
+                    result["reason"].as_str().unwrap_or("")
+                );
+            }
+            std::process::exit(code.into());
         }
         Command::Collect(args) => {
             let options = args.resolve()?;

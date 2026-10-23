@@ -71,3 +71,14 @@ test('collector switches build a safe command and disable dependent probes',asyn
   get('collectHost').value="x'; touch /tmp/unsafe";get('collectHost').oninput();assert(!get('collectCommand').textContent.includes('touch'));
   get('collectMiddleware').checked=false;get('collectMiddleware').onchange();assert.equal(get('collectWeb').checked,false);assert.equal(get('collectWeb').disabled,true);assert.equal(get('collectCommand').textContent,'php-selfcheck collect > host-report.json');
 });
+
+test('PHP command and package audit are independent explicit collection switches',async()=>{
+  const app=setup();await flush();const get=id=>app.document.getElementById(id);
+  get('collectPhpCommand').checked=true;get('collectPhpCommand').onchange();
+  assert.equal(get('collectCommand').textContent,'php-selfcheck collect --php-command > host-report.json');
+  get('collectPackageAudit').checked=true;get('collectPackageAudit').onchange();
+  assert.equal(get('collectCommand').textContent,'php-selfcheck collect --php-command --package-audit > host-report.json');
+  assert(!get('collectMiddleware').checked);
+  get('collectPhpCommand').checked=false;get('collectPhpCommand').onchange();
+  assert.equal(get('collectCommand').textContent,'php-selfcheck collect --package-audit > host-report.json');
+});
