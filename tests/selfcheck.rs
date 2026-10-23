@@ -899,3 +899,217 @@ async fn admin_history_requires_separate_login_and_supports_logout() {
         .unwrap();
     assert!(count >= 5);
 }
+
+#[tokio::test]
+async fn admin_result_filters_sort_and_confirmed_deletion() {
+    let p = Portal::with_options(true).await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    {
+        let db = rusqlite::Connection::open(&p.state.config.database).unwrap();
+        for (id, created, state, results) in [
+            (
+                "mixed",
+                1,
+                "done",
+                json!([{"target":"https://risk.example/","verdict":"疑似受影响"},{"target":"https://patched.example/","verdict":"版本达到修复基线（待核验）"}]),
+            ),
+            (
+                "low",
+                1000,
+                "done",
+                json!([{"target":"https://low.example/","verdict":"未发现 PHP 特征"}]),
+            ),
+            (
+                "blocked",
+                2,
+                "failed",
+                json!([{"target":"https://blocked.example/","verdict":"无法完成检测"}]),
+            ),
+            ("active", 3, "running", json!([])),
+        ] {
+            db.execute(
+                "INSERT INTO jobs VALUES(?, 'visitor:test', ?, ?, ?)",
+                rusqlite::params![id, created, state, results.to_string()],
+            )
+            .unwrap();
+        }
+        db.execute(
+            "INSERT INTO reports VALUES('material','visitor:test',0,'https://risk.example/','{}')",
+            [],
+        )
+        .unwrap();
+    }
+    let login = admin_post(
+        &client,
+        &p,
+        "/api/admin/login",
+        json!({"user":"admin","password":"a"}),
+    )
+    .await;
+    let admin = cookie_client(login.headers()["set-cookie"].to_str().unwrap());
+    let history = admin
+        .get(format!("{}/api/admin/jobs", p.base))
+        .query(&[("verdict", "疑似受影响"), ("sort", "risk_desc")])
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(history["total"], 1);
+    assert_eq!(history["jobs"][0]["id"], "mixed");
+    assert_eq!(history["jobs"][0]["total_results"], 2);
+    assert_eq!(history["jobs"][0]["results"].as_array().unwrap().len(), 1);
+    let exported = admin
+        .get(format!("{}/api/admin/jobs/mixed", p.base))
+        .query(&[("format", "csv"), ("verdict", "疑似受影响")])
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(exported.contains("risk.example"));
+    assert!(!exported.contains("patched.example"));
+    for (sort, first) in [
+        ("risk_desc", "mixed"),
+        ("risk_asc", "low"),
+        ("newest", "low"),
+        ("oldest", "mixed"),
+    ] {
+        let r = admin
+            .get(format!("{}/api/admin/jobs", p.base))
+            .query(&[("sort", sort)])
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        assert_eq!(r["jobs"][0]["id"], first);
+    }
+    let empty = admin
+        .get(format!("{}/api/admin/jobs", p.base))
+        .query(&[("verdict", "疑似受影响"), ("search", "low.example")])
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(empty["total"], 0);
+    let unrelated = admin
+        .get(format!("{}/api/admin/jobs", p.base))
+        .query(&[("verdict", "疑似受影响"), ("search", "patched.example")])
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(unrelated["total"], 0);
+    assert_eq!(
+        admin
+            .get(format!("{}/api/admin/jobs?sort=untrusted", p.base))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    assert_eq!(
+        admin_post(
+            &client,
+            &p,
+            "/api/admin/jobs/mixed/delete",
+            json!({"confirm":true})
+        )
+        .await
+        .status(),
+        401
+    );
+    assert_eq!(
+        admin
+            .post(format!("{}/api/admin/jobs/mixed/delete", p.base))
+            .json(&json!({"confirm":true}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(
+        admin_post(&admin, &p, "/api/admin/jobs/mixed/delete", json!({}))
+            .await
+            .status(),
+        400
+    );
+    assert_eq!(
+        admin_post(
+            &admin,
+            &p,
+            "/api/admin/jobs/active/delete",
+            json!({"confirm":true})
+        )
+        .await
+        .status(),
+        409
+    );
+    assert_eq!(
+        admin_post(
+            &admin,
+            &p,
+            "/api/admin/jobs/mixed/delete",
+            json!({"confirm":true})
+        )
+        .await
+        .status(),
+        200
+    );
+    assert_eq!(
+        admin
+            .get(format!("{}/api/admin/jobs/mixed?format=csv", p.base))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    assert_eq!(
+        admin_post(
+            &admin,
+            &p,
+            "/api/admin/jobs/mixed/delete",
+            json!({"confirm":true})
+        )
+        .await
+        .status(),
+        404
+    );
+    let summary = admin
+        .get(format!("{}/api/admin/jobs", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(summary["total"], 3);
+    assert_eq!(summary["summary"]["jobs"], 3);
+    assert!(summary["summary"]["verdicts"].get("疑似受影响").is_none());
+    let db = rusqlite::Connection::open(&p.state.config.database).unwrap();
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM reports", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM audit WHERE action='admin_scan_delete' AND owner='admin:admin'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+}

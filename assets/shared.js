@@ -37,15 +37,19 @@ function hostEvidenceView(e) {
   }
   return wrap;
 }
-function renderJobs(jobs, endpoint='/api/jobs', showOwners=false) {
+function renderJobs(jobs, endpoint='/api/jobs', showOwners=false, options={}) {
   $('jobs').replaceChildren();
   if (!jobs.length) { $('jobs').append(node('p','当前没有扫描结果。提交业务地址开始自查。','empty')); return; }
   for (const j of jobs) {
     const block = node('div',undefined,'job'), head = node('div',undefined,'jobhead');
     if(showOwners) head.append(node('span',`来源：${j.owner}`));
-    head.append(node('span',`${new Date(j.created*1000).toLocaleString()} · ${states[j.state] || j.state} · ${j.results.length} 个结果`));
+    head.append(node('span',`${new Date(j.created*1000).toLocaleString()} · ${states[j.state] || j.state} · ${j.results.length} 个结果${j.total_results != null && j.total_results !== j.results.length ? `（本次共 ${j.total_results} 个）` : ''}`));
     const links = node('div',undefined,'links');
-    for (const format of ['json','csv']) { const a = node('a',`导出 ${format.toUpperCase()}`); a.href = `${endpoint}/${j.id}?format=${format}`; a.download = `php-selfcheck.${format}`; links.append(a); }
+    for (const format of ['json','csv']) { const a = node('a',`导出 ${format.toUpperCase()}`); a.href = `${endpoint}/${j.id}?format=${format}${options.verdict ? '&verdict='+encodeURIComponent(options.verdict) : ''}`; a.download = `php-selfcheck.${format}`; links.append(a); }
+    if(options.deleteJob) {
+      const remove=node('button','删除本次扫描','secondary');remove.disabled=['queued','running'].includes(j.state);
+      remove.onclick=()=>options.deleteJob(j);links.append(remove);
+    }
     head.append(links); block.append(head);
     if (j.results.length) {
       const table = node('table'), tr = node('tr'), thead = node('thead');

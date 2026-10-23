@@ -37,3 +37,26 @@ test('developer page fetches only the current tab job, never a history list',asy
   const restored=setup('job2');await flush();assert.deepEqual(restored.calls,['/api/me','/api/jobs/job2']);
   const freshTab=setup();await flush();assert.deepEqual(freshTab.calls,['/api/me']);
 });
+
+test('administrator filters, filtered exports and deletion confirmation',async()=>{
+  const elements=new Map();const calls=[];let confirmed=false,deleted=false,confirmation='';
+  const document={getElementById:id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);},createElement:()=>new Element()};
+  document.getElementById('sortOrder').value='newest';
+  const context=vm.createContext({document,console,confirm:message=>{confirmation=message;return confirmed;},fetch:async(path,options)=>{
+    calls.push({path,options});let data;
+    if(path==='/api/admin/me')data={user:'admin'};
+    else if(path.endsWith('/delete')){deleted=true;data={ok:true};}
+    else if(path.startsWith('/api/admin/jobs?'))data={jobs:deleted?[]:[{id:'mixed',owner:'visitor:test',created:1,state:'done',total_results:3,results:[{target:'risk.example',verdict:'疑似受影响'}]}],total:deleted?0:1,summary:{jobs:deleted?0:1,reports:1,states:{done:1},verdicts:{'疑似受影响':1}}};
+    else throw Error(path);
+    return {ok:true,status:200,json:async()=>data};
+  }});
+  vm.runInContext(fs.readFileSync('assets/shared.js','utf8'),context);vm.runInContext(fs.readFileSync('assets/admin.js','utf8'),context);await flush();
+  document.getElementById('verdictFilter').value='疑似受影响';document.getElementById('sortOrder').value='risk_desc';document.getElementById('verdictFilter').onchange();await flush();
+  assert(calls.some(c=>c.path.includes('verdict='+encodeURIComponent('疑似受影响')) && c.path.includes('sort=risk_desc')));
+  function flatten(e){return [e,...(e.children||[]).flatMap(flatten)];}
+  const links=flatten(document.getElementById('jobs')).filter(e=>e.href);assert(links.every(e=>e.href.includes('&verdict='+encodeURIComponent('疑似受影响'))));
+  const remove=flatten(document.getElementById('jobs')).find(e=>e.textContent==='删除本次扫描');assert(remove);
+  await remove.onclick();assert(!calls.some(c=>c.path.endsWith('/delete')));assert(confirmation.includes('3 个结果'));
+  confirmed=true;await remove.onclick();assert(deleted);assert(calls.some(c=>c.path.endsWith('/delete') && JSON.parse(c.options.body).confirm===true));
+  assert.equal(document.getElementById('jobs').children.length,1); // Empty-state paragraph.
+});
