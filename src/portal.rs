@@ -56,11 +56,11 @@ impl State {
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
-        let file = opts.open(path)?;
+        let _file = opts.open(path)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            _file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         }
         let db = Connection::open(path)?;
         db.busy_timeout(Duration::from_secs(10))?;

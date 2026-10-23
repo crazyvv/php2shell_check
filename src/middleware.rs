@@ -493,7 +493,7 @@ async fn probe(listener: &Listener, pid: &str, scheme: &str, options: &CollectOp
     report
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::{PermissionsExt, symlink};

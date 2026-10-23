@@ -3,3 +3,7 @@
 /data/
 /state/
 *.sqlite3*
+
+/dist/
+/release-status.json
+__pycache__/

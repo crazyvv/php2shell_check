@@ -4,6 +4,26 @@
 
 开发者页面只展示当前扫描，管理员通过独立账号访问历史记录与汇总。支持免密码扫描、可选资产白名单、检测证据展示、主机材料导入和 JSON/CSV 导出。
 
+## 下载与运行
+
+从 [GitHub Releases](https://github.com/crazyvv/php2shell_check/releases) 下载与系统匹配的程序包：Windows x86_64 使用 ZIP，Linux x86_64 使用 musl 静态构建的 tar.gz。解压后阅读 `START-HERE.txt`，使用同一 Release 的 `SHA256SUMS` 校验文件。
+
+Windows 在 PowerShell 中执行 `./php-selfcheck.exe`，Linux 执行 `./php-selfcheck`。两者都支持 Web 服务和 URL 检查，`collect` 主机采集仅支持 Linux。Linux 的 HTTPS 请求需要系统 CA 证书；Windows 如提示缺少运行库，安装微软官方 Visual C++ 2015–2022 Redistributable x64。
+
+```powershell
+# Windows：初始化、保存随机管理员密码后启动
+./php-selfcheck.exe init --allow-anonymous --allow-without-whitelist
+./php-selfcheck.exe serve
+```
+
+```bash
+# Linux：初始化、保存随机管理员密码后启动
+./php-selfcheck init --allow-anonymous --allow-without-whitelist
+./php-selfcheck serve
+```
+
+发布包不包含真实配置或数据库。上述示例显式启用免密码和无白名单扫描，其他配置方式见下文；团队部署仍需配置 HTTPS 反向代理与准确的 public_origin。
+
 ## 构建与启动
 
 需要 Rust 稳定版工具链（含 Cargo）、C 编译器和系统 CA 证书。`rust-toolchain.toml` 使用 `stable` 通道；最低要求为 Rust 1.91（见 `Cargo.toml` 的 `rust-version`），支持 1.91.1 及满足要求的更新稳定版。使用已安装的兼容工具链时，可用 `cargo +1.91.1 build --release --locked -j 4` 显式选择版本。SQLite 由 Cargo 编译，TLS 使用 rustls 和系统根证书。
@@ -307,3 +327,9 @@ cargo clippy --locked --all-targets -- -D warnings
 `node --test tests/ui-state.cjs` 可选验证前端任务状态（需 Node.js，运行服务不需要）。
 
 真实公司资产、企业证书/代理、Docker 构建、生产容量和跨架构分发仍需在对应部署环境验证。
+
+## 发布流程
+
+`.github/workflows/release.yml` 在推送与 Cargo.toml 版本一致的 `vX.Y.Z` 标签时执行，也支持从 Actions 页面手工选择已有标签运行。Windows MSVC 与 Linux musl 在各自系统上执行测试、发布构建和本地启动检查，再打包两个平台的程序、示例配置、文档及许可证。
+
+两个平台都通过后才创建草稿 Release、上传附件、下载回验 SHA-256 并公开发布；已公开的附件不会被自动覆盖。`release-manifests` 分支保存发布回执（链接、源提交及校验值），便于核对发布状态。

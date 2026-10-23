@@ -1,0 +1,107 @@
+name: Build and publish Windows and Linux releases
+
+on:
+  push:
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to publish (must match Cargo.toml)
+        required: true
+        default: v0.2.0
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Test and build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            executable: php-selfcheck
+          - platform: windows-x86_64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            executable: php-selfcheck.exe
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Validate version tag
+        run: python scripts/package-release.py --tag "$RELEASE_TAG" --validate-only
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux static build tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Test
+        run: cargo test --locked --target "${{ matrix.target }}" -j 4
+      - name: Test frontend
+        run: node --test tests/ui-state.cjs
+      - name: Build
+        run: cargo build --release --locked --target "${{ matrix.target }}" -j 4
+      - name: Smoke check native executable
+        run: python scripts/smoke-release.py "target/${{ matrix.target }}/release/${{ matrix.executable }}"
+      - name: Package public files
+        run: python scripts/package-release.py --target "${{ matrix.target }}" --tag "$RELEASE_TAG" --output dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Verify and publish release
+    needs: build
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-release-manifests
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        if: needs.build.result == 'success'
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Verify uploads and publish
+        if: needs.build.result == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/publish-release.py --tag "$RELEASE_TAG" --directory dist
+      - name: Record verified result
+        if: always()
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          PUBLISH_RESULT: ${{ job.status }}
+        run: python scripts/record-release.py --tag "$RELEASE_TAG"
+      - name: Fail when build did not pass
+        if: needs.build.result != 'success'
+        run: exit 1
