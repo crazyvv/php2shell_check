@@ -1,0 +1,39 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+class Element {
+  constructor(){this.children=[];this.textContent='';this.value='';this.files=[];this.disabled=false;}
+  append(...children){this.children.push(...children);}
+  replaceChildren(...children){this.children=children;}
+}
+function setup(initial=null){
+  const elements=new Map();const storage=new Map(initial?[['php-selfcheck-current-job',initial]]:[]);const calls=[];let sequence=0;
+  const document={getElementById:id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);},createElement:()=>new Element()};
+  const context=vm.createContext({document,sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},setInterval:()=>{},console,
+    fetch:async(path,options)=>{
+      calls.push(path);let data;
+      if(path==='/api/me') data={allow_anonymous:true,scope_configured:true};
+      else if(path==='/api/scan'){sequence++;data={id:'job'+sequence};}
+      else if(path.startsWith('/api/jobs/'))data={id:path.split('/').pop(),created:1,state:'done',results:[{target:path.split('/').pop(),verdict:'未发现 PHP 特征',reason:'test'}]};
+      else throw new Error('Unexpected request: '+path);
+      return {ok:true,status:200,json:async()=>data};
+    }
+  });
+  vm.runInContext(fs.readFileSync('assets/shared.js','utf8'),context);
+  vm.runInContext(fs.readFileSync('assets/ui.js','utf8'),context);
+  return {context,document,storage,calls};
+}
+const flush=()=>new Promise(resolve=>setImmediate(resolve));
+test('developer page fetches only the current tab job, never a history list',async()=>{
+  const app=setup();await flush();assert.deepEqual(app.calls,['/api/me']);
+  app.document.getElementById('targets').value='example.com';
+  await app.document.getElementById('scan').onclick();
+  assert.equal(app.storage.get('php-selfcheck-current-job'),'job1');
+  await app.document.getElementById('scan').onclick();
+  assert.equal(app.storage.get('php-selfcheck-current-job'),'job2');
+  assert.equal(app.document.getElementById('jobs').children.length,1);
+  assert(!app.calls.includes('/api/jobs'));assert(!app.calls.includes('/api/reports'));
+  const restored=setup('job2');await flush();assert.deepEqual(restored.calls,['/api/me','/api/jobs/job2']);
+  const freshTab=setup();await flush();assert.deepEqual(freshTab.calls,['/api/me']);
+});

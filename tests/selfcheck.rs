@@ -7,6 +7,7 @@ use std::{collections::BTreeMap, net::IpAddr, sync::Arc};
 fn cfg() -> Config {
     Config {
         public_origin: "http://127.0.0.1:8080".into(),
+        admins: BTreeMap::new(),
         allow_anonymous: false,
         probe_multipart: false,
         allow_without_whitelist: false,
@@ -213,6 +214,13 @@ impl Portal {
             c.users.clear();
             c.allowed_ports.clear();
         }
+        c.admins.insert(
+            "admin".into(),
+            c.users
+                .get("alice")
+                .cloned()
+                .unwrap_or_else(|| config::password_hash("a", None).unwrap()),
+        );
         let state = portal::State::new(c).unwrap();
         let router = portal::router(state.clone());
         let task = tokio::spawn(async move {
@@ -480,12 +488,26 @@ fn optional_whitelist_and_legacy_defaults() {
     );
 }
 #[tokio::test]
-async fn anonymous_http_shared_workspace_and_scope_options() {
+async fn anonymous_http_isolated_workspace_and_scope_options() {
     let p = Portal::with_options(true).await;
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let r = client.get(&p.base).send().await.unwrap();
     assert_eq!(r.status(), 200);
     assert!(!r.headers().contains_key("www-authenticate"));
+    let cookie = r.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("cookie", cookie.parse().unwrap());
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .default_headers(headers)
+        .build()
+        .unwrap();
     let me = client
         .get(format!("{}/api/me", p.base))
         .send()
@@ -494,7 +516,7 @@ async fn anonymous_http_shared_workspace_and_scope_options() {
         .json::<Value>()
         .await
         .unwrap();
-    assert_eq!(me["user"], "anonymous");
+    assert!(me["user"].as_str().unwrap().starts_with("visitor:"));
     assert_eq!(me["scope_configured"], true);
     assert_eq!(me["allow_anonymous"], true);
     let r = client
@@ -525,13 +547,40 @@ async fn anonymous_http_shared_workspace_and_scope_options() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    assert_eq!(record["owner"], "anonymous");
+    assert_eq!(record["owner"], me["user"]);
     assert_eq!(record["state"], "done");
     assert!(
         record["results"][0]["reason"]
             .as_str()
             .unwrap()
             .contains("特殊地址")
+    );
+    let other = reqwest::Client::builder().no_proxy().build().unwrap();
+    for suffix in ["", "?format=csv"] {
+        assert_eq!(
+            other
+                .get(format!("{}/api/jobs/{id}{suffix}", p.base))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            404
+        );
+    }
+    assert_eq!(
+        other
+            .get(format!(
+                "{}/api/jobs?owner={}",
+                p.base,
+                me["user"].as_str().unwrap()
+            ))
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap(),
+        json!([])
     );
     let invalid = client
         .post(format!("{}/api/scan", p.base))
@@ -570,4 +619,283 @@ fn underscore_hosts_are_accepted_without_changing_authority() {
     assert!(scanner::validate_addresses(&u, &c, &["10.1.2.3".parse().unwrap()]).is_ok());
     c.allowed_domains = vec!["other.example".into()];
     assert!(scanner::validate_addresses(&u, &c, &["10.1.2.3".parse().unwrap()]).is_err());
+}
+
+fn cookie_client(cookie: &str) -> reqwest::Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("cookie", cookie.split(';').next().unwrap().parse().unwrap());
+    reqwest::Client::builder()
+        .no_proxy()
+        .default_headers(headers)
+        .build()
+        .unwrap()
+}
+async fn admin_post(
+    client: &reqwest::Client,
+    p: &Portal,
+    path: &str,
+    body: Value,
+) -> reqwest::Response {
+    client
+        .post(format!("{}{path}", p.base))
+        .header("origin", &p.base)
+        .header("x-requested-with", "PHP-SelfCheck")
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+#[tokio::test]
+async fn admin_history_requires_separate_login_and_supports_logout() {
+    let p = Portal::with_options(true).await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    {
+        let db = rusqlite::Connection::open(&p.state.config.database).unwrap();
+        db.execute(
+            "INSERT INTO jobs VALUES('legacy','anonymous',0,'done','[]')",
+            [],
+        )
+        .unwrap();
+    }
+    let first = client.get(&p.base).send().await.unwrap();
+    let visitor = cookie_client(first.headers()["set-cookie"].to_str().unwrap());
+    let other = client.get(&p.base).send().await.unwrap();
+    let second = cookie_client(other.headers()["set-cookie"].to_str().unwrap());
+    let mut ids = vec![];
+    for browser in [&visitor, &second] {
+        let r = admin_post(
+            browser,
+            &p,
+            "/api/scan",
+            json!({"targets":["http://169.254.169.254/"]}),
+        )
+        .await;
+        assert_eq!(r.status(), 202);
+        ids.push(
+            r.json::<Value>().await.unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    assert_eq!(
+        visitor
+            .get(format!("{}/api/jobs/{}", p.base, ids[1]))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    assert_eq!(
+        visitor
+            .get(format!("{}/api/jobs/legacy", p.base))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    assert_eq!(admin_post(&visitor,&p,"/api/reports",json!({"target":"http://169.254.169.254/","report":{"schema":"php-selfcheck-host/v1"},"review":{"patch_vendor":"visitor-A-only"}})).await.status(),201);
+    assert_eq!(
+        second
+            .get(format!("{}/api/reports", p.base))
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap(),
+        json!([])
+    );
+    // A new scan replaces the developer API's current record; all rows remain in SQLite.
+    let newer = admin_post(
+        &visitor,
+        &p,
+        "/api/scan",
+        json!({"targets":["http://169.254.169.254/"]}),
+    )
+    .await;
+    assert_eq!(newer.status(), 202);
+    let newer = newer.json::<Value>().await.unwrap();
+    let current = visitor
+        .get(format!("{}/api/jobs", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(current.as_array().unwrap().len(), 1);
+    assert_eq!(current[0]["id"], newer["id"]);
+    for path in ["/api/admin/jobs", "/api/admin/me"] {
+        assert_eq!(
+            visitor
+                .get(format!("{}{path}", p.base))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+    }
+    assert_eq!(
+        visitor
+            .get(format!("{}/api/admin/jobs/{}?format=csv", p.base, ids[1]))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert_eq!(
+        client
+            .get(format!("{}/admin", p.base))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        admin_post(
+            &client,
+            &p,
+            "/api/admin/login",
+            json!({"user":"alice","password":"a"})
+        )
+        .await
+        .status(),
+        401
+    );
+    assert_eq!(
+        admin_post(
+            &client,
+            &p,
+            "/api/admin/login",
+            json!({"user":"admin","password":"wrong"})
+        )
+        .await
+        .status(),
+        401
+    );
+    assert_eq!(
+        client
+            .post(format!("{}/api/admin/login", p.base))
+            .json(&json!({"user":"admin","password":"a"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let login = admin_post(
+        &client,
+        &p,
+        "/api/admin/login",
+        json!({"user":"admin","password":"a"}),
+    )
+    .await;
+    assert_eq!(login.status(), 200);
+    let admin = cookie_client(login.headers()["set-cookie"].to_str().unwrap());
+    let history = admin
+        .get(format!("{}/api/admin/jobs?limit=1", p.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(history.status(), 200);
+    let history = history.json::<Value>().await.unwrap();
+    assert_eq!(history["total"], 4);
+    assert_eq!(history["jobs"].as_array().unwrap().len(), 1);
+    assert_eq!(history["summary"]["jobs"], 4);
+    let page = admin
+        .get(format!("{}/api/admin/jobs?limit=1&offset=1", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_ne!(history["jobs"][0]["id"], page["jobs"][0]["id"]);
+    for id in &ids {
+        assert_eq!(
+            admin
+                .get(format!("{}/api/admin/jobs/{id}?format=csv", p.base))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+    }
+    let own = admin
+        .get(format!("{}/api/admin/jobs/{}", p.base, ids[0]))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let foreign = admin
+        .get(format!("{}/api/admin/jobs/{}", p.base, ids[1]))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(own.contains("visitor-A-only"));
+    assert!(!foreign.contains("visitor-A-only"));
+    assert_eq!(
+        admin
+            .get(format!("{}/api/admin/jobs/legacy", p.base))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let filtered = admin
+        .get(format!("{}/api/admin/jobs?search={}", p.base, ids[0]))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(filtered["total"], 1);
+    let hidden = admin
+        .get(format!("{}/api/admin/jobs?search=%25", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(hidden["total"], 0);
+    // Logout invalidates the server token, even if an attacker replays the old cookie.
+    assert_eq!(
+        admin_post(&admin, &p, "/api/admin/logout", json!({}))
+            .await
+            .status(),
+        200
+    );
+    assert_eq!(
+        admin
+            .get(format!("{}/api/admin/jobs", p.base))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    let db = rusqlite::Connection::open(&p.state.config.database).unwrap();
+    let count: i64 = db
+        .query_row(
+            "SELECT count(*) FROM audit WHERE owner='admin:admin'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(count >= 5);
 }

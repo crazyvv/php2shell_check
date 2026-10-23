@@ -4,3 +4,6 @@ pub mod portal;
 pub mod scanner;
 
 pub mod assessment;
+
+pub mod admin;
+pub mod session;

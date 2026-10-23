@@ -20,7 +20,7 @@ enum Command {
         config: PathBuf,
         #[arg(long, default_value = "admin")]
         user: String,
-        /// 免密码访问，所有访客共用 anonymous 工作台
+        /// 免密码访问，各浏览器会话独立隔离
         #[arg(long)]
         allow_anonymous: bool,
         /// 允许省略网段/端口白名单；非空列表仍生效
@@ -32,6 +32,13 @@ enum Command {
         #[arg(long, default_value = "config.json")]
         config: PathBuf,
         #[arg(long)]
+        user: String,
+    },
+    /// 新增独立管理员账号，可查看全站历史；密码随机生成
+    AddAdmin {
+        #[arg(long, default_value = "config.json")]
+        config: PathBuf,
+        #[arg(long, default_value = "admin")]
         user: String,
     },
     /// 启动 Web 自查台
@@ -62,6 +69,7 @@ async fn main() -> Result<()> {
             let password = config::token(20);
             let cfg = Config {
                 public_origin: "http://127.0.0.1:8080".into(),
+                admins: BTreeMap::from([(user.clone(), config::password_hash(&password, None)?)]),
                 allow_anonymous,
                 probe_multipart: false,
                 allow_without_whitelist,
@@ -81,9 +89,13 @@ async fn main() -> Result<()> {
             };
             config::write_config(&path, &cfg, true)?;
             if allow_anonymous {
-                println!("配置已生成。免密码访问已启用，访客共用 anonymous 工作台。");
+                println!(
+                    "配置已生成。免密码扫描已启用，各浏览器会话独立隔离。\n管理员账号: {user}\n管理员随机密码: {password}\n管理员入口: /admin"
+                );
             } else {
-                println!("配置已生成。首次账号: {user}\n随机密码: {password}\n请保存密码。");
+                println!(
+                    "配置已生成。首次账号: {user}\n随机密码: {password}\n请保存密码。管理员入口: /admin。"
+                );
             }
             if allow_without_whitelist {
                 println!("允许不配置白名单；已填写的限制仍生效。");
@@ -100,6 +112,16 @@ async fn main() -> Result<()> {
                 .insert(user.clone(), config::password_hash(&password, None)?);
             config::write_config(&path, &cfg, false)?;
             println!("账号: {user}\n随机密码: {password}\n重启服务后生效。");
+        }
+        Command::AddAdmin { config: path, user } => {
+            ensure!(config::valid_user(&user), "管理员账号格式错误");
+            let mut cfg = config::load(&path)?;
+            ensure!(!cfg.admins.contains_key(&user), "管理员账号已存在，不覆盖");
+            let password = config::token(20);
+            cfg.admins
+                .insert(user.clone(), config::password_hash(&password, None)?);
+            config::write_config(&path, &cfg, false)?;
+            println!("管理员账号: {user}\n随机密码: {password}\n重启后访问 /admin 登录。");
         }
         Command::Serve {
             config: path,

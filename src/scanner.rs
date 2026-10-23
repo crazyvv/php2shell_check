@@ -424,6 +424,7 @@ mod tests {
     async fn redirect_revalidates_scope() {
         let cfg = Config {
             public_origin: "http://localhost".into(),
+            admins: Default::default(),
             allow_anonymous: false,
             probe_multipart: false,
             allow_without_whitelist: false,

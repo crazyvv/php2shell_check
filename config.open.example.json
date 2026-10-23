@@ -7,5 +7,6 @@
   "allowed_ports": [],
   "database": "data/selfcheck.sqlite3",
   "users": {},
-  "probe_multipart": false
+  "probe_multipart": false,
+  "admins": {}
 }

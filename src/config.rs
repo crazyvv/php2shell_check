@@ -27,6 +27,8 @@ pub struct Config {
     pub database: String,
     #[serde(default)]
     pub users: BTreeMap<String, String>,
+    #[serde(default)]
+    pub admins: BTreeMap<String, String>,
 }
 pub fn token(bytes: usize) -> String {
     let mut buf = vec![0; bytes];
@@ -110,6 +112,10 @@ impl Config {
             (self.allow_anonymous || !self.users.is_empty())
                 && self.users.keys().all(|u| valid_user(u)),
             "账号配置错误"
+        );
+        anyhow::ensure!(
+            self.admins.keys().all(|u| valid_user(u)),
+            "管理员账号配置错误"
         );
         anyhow::ensure!(
             (self.allow_without_whitelist || !self.allowed_ports.is_empty())

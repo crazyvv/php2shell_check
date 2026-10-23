@@ -30,9 +30,9 @@ pub fn now() -> f64 {
 }
 pub struct State {
     pub config: Config,
-    db: Mutex<Connection>,
+    pub(crate) db: Mutex<Connection>,
     rates: Mutex<HashMap<String, Vec<Instant>>>,
-    failures: Mutex<HashMap<String, Vec<Instant>>>,
+    pub(crate) failures: Mutex<HashMap<String, Vec<Instant>>>,
     workers: Arc<Semaphore>,
     connections: Arc<Semaphore>,
 }
@@ -68,6 +68,10 @@ impl State {
             CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,owner TEXT,created REAL,state TEXT,results TEXT);
             CREATE TABLE IF NOT EXISTS reports(id TEXT PRIMARY KEY,owner TEXT,created REAL,target TEXT,payload TEXT);
             CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,created REAL,owner TEXT,action TEXT,detail TEXT);
+            CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,owner TEXT,kind TEXT,expires REAL,credential TEXT);
+            CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires);
+            CREATE INDEX IF NOT EXISTS jobs_owner_created ON jobs(owner,created);
+            CREATE INDEX IF NOT EXISTS reports_owner_target ON reports(owner,target);
             UPDATE jobs SET state='interrupted' WHERE state IN ('queued','running');")?;
         Ok(Arc::new(Self {
             config,
@@ -78,7 +82,7 @@ impl State {
             connections: Arc::new(Semaphore::new(32)),
         }))
     }
-    fn audit(&self, user: &str, action: &str, detail: Value) -> Result<()> {
+    pub(crate) fn audit(&self, user: &str, action: &str, detail: Value) -> Result<()> {
         self.db.lock().unwrap().execute(
             "INSERT INTO audit(created,owner,action,detail) VALUES(?,?,?,?)",
             params![now(), user, action, detail.to_string()],
@@ -86,7 +90,7 @@ impl State {
         Ok(())
     }
 }
-fn response(status: u16, body: impl Into<Body>, mime: &str) -> Response {
+pub(crate) fn response(status: u16, body: impl Into<Body>, mime: &str) -> Response {
     let mut r = (StatusCode::from_u16(status).unwrap(), body.into()).into_response();
     let h = r.headers_mut();
     h.insert(header::CONTENT_TYPE, mime.parse().unwrap());
@@ -96,26 +100,29 @@ fn response(status: u16, body: impl Into<Body>, mime: &str) -> Response {
     h.insert("content-security-policy","default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'".parse().unwrap());
     r
 }
-fn json_response(status: u16, v: Value) -> Response {
+pub(crate) fn json_response(status: u16, v: Value) -> Response {
     response(status, v.to_string(), "application/json; charset=utf-8")
 }
-fn error(status: u16, msg: &str) -> Response {
+pub(crate) fn error(status: u16, msg: &str) -> Response {
     json_response(status, json!({"error":msg}))
 }
-fn text<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
+pub(crate) fn text<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
     headers
         .get(name)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
 }
-fn window<'a>(map: &'a mut HashMap<String, Vec<Instant>>, key: &str) -> &'a mut Vec<Instant> {
+pub(crate) fn window<'a>(
+    map: &'a mut HashMap<String, Vec<Instant>>,
+    key: &str,
+) -> &'a mut Vec<Instant> {
     map.retain(|_, hits| {
         hits.retain(|x| x.elapsed() < Duration::from_secs(60));
         !hits.is_empty()
     });
     map.entry(key.into()).or_default()
 }
-fn job(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+pub(crate) fn job(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     let results: String = row.get(4)?;
     Ok(
         json!({"id":row.get::<_,String>(0)?,"owner":row.get::<_,String>(1)?,"created":row.get::<_,f64>(2)?,"state":row.get::<_,String>(3)?,"results":serde_json::from_str::<Value>(&results).unwrap_or(json!([]))}),
@@ -128,7 +135,7 @@ pub fn csv_safe(s: &str) -> String {
         s.into()
     }
 }
-fn enrich(db: &Connection, user: &str, record: &mut Value) -> Result<()> {
+pub(crate) fn enrich(db: &Connection, user: &str, record: &mut Value) -> Result<()> {
     if let Some(results) = record["results"].as_array_mut() {
         for result in results {
             let target = result["target"].as_str().unwrap_or("");
@@ -164,6 +171,62 @@ async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response> {
     if !text(req.headers(), "host").eq_ignore_ascii_case(expected) {
         return Ok(error(403, "Host 不在允许范围"));
     }
+    if req.method() == axum::http::Method::GET {
+        let asset = match req.uri().path() {
+            "/shared.js" => Some((
+                include_str!("../assets/shared.js"),
+                "text/javascript; charset=utf-8",
+            )),
+            "/ui.js" => Some((
+                include_str!("../assets/ui.js"),
+                "text/javascript; charset=utf-8",
+            )),
+            "/style.css" => Some((
+                include_str!("../assets/style.css"),
+                "text/css; charset=utf-8",
+            )),
+            _ => None,
+        };
+        if let Some((body, mime)) = asset {
+            return Ok(response(200, body, mime));
+        }
+    }
+    let path = req.uri().path();
+    if path == "/admin"
+        || path == "/admin/"
+        || path == "/admin.js"
+        || path == "/admin.css"
+        || path == "/admin-shared.js"
+    {
+        if req.method() != axum::http::Method::GET {
+            return Ok(error(405, "仅支持 GET"));
+        }
+        return Ok(match path {
+            "/admin-shared.js" => response(
+                200,
+                include_str!("../assets/shared.js"),
+                "text/javascript; charset=utf-8",
+            ),
+            "/admin.js" => response(
+                200,
+                include_str!("../assets/admin.js"),
+                "text/javascript; charset=utf-8",
+            ),
+            "/admin.css" => response(
+                200,
+                include_str!("../assets/style.css"),
+                "text/css; charset=utf-8",
+            ),
+            _ => response(
+                200,
+                include_str!("../assets/admin.html"),
+                "text/html; charset=utf-8",
+            ),
+        });
+    }
+    if path.starts_with("/api/admin/") {
+        return crate::admin::dispatch(state, req).await;
+    }
     let peer = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
@@ -181,8 +244,16 @@ async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response> {
         .and_then(|(_, t)| STANDARD.decode(t).ok())
         .and_then(|b| String::from_utf8(b).ok())
         .and_then(|s| s.split_once(':').map(|(u, p)| (u.to_owned(), p.to_owned())));
+    let mut new_cookie = None;
     let user = if state.config.allow_anonymous {
-        Some("anonymous".to_owned())
+        let db = state.db.lock().unwrap();
+        if let Some(owner) = crate::session::lookup(&db, &state.config, req.headers(), "visitor")? {
+            Some(owner)
+        } else {
+            let (owner, cookie) = crate::session::create(&db, &state.config, "visitor", None)?;
+            new_cookie = Some(cookie);
+            Some(owner)
+        }
     } else if let Some((user, password)) = credentials {
         if let Some(stored) = state.config.users.get(&user).cloned() {
             if tokio::task::spawn_blocking(move || verify(&password, &stored)).await? {
@@ -208,9 +279,18 @@ async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response> {
         );
         return Ok(r);
     };
+    let mut response = dispatch_user(state, req, &user).await?;
+    if let Some(cookie) = new_cookie {
+        response
+            .headers_mut()
+            .insert(header::SET_COOKIE, cookie.parse()?);
+    }
+    Ok(response)
+}
+async fn dispatch_user(state: Arc<State>, req: Request<Body>, user: &str) -> Result<Response> {
     {
         let mut rates = state.rates.lock().unwrap();
-        let hits = window(&mut rates, &user);
+        let hits = window(&mut rates, user);
         if hits.len() >= 120 {
             return Ok(error(429, "请求过于频繁"));
         }
@@ -219,12 +299,22 @@ async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response> {
     let path = req.uri().path().to_owned();
     let query = req.uri().query().unwrap_or("").to_owned();
     if req.method() == axum::http::Method::GET {
-        return get(&state, &user, &path, &query);
+        return get(&state, user, &path, &query);
     }
     if req.method() != axum::http::Method::POST {
         return Ok(error(405, "仅支持 GET/POST"));
     }
-    if text(req.headers(), "origin") != state.config.public_origin
+    let body = match read_body(&state.config, req).await {
+        Ok(body) => body,
+        Err((status, message)) => return Ok(error(status, message)),
+    };
+    post(state, user, &path, body)
+}
+pub(crate) async fn read_body(
+    config: &Config,
+    req: Request<Body>,
+) -> std::result::Result<Value, (u16, &'static str)> {
+    if text(req.headers(), "origin") != config.public_origin
         || text(req.headers(), "x-requested-with") != "PHP-SelfCheck"
         || !text(req.headers(), "content-type")
             .split(';')
@@ -233,26 +323,26 @@ async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response> {
             .trim()
             .eq_ignore_ascii_case("application/json")
     {
-        return Ok(error(403, "请求来源或格式不合法"));
+        return Err((403, "请求来源或格式不合法"));
     }
     if req.headers().contains_key("transfer-encoding") {
-        return Ok(error(400, "不支持分块请求"));
+        return Err((400, "不支持分块请求"));
     }
     let size = text(req.headers(), "content-length")
         .parse::<usize>()
         .unwrap_or(0);
     if !(1..=262144).contains(&size) {
-        return Ok(error(400, "请求体应为 1–262144 字节"));
+        return Err((400, "请求体应为 1–262144 字节"));
     }
     let bytes = match to_bytes(req.into_body(), 262144).await {
         Ok(b) => b,
-        Err(_) => return Ok(error(400, "请求体无效或过大")),
+        Err(_) => return Err((400, "请求体无效或过大")),
     };
     let body: Value = match serde_json::from_slice(&bytes) {
         Ok(Value::Object(v)) => Value::Object(v),
-        _ => return Ok(error(400, "请求体必须是 JSON 对象")),
+        _ => return Err((400, "请求体必须是 JSON 对象")),
     };
-    post(state, &user, &path, body)
+    Ok(body)
 }
 fn get(state: &State, user: &str, path: &str, query: &str) -> Result<Response> {
     match path {
@@ -261,6 +351,13 @@ fn get(state: &State, user: &str, path: &str, query: &str) -> Result<Response> {
                 200,
                 include_str!("../assets/index.html"),
                 "text/html; charset=utf-8",
+            ));
+        }
+        "/shared.js" => {
+            return Ok(response(
+                200,
+                include_str!("../assets/shared.js"),
+                "text/javascript; charset=utf-8",
             ));
         }
         "/ui.js" => {
@@ -287,7 +384,7 @@ fn get(state: &State, user: &str, path: &str, query: &str) -> Result<Response> {
     }
     if path == "/api/jobs" {
         let db = state.db.lock().unwrap();
-        let mut q=db.prepare("SELECT id,owner,created,state,results FROM jobs WHERE owner=? ORDER BY created DESC LIMIT 40")?;
+        let mut q=db.prepare("SELECT id,owner,created,state,results FROM jobs WHERE owner=? ORDER BY created DESC LIMIT 1")?;
         let mut records = q
             .query_map([user], job)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -320,57 +417,66 @@ fn get(state: &State, user: &str, path: &str, query: &str) -> Result<Response> {
             return Ok(error(404, "记录不存在"));
         };
         enrich(&state.db.lock().unwrap(), user, &mut record)?;
-        let csv =
-            url::form_urlencoded::parse(query.as_bytes()).any(|(k, v)| k == "format" && v == "csv");
-        let mut r = if csv {
-            let mut writer = csv::Writer::from_writer(vec![]);
-            let keys = [
-                "target",
-                "verdict",
-                "reason",
-                "versions",
-                "http_status",
-                "connected_ip",
-                "checked_at",
-                "assessment",
-                "host_evidence",
-            ];
-            writer.write_record(keys)?;
-            for result in record["results"].as_array().context("记录损坏")? {
-                writer.write_record(keys.map(|k| {
-                    let v = &result[k];
-                    csv_safe(&if v.is_null() {
-                        String::new()
-                    } else if let Some(s) = v.as_str() {
-                        s.into()
-                    } else {
-                        v.to_string()
-                    })
-                }))?;
-            }
-            let mut body = vec![0xef, 0xbb, 0xbf];
-            body.extend(writer.into_inner()?);
-            response(200, body, "text/csv; charset=utf-8")
-        } else {
-            json_response(200, record)
-        };
-        r.headers_mut().insert(
-            header::CONTENT_DISPOSITION,
-            if csv {
-                "attachment; filename=\"php-selfcheck.csv\""
-            } else {
-                "attachment; filename=\"php-selfcheck.json\""
-            }
-            .parse()?,
-        );
-        state.audit(
-            user,
-            "export",
-            json!({"job":id,"format":if csv{"csv"}else{"json"}}),
-        )?;
-        return Ok(r);
+        return job_response(state, user, record, query);
     }
     Ok(error(404, "不存在"))
+}
+pub(crate) fn job_response(
+    state: &State,
+    user: &str,
+    record: Value,
+    query: &str,
+) -> Result<Response> {
+    let id = record["id"].as_str().unwrap_or("").to_owned();
+    let csv =
+        url::form_urlencoded::parse(query.as_bytes()).any(|(k, v)| k == "format" && v == "csv");
+    let mut r = if csv {
+        let mut writer = csv::Writer::from_writer(vec![]);
+        let keys = [
+            "target",
+            "verdict",
+            "reason",
+            "versions",
+            "http_status",
+            "connected_ip",
+            "checked_at",
+            "assessment",
+            "host_evidence",
+        ];
+        writer.write_record(keys)?;
+        for result in record["results"].as_array().context("记录损坏")? {
+            writer.write_record(keys.map(|k| {
+                let v = &result[k];
+                csv_safe(&if v.is_null() {
+                    String::new()
+                } else if let Some(s) = v.as_str() {
+                    s.into()
+                } else {
+                    v.to_string()
+                })
+            }))?;
+        }
+        let mut body = vec![0xef, 0xbb, 0xbf];
+        body.extend(writer.into_inner()?);
+        response(200, body, "text/csv; charset=utf-8")
+    } else {
+        json_response(200, record)
+    };
+    r.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        if csv {
+            "attachment; filename=\"php-selfcheck.csv\""
+        } else {
+            "attachment; filename=\"php-selfcheck.json\""
+        }
+        .parse()?,
+    );
+    state.audit(
+        user,
+        "export",
+        json!({"job":id,"format":if csv{"csv"}else{"json"}}),
+    )?;
+    Ok(r)
 }
 fn post(state: Arc<State>, user: &str, path: &str, body: Value) -> Result<Response> {
     match path {
@@ -497,6 +603,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = Config {
             public_origin: "http://127.0.0.1:8080".into(),
+            admins: Default::default(),
             allow_anonymous: false,
             probe_multipart: false,
             allow_without_whitelist: false,

@@ -3,7 +3,7 @@
 验证时间：2026-10-23。环境：Debian 13、Linux x86_64、Rust/Cargo 1.99.1。
 
 - `cargo build --release --locked -j 4`：通过，生成 stripped 发布版程序。
-- `cargo test --locked -j 4`：23 项通过（7 单元测试、16 集成测试），0 失败，0 忽略。
+- `cargo test --locked -j 4`：25 项通过（8 单元测试、17 集成测试），0 失败，0 忽略。
 - `cargo fmt --all --check`：通过。
 - `cargo clippy --locked --all-targets -j 4 -- -D warnings`：通过。
 - 完整环境安装脚本重复执行：通过，已安装工具链和缓存构建可复用。
@@ -28,3 +28,13 @@
 - `node --check assets/ui.js` 通过。
 - 使用从 Debian 签名仓库下载并校验的软件包，在 /tmp 解包 PHP 8.4 CLI，验证采集器读取选定 INI 并标记 CLI-only；Web 助手 PHP 语法检查通过。
 - 实际 PHP 本地 HTTP 服务验证：助手未授权返回 403 且无内容，已有入口授权后返回指定配置 JSON，SAPI 为 cli-server。未测试真实 FPM/Apache 部署或全部 worker。
+
+当前任务与管理员后台验证：
+- 两个独立访客会话的任务、同目标材料、JSON/CSV 导出隔离；知道其他会话任务 ID 仍返回 404。
+- 普通页面不请求历史列表；新任务替换旧任务；同标签页刷新恢复当前任务，新标签页不自动加载旧任务。`node --test tests/ui-state.cjs`：1 项通过。
+- 管理员 API 无登录返回 401，普通账号不能当作管理员；错误密码被拒绝，缺少 Origin 的登录被拒绝。
+- 管理员登录后查看多会话与旧版 anonymous 历史，验证全站汇总、搜索、分页及跨会话导出。
+- 管理员退出后旧 Cookie 重放返回 401；会话令牌哈希存储、角色隔离、过期、管理员密码变更失效有测试。
+- 增加 sessions 表与索引，不删除原任务/主机材料/审计。
+
+发布版真实命令验证：旧配置 add-admin 添加两个独立管理员、拒绝覆盖；旧 SQLite 历史迁移、访客 Cookie 在页面刷新/资源加载中保持稳定、跨会话拒绝导出、后台密码登录与汇总、重启后会话仍可用、退出不影响访客身份均通过。新 init 的管理员随机密码与保存哈希已在内存中核对，未输出密码。
