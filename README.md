@@ -6,7 +6,7 @@
 
 ## 构建与启动
 
-需要 Rust 稳定版工具链（含 Cargo）、C 编译器和系统 CA 证书。`rust-toolchain.toml` 使用 `stable` 通道；最低 Rust 版本要求以 `Cargo.toml` 的 `rust-version` 为准，也可使用满足要求的更新稳定版，并不限定某个唯一版本。SQLite 由 Cargo 编译，TLS 使用 rustls 和系统根证书。
+需要 Rust 稳定版工具链（含 Cargo）、C 编译器和系统 CA 证书。`rust-toolchain.toml` 使用 `stable` 通道；最低要求为 Rust 1.91（见 `Cargo.toml` 的 `rust-version`），支持 1.91.1 及满足要求的更新稳定版。使用已安装的兼容工具链时，可用 `cargo +1.91.1 build --release --locked -j 4` 显式选择版本。SQLite 由 Cargo 编译，TLS 使用 rustls 和系统根证书。
 
 ```bash
 cargo build --release --locked -j 4
