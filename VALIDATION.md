@@ -3,7 +3,7 @@
 验证时间：2026-10-23。环境：Debian 13、Linux x86_64、Rust/Cargo 1.99.1。
 
 - `cargo build --release --locked -j 4`：通过，生成 stripped 发布版程序。
-- `cargo test --locked -j 4`：15 项通过（6 单元测试、9 集成测试），0 失败，0 忽略。
+- `cargo test --locked -j 4`：17 项通过（6 单元测试、11 集成测试），0 失败，0 忽略。
 - `cargo fmt --all --check`：通过。
 - `cargo clippy --locked --all-targets -j 4 -- -D warnings`：通过。
 - 完整环境安装脚本重复执行：通过，已安装工具链和缓存构建可复用。
@@ -14,3 +14,5 @@
 本次没有对公司资产或公网目标执行扫描。未验证 Docker 构建、企业证书/代理、生产负载或跨架构运行。TLS 测试验证协议不匹配时拒绝连接，未模拟企业 CA 的完整证书链。原版漏洞公告与版本基线没有重新核实；见 README。
 
 预编译程序动态依赖 glibc（所需符号最高 GLIBC_2.39）、libm、libgcc。只适用于相应 Linux x86_64 环境；源码与 Cargo.lock 随包提供。
+
+新增配置验证：免密码 HTTP 访问、共享 anonymous 身份、免白名单任意常规地址/端口、非空列表继续生效、特殊地址继续拒绝和旧配置默认值兼容均通过。

@@ -63,7 +63,7 @@ $('import').onclick=async()=>{
 };
 async function boot() {
   try {
-    const me=await api('/api/me'); $('account').textContent=`${me.user} · 个人工作台`;
+    const me=await api('/api/me'); $('account').textContent=me.allow_anonymous ? '免密码访问 · 共享工作台' : `${me.user} · 个人工作台`;
     if(!me.scope_configured) notice('管理员尚未配置资产网段白名单，检测将被拒绝。请先按部署说明配置。',true);
     await refresh(); await loadReports();
   } catch(e) { notice(e.message,true); }

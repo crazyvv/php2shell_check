@@ -1,0 +1,10 @@
+{
+  "public_origin": "http://127.0.0.1:8080",
+  "allow_anonymous": true,
+  "allow_without_whitelist": true,
+  "allowed_networks": [],
+  "allowed_domains": [],
+  "allowed_ports": [],
+  "database": "data/selfcheck.sqlite3",
+  "users": {}
+}

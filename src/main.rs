@@ -20,6 +20,12 @@ enum Command {
         config: PathBuf,
         #[arg(long, default_value = "admin")]
         user: String,
+        /// 免密码访问，所有访客共用 anonymous 工作台
+        #[arg(long)]
+        allow_anonymous: bool,
+        /// 允许省略网段/端口白名单；非空列表仍生效
+        #[arg(long)]
+        allow_without_whitelist: bool,
     },
     /// 增加个人账号；配置修改后须重启服务
     AddUser {
@@ -43,7 +49,12 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::Init { config: path, user } => {
+        Command::Init {
+            config: path,
+            user,
+            allow_anonymous,
+            allow_without_whitelist,
+        } => {
             ensure!(
                 config::valid_user(&user),
                 "账号仅允许 1–64 位字母、数字、下划线、点和横线"
@@ -51,16 +62,33 @@ async fn main() -> Result<()> {
             let password = config::token(20);
             let cfg = Config {
                 public_origin: "http://127.0.0.1:8080".into(),
+                allow_anonymous,
+                allow_without_whitelist,
                 allowed_networks: vec![],
                 allowed_domains: vec![],
-                allowed_ports: vec![80, 443, 8080, 8443],
+                allowed_ports: if allow_without_whitelist {
+                    vec![]
+                } else {
+                    vec![80, 443, 8080, 8443]
+                },
                 database: "data/selfcheck.sqlite3".into(),
-                users: BTreeMap::from([(user.clone(), config::password_hash(&password, None)?)]),
+                users: if allow_anonymous {
+                    BTreeMap::new()
+                } else {
+                    BTreeMap::from([(user.clone(), config::password_hash(&password, None)?)])
+                },
             };
             config::write_config(&path, &cfg, true)?;
-            println!(
-                "配置已生成。首次账号: {user}\n随机密码: {password}\n请保存密码；扫描范围为空，需配置 allowed_networks 后检测。"
-            );
+            if allow_anonymous {
+                println!("配置已生成。免密码访问已启用，访客共用 anonymous 工作台。");
+            } else {
+                println!("配置已生成。首次账号: {user}\n随机密码: {password}\n请保存密码。");
+            }
+            if allow_without_whitelist {
+                println!("允许不配置白名单；已填写的限制仍生效。");
+            } else {
+                println!("扫描范围为空，需配置 allowed_networks 后检测。");
+            }
         }
         Command::AddUser { config: path, user } => {
             ensure!(config::valid_user(&user), "账号格式错误");

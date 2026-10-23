@@ -90,8 +90,10 @@ pub fn forbidden(ip: IpAddr) -> bool {
 }
 pub fn validate_addresses(u: &Url, cfg: &Config, ips: &[IpAddr]) -> Result<()> {
     ensure!(
-        cfg.allowed_ports
-            .contains(&u.port_or_known_default().unwrap_or(0)),
+        (cfg.allow_without_whitelist && cfg.allowed_ports.is_empty())
+            || cfg
+                .allowed_ports
+                .contains(&u.port_or_known_default().unwrap_or(0)),
         "端口不在管理员允许范围"
     );
     if let Some(url::Host::Domain(host)) = u.host() {
@@ -105,7 +107,7 @@ pub fn validate_addresses(u: &Url, cfg: &Config, ips: &[IpAddr]) -> Result<()> {
         );
     }
     ensure!(
-        !cfg.allowed_networks.is_empty(),
+        cfg.allow_without_whitelist || !cfg.allowed_networks.is_empty(),
         "未配置资产网段；默认禁止扫描"
     );
     let nets = cfg
@@ -117,21 +119,23 @@ pub fn validate_addresses(u: &Url, cfg: &Config, ips: &[IpAddr]) -> Result<()> {
     for ip in ips {
         ensure!(!forbidden(*ip), "目标包含禁止访问的特殊地址");
         ensure!(
-            nets.iter().any(|n| n.contains(ip)),
+            (cfg.allow_without_whitelist && nets.is_empty()) || nets.iter().any(|n| n.contains(ip)),
             "目标或 DNS 地址不在资产网段白名单"
         );
     }
     Ok(())
 }
 async fn resolve(u: &Url, cfg: &Config) -> Result<Vec<IpAddr>> {
-    // Check non-DNS scope first, so empty scope never performs DNS lookups.
+    // Check non-DNS scope before resolving; empty scope is denied unless explicitly allowed.
     ensure!(
-        !cfg.allowed_networks.is_empty(),
+        cfg.allow_without_whitelist || !cfg.allowed_networks.is_empty(),
         "未配置资产网段；默认禁止扫描"
     );
     ensure!(
-        cfg.allowed_ports
-            .contains(&u.port_or_known_default().unwrap_or(0)),
+        (cfg.allow_without_whitelist && cfg.allowed_ports.is_empty())
+            || cfg
+                .allowed_ports
+                .contains(&u.port_or_known_default().unwrap_or(0)),
         "端口不在管理员允许范围"
     );
     let host = match u.host().unwrap() {
@@ -366,6 +370,8 @@ mod tests {
     async fn redirect_revalidates_scope() {
         let cfg = Config {
             public_origin: "http://localhost".into(),
+            allow_anonymous: false,
+            allow_without_whitelist: false,
             allowed_networks: vec!["10.0.0.0/8".into()],
             allowed_domains: vec![],
             allowed_ports: vec![80],

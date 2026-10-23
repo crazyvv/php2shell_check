@@ -42,6 +42,34 @@ cargo build --release --locked -j 4
 
 账号、范围、端口和 public_origin 的修改在重启后生效。数据库相对路径以配置文件所在目录为基准。默认 `data/selfcheck.sqlite3`，使用 SQLite WAL。运行中备份请使用 SQLite backup API，不要仅复制主数据库文件。
 
+## 免密码与无白名单配置
+
+新建配置可直接启用两个选项：
+
+```bash
+./target/release/php-selfcheck init --allow-anonymous --allow-without-whitelist
+./target/release/php-selfcheck serve
+```
+
+也可将 `config.open.example.json` 复制为 `config.json` 后启动（已有配置请先备份）。
+
+已有配置在 `config.json` 中设置以下字段，然后重启；保留 `public_origin`、`database` 等其他字段：
+
+```json
+{
+  "allow_anonymous": true,
+  "allow_without_whitelist": true,
+  "users": {},
+  "allowed_networks": [],
+  "allowed_domains": [],
+  "allowed_ports": []
+}
+```
+
+`allow_anonymous` 启用后无需输入账号密码，所有访问者共用 `anonymous` 工作台，包括任务、报告、审计身份和每分钟请求额度。`allow_without_whitelist` 启用后，空网段列表表示不限网段，空端口列表表示不限端口；空域名列表一直表示不限域名。**非空的列表仍会限制目标**。使用 `--allow-without-whitelist` 初始化时，网段、域名、端口列表均为空。
+
+两个开关独立，默认均为 `false`，旧配置保持原有认证和范围要求。特殊地址拒绝、逐跳地址校验、TLS、Host/Origin 校验和任务限额在这两种模式下仍然生效。
+
 ## 功能与原版兼容
 
 - 个人账号认证；任务、历史与主机报告按账号隔离，管理员审计记录保存在 `audit` 表。

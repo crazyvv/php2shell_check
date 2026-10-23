@@ -12,11 +12,18 @@ use subtle::ConstantTimeEq;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     pub public_origin: String,
+    #[serde(default)]
+    pub allow_anonymous: bool,
+    #[serde(default)]
+    pub allow_without_whitelist: bool,
+    #[serde(default)]
     pub allowed_networks: Vec<String>,
     #[serde(default)]
     pub allowed_domains: Vec<String>,
+    #[serde(default)]
     pub allowed_ports: Vec<u16>,
     pub database: String,
+    #[serde(default)]
     pub users: BTreeMap<String, String>,
 }
 pub fn token(bytes: usize) -> String {
@@ -98,11 +105,13 @@ impl Config {
             anyhow::ensure!(net.addr() == net.network(), "CIDR 必须使用网络地址: {n}");
         }
         anyhow::ensure!(
-            !self.users.is_empty() && self.users.keys().all(|u| valid_user(u)),
+            (self.allow_anonymous || !self.users.is_empty())
+                && self.users.keys().all(|u| valid_user(u)),
             "账号配置错误"
         );
         anyhow::ensure!(
-            !self.allowed_ports.is_empty() && !self.allowed_ports.contains(&0),
+            (self.allow_without_whitelist || !self.allowed_ports.is_empty())
+                && !self.allowed_ports.contains(&0),
             "端口配置错误"
         );
         for domain in &mut self.allowed_domains {

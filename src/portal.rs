@@ -154,7 +154,9 @@ async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response> {
         .get::<ConnectInfo<SocketAddr>>()
         .map(|p| p.0.ip().to_string())
         .unwrap_or_else(|| "unknown".into());
-    if window(&mut state.failures.lock().unwrap(), &peer).len() >= 12 {
+    if !state.config.allow_anonymous
+        && window(&mut state.failures.lock().unwrap(), &peer).len() >= 12
+    {
         return Ok(error(429, "认证失败次数过多，请稍后再试"));
     }
     let auth = text(req.headers(), "authorization").to_owned();
@@ -164,7 +166,9 @@ async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response> {
         .and_then(|(_, t)| STANDARD.decode(t).ok())
         .and_then(|b| String::from_utf8(b).ok())
         .and_then(|s| s.split_once(':').map(|(u, p)| (u.to_owned(), p.to_owned())));
-    let user = if let Some((user, password)) = credentials {
+    let user = if state.config.allow_anonymous {
+        Some("anonymous".to_owned())
+    } else if let Some((user, password)) = credentials {
         if let Some(stored) = state.config.users.get(&user).cloned() {
             if tokio::task::spawn_blocking(move || verify(&password, &stored)).await? {
                 Some(user)
@@ -261,7 +265,7 @@ fn get(state: &State, user: &str, path: &str, query: &str) -> Result<Response> {
         "/api/me" => {
             return Ok(json_response(
                 200,
-                json!({"user":user,"rule_date":scanner::RULE_DATE,"allowed_ports":state.config.allowed_ports,"scope_configured":!state.config.allowed_networks.is_empty()}),
+                json!({"user":user,"rule_date":scanner::RULE_DATE,"allowed_ports":state.config.allowed_ports,"scope_configured":state.config.allow_without_whitelist || !state.config.allowed_networks.is_empty(),"allow_anonymous":state.config.allow_anonymous,"allow_without_whitelist":state.config.allow_without_whitelist}),
             ));
         }
         _ => {}
@@ -468,6 +472,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = Config {
             public_origin: "http://127.0.0.1:8080".into(),
+            allow_anonymous: false,
+            allow_without_whitelist: false,
             allowed_networks: vec![],
             allowed_domains: vec![],
             allowed_ports: vec![80, 443],

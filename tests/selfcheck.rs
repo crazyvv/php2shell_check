@@ -7,6 +7,8 @@ use std::{collections::BTreeMap, net::IpAddr, sync::Arc};
 fn cfg() -> Config {
     Config {
         public_origin: "http://127.0.0.1:8080".into(),
+        allow_anonymous: false,
+        allow_without_whitelist: false,
         allowed_networks: vec!["10.0.0.0/8".into()],
         allowed_domains: vec![],
         allowed_ports: vec![80, 443],
@@ -190,6 +192,9 @@ impl Drop for Portal {
 }
 impl Portal {
     async fn new() -> Self {
+        Self::with_options(false).await
+    }
+    async fn with_options(anonymous: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -201,6 +206,12 @@ impl Portal {
             ("alice".into(), config::password_hash("a", None).unwrap()),
             ("bob".into(), config::password_hash("b", None).unwrap()),
         ]);
+        if anonymous {
+            c.allow_anonymous = true;
+            c.allow_without_whitelist = true;
+            c.users.clear();
+            c.allowed_ports.clear();
+        }
         let state = portal::State::new(c).unwrap();
         let router = portal::router(state.clone());
         let task = tokio::spawn(async move {
@@ -399,4 +410,102 @@ async fn portal_auth_isolation_exports_and_imports() {
         .query_row("SELECT state FROM jobs WHERE id='old'", [], |r| r.get(0))
         .unwrap();
     assert_eq!(state, "interrupted");
+}
+
+#[test]
+fn optional_whitelist_and_legacy_defaults() {
+    let mut c = cfg();
+    c.allow_without_whitelist = true;
+    c.allowed_networks.clear();
+    c.allowed_ports.clear();
+    let u = scanner::normalize("https://example.com:9000/").unwrap();
+    assert!(scanner::validate_addresses(&u, &c, &["8.8.8.8".parse().unwrap()]).is_ok());
+    assert!(scanner::validate_addresses(&u, &c, &["169.254.169.254".parse().unwrap()]).is_err());
+    c.allowed_networks = vec!["10.0.0.0/8".into()];
+    assert!(scanner::validate_addresses(&u, &c, &["8.8.8.8".parse().unwrap()]).is_err());
+    c.allowed_ports = vec![443];
+    assert!(scanner::validate_addresses(&u, &c, &["10.1.1.1".parse().unwrap()]).is_err());
+    c.allowed_ports.clear();
+    c.allowed_domains = vec!["company.example".into()];
+    assert!(scanner::validate_addresses(&u, &c, &["10.1.1.1".parse().unwrap()]).is_err());
+    let mut legacy = serde_json::to_value(cfg()).unwrap();
+    legacy.as_object_mut().unwrap().remove("allow_anonymous");
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("allow_without_whitelist");
+    let legacy: Config = serde_json::from_value(legacy).unwrap();
+    assert!(!legacy.allow_anonymous && !legacy.allow_without_whitelist);
+    let mut anonymous:Config=serde_json::from_value(json!({"public_origin":"http://127.0.0.1:8080","allow_anonymous":true,"allow_without_whitelist":true,"database":"data/test.sqlite3"})).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        anonymous
+            .validate(
+                &dir.path().join("config.json"),
+                "127.0.0.1".parse().unwrap()
+            )
+            .is_ok()
+    );
+}
+#[tokio::test]
+async fn anonymous_http_shared_workspace_and_scope_options() {
+    let p = Portal::with_options(true).await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let r = client.get(&p.base).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert!(!r.headers().contains_key("www-authenticate"));
+    let me = client
+        .get(format!("{}/api/me", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(me["user"], "anonymous");
+    assert_eq!(me["scope_configured"], true);
+    assert_eq!(me["allow_anonymous"], true);
+    let r = client
+        .post(format!("{}/api/scan", p.base))
+        .header("origin", &p.base)
+        .header("x-requested-with", "PHP-SelfCheck")
+        .json(&json!({"targets":["http://169.254.169.254/"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 202);
+    let id = r.json::<Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut record = Value::Null;
+    for _ in 0..30 {
+        record = client
+            .get(format!("{}/api/jobs/{id}", p.base))
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        if record["state"] == "done" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(record["owner"], "anonymous");
+    assert_eq!(record["state"], "done");
+    assert!(
+        record["results"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("特殊地址")
+    );
+    let invalid = client
+        .post(format!("{}/api/scan", p.base))
+        .json(&json!({"targets":["example.com"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), 403);
 }
