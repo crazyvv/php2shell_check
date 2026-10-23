@@ -1,14 +1,12 @@
-# PHP 安全自查台 · Rust 版 v0.2
+# PHP 安全自查台
 
-由 `php2shell-selfcheck-v0.1.zip` 中的 Python 项目迁移。Web 后端、检测器和 Linux 主机采集器均使用 Rust；原中文 HTML/CSS/JavaScript 界面内嵌到可执行文件，不需要 Python、Node.js 或外部 SQLite 服务（可选 Web 配置采集助手在被检查的 PHP 应用侧运行）。
+面向开发团队的 PHP 安全自查工具，使用 Rust 实现 Web 服务、远程检测器和 Linux 主机采集器。中文 Web 界面内嵌于程序，扫描结果保存在 SQLite，无需外部数据库服务。运行服务不需要 Node.js。
 
-## 发布包中的预编译程序
-
-ZIP 中的 `bin/linux-x86_64/php-selfcheck` 是本次构建并测试的 Linux x86_64 程序，需要 glibc 2.39 或更新版本、libgcc 和系统 CA 证书。它不适用于 macOS、Windows、ARM 或旧版 Linux；其他平台请使用源码构建。运行前可执行 `chmod +x bin/linux-x86_64/php-selfcheck`，然后用该路径执行 `init`、`serve`、`collect` 等子命令。
+开发者页面只展示当前扫描，管理员通过独立账号访问历史记录与汇总。支持免密码扫描、可选资产白名单、检测证据展示、主机材料导入和 JSON/CSV 导出。
 
 ## 构建与启动
 
-需要 Rust 1.99.1（`rust-toolchain.toml` 固定版本）、C 编译器和系统 CA 证书。SQLite 由 Cargo 编译，TLS 使用 rustls 和系统根证书。
+需要 Rust 稳定版工具链（含 Cargo）、C 编译器和系统 CA 证书。`rust-toolchain.toml` 使用 `stable` 通道；最低 Rust 版本要求以 `Cargo.toml` 的 `rust-version` 为准，也可使用满足要求的更新稳定版，并不限定某个唯一版本。SQLite 由 Cargo 编译，TLS 使用 rustls 和系统根证书。
 
 ```bash
 cargo build --release --locked -j 4
@@ -66,19 +64,19 @@ cargo build --release --locked -j 4
 }
 ```
 
-`allow_anonymous` 启用后，开发者无需输入密码，每个浏览器会话由服务端随机 Cookie 分配独立 `visitor:` 身份。任务、材料与请求额度按身份隔离，不再共用 anonymous 工作台。`allow_without_whitelist` 启用后，空网段列表表示不限网段，空端口列表表示不限端口；空域名列表一直表示不限域名。**非空的列表仍会限制目标**。使用 `--allow-without-whitelist` 初始化时，网段、域名、端口列表均为空。
+`allow_anonymous` 启用后，开发者无需输入密码，每个浏览器会话由服务端随机 Cookie 分配独立 `visitor:` 身份。任务、材料与请求额度按身份隔离。`allow_without_whitelist` 启用后，空网段列表表示不限网段，空端口列表表示不限端口；空域名列表一直表示不限域名。**非空的列表仍会限制目标**。使用 `--allow-without-whitelist` 初始化时，网段、域名、端口列表均为空。
 
-两个开关独立，默认均为 `false`，旧配置保持原有认证和范围要求。特殊地址拒绝、逐跳地址校验、TLS、Host/Origin 校验和任务限额在这两种模式下仍然生效。
+两个开关独立，默认均为 `false`；未启用时需要普通账号认证及资产范围配置。特殊地址拒绝、逐跳地址校验、TLS、Host/Origin 校验和任务限额在这两种模式下仍然生效。
 
 ## 开发者页面与管理员历史
 
-开发者页面 `/` 不加载历史列表，只展示本标签页当前扫描。新提交替换可见结果；刷新页面可通过 sessionStorage 恢复本次任务 ID。页面不保存管理员密码或会话令牌，令牌在 HttpOnly Cookie 中；直接请求任务详情或导出时，服务端仍校验归属。普通 `/api/jobs` 兼容接口最多返回本身份最新一条记录。
+开发者页面 `/` 不加载历史列表，只展示本标签页当前扫描。新提交替换可见结果；刷新页面可通过 sessionStorage 恢复本次任务 ID。页面不保存管理员密码或会话令牌，令牌在 HttpOnly Cookie 中；直接请求任务详情或导出时，服务端仍校验归属。普通 `/api/jobs` 接口最多返回本身份最新一条记录。
 
 所有历史结果仍写入 SQLite，管理员访问 `/admin` 登录后可以查看全站汇总、搜索目标 URL/访问者标识/任务 ID、分页查看全部历史、展开证据并导出。普通扫描会话与管理员登录是两套独立权限，启用免密码扫描不会放开后台。
 
-### 已有配置启用管理员
+### 管理员账号
 
-更新程序后，在服务器终端执行：
+在服务器终端创建管理员：
 
 ```bash
 ./target/release/php-selfcheck add-admin --user admin
@@ -87,7 +85,7 @@ cargo build --release --locked -j 4
 # 保存各自随机密码，重启服务后访问 /admin
 ```
 
-命令默认读取 `config.json`，自定义路径可加 `--config /path/to/config.json`。只增加 `admins` 中的 PBKDF2 密码哈希，不修改既有账号或数据库、不覆盖已有同名管理员。**已有配置不自动授予管理员权限**，也不把 `users` 中名为 admin 的普通账号自动升级；没有配置管理员时，后台始终拒绝登录。
+命令默认读取 `config.json`，自定义路径可加 `--config /path/to/config.json`。只增加 `admins` 中的 PBKDF2 密码哈希，不修改既有账号或数据库、不覆盖已有同名管理员。管理员权限只由 `admins` 配置决定，`users` 中名为 admin 的普通账号不具有管理员权限；没有配置管理员时，后台始终拒绝登录。
 
 新执行 `init` 会同时生成首个管理员，账号由 `--user` 指定（默认 admin）。即使启用 `--allow-anonymous`，也会在终端显示独立管理员登录所需的随机密码；务必保存。`config.open.example.json` 提供免密码、无白名单扫描配置，但不包含可用管理员密码，复制后仍须执行 add-admin。
 
@@ -106,9 +104,9 @@ cargo build --release --locked -j 4
 
 访客 Cookie 为浏览器会话 Cookie，服务端最长有效 7 天；关闭会话、清除 Cookie 或过期后，旧结果只能由管理员查阅。管理员登录有效 8 小时，可主动退出；退出会撤销数据库令牌，删除管理员或更换其密码哈希并重启也会让其旧登录失效。Cookie 为 HttpOnly、SameSite=Strict，HTTPS public_origin 下设置 Secure。数据库仅保存令牌哈希。管理员登录具有失败次数限制，登录、查询、导出、退出有审计记录。
 
-数据库升级仅添加 sessions 表和索引，原任务、主机材料与审计保留。旧版共享 anonymous 的历史不再提供给新的访客会话，管理员仍可查看。会话及数据库文件应继续纳入保护与备份。
+任务、主机材料、审计和会话保存在数据库中。数据库和配置文件应纳入访问保护与备份；数据库没有自动清理功能，应按团队要求制定保留策略。
 
-## 功能与原版兼容
+## 扫描功能
 
 - 普通扫描页仅展示当前标签页提交的任务；免密码访问按浏览器会话隔离，密码访问按个人账号隔离。任务与材料持久保存至 SQLite。
 - `/admin` 为独立账号密码保护的历史与汇总页，支持搜索、分页、详情与 JSON/CSV 导出；管理员操作写入 `audit`。
@@ -118,8 +116,6 @@ cargo build --release --locked -j 4
 - 每次请求及每个重定向重新校验全部 DNS 结果，再固定已验证的 IP 连接；保留原域名 Host 和 TLS SNI，不使用环境 HTTP 代理，不跳过 TLS 校验。最多 4 次请求，正文最多保留 128 KiB。
 - JSON/CSV 导出；CSV 单元格对公式前缀进行中和。服务重启时将旧的 queued/running 任务标记为 interrupted。
 - 主机材料 JSON 导入保留“开发者提交，未经独立核验”标记，不提升远程检测结论。
-
-已有 `config.json` 中的 PBKDF2 密码哈希、数据库表和 `php-selfcheck-host/v1` 报告格式继续兼容。迁移时停止旧服务，备份原配置和 SQLite，再使用 Rust 服务指向该配置；不要两个服务同时运行同一任务库。Rust 不调用 Python。数据库没有自动清理，长期使用前制定保留策略。
 
 ## 主机采集
 
@@ -133,7 +129,7 @@ php-selfcheck collect > host-report.json
 
 ## 可选 Web 中间件、PHP 模块与端口采集
 
-这些新功能**默认全部关闭**，原 `php-selfcheck collect` 保持原有 PHP 基础采集。页面“主机采集”区域可勾选功能，生成在目标主机手工执行的命令；不会通过网页远程执行系统命令。
+中间件、PHP 模块、端口与 Web 探测开关**默认全部关闭**。不添加这些选项时，`php-selfcheck collect` 仅执行 PHP 基础采集。页面“主机采集”区域可勾选功能，生成在目标主机手工执行的命令；不会通过网页远程执行系统命令。
 
 ```bash
 # 仅识别 Web 中间件
@@ -178,13 +174,13 @@ php-selfcheck collect --options collector.options.example.json --web-probe=false
 
 ### 可选 multipart 可达性检查
 
-在现有 config.json 中设置 `"probe_multipart": true` 并重启，或保留默认 `false`。开启时，只在最终 GET 成功后对同一 URL 额外发送一次约百字节的普通表单 POST，重新校验 DNS/范围并固定连接 IP。不含文件、上传进度字段、嵌套数据或漏洞载荷，不跟随 POST 重定向；保留 TLS 验证且不传递自查台凭据。请只对允许普通表单 POST 的业务页面开启，常规 POST 也可能产生业务副作用。
+在 `config.json` 中设置 `"probe_multipart": true` 并重启，或保留默认 `false`。开启时，只在最终 GET 成功后对同一 URL 额外发送一次约百字节的普通表单 POST，重新校验 DNS/范围并固定连接 IP。不含文件、上传进度字段、嵌套数据或漏洞载荷，不跟随 POST 重定向；保留 TLS 验证且不传递自查台凭据。请只对允许普通表单 POST 的业务页面开启，常规 POST 也可能产生业务副作用。
 
 2xx 仅记为“收到响应，未确认 PHP 解析”，405/415 记为“当前请求被拒绝”，其他状态或错误保持未知；500、超时等不会提升为漏洞成立。POST 的 IP、URL、时间与状态单独记录。此检查不验证 upload_progress，也不执行内存压力或会话污染探测。
 
 ### 主机材料与手工复核
 
-Web 界面可导入 collect 报告，或不选文件直接填写手工复核：Web SAPI、upload_progress 开关、补丁厂商/来源、软件包完整修订号、厂商公告链接、实例归属说明。所有内容始终标为“开发者提交，未经独立核验”；“已修复/未修复”只是提交人的声明，不自动提升远程结论。HTTP API 为 `POST /api/reports`，除原有 target/report 外可附 `review` 对象，例如：
+Web 界面可导入 collect 报告，或不选文件直接填写手工复核：Web SAPI、upload_progress 开关、补丁厂商/来源、软件包完整修订号、厂商公告链接、实例归属说明。所有内容始终标为“开发者提交，未经独立核验”；“已修复/未修复”只是提交人的声明，不自动提升远程结论。HTTP API 为 `POST /api/reports`，除 `target` / `report` 外可附 `review` 对象，例如：
 
 ```json
 {
@@ -204,7 +200,7 @@ Web 界面可导入 collect 报告，或不选文件直接填写手工复核：W
 
 已有受认证内部管理入口可在完成权限检查后，定义 `PHP_SELFCHECK_AUTHORIZED=true` 并 include `tools/web-runtime-report.php`，下载只含选定配置的运行时 JSON 后导入。助手未获得这个常量授权时直接拒绝访问；不要部署为公开诊断接口。通过 Web 执行才能取得该请求实例的 SAPI/配置，通过 CLI 执行得到的仍仅代表 CLI。报告不包含所有 worker，也没有签名或实例归属证明。
 
-导入材料通过**同一账号、相同标准化目标 URL**关联，最新 5 份以 `host_evidence` 附在记录和导出中，包含导入时间；这是展示时关联，不会改写历史扫描结论。不同路径、不同账号和重定向后的其他目标不会自动拼接。SQLite 表保持兼容；旧记录没有 assessment 时可重新检测。
+导入材料通过**同一账号、相同标准化目标 URL**关联，最新 5 份以 `host_evidence` 附在记录和导出中，包含导入时间；这是展示时关联，不会改写历史扫描结论。不同路径、不同账号和重定向后的其他目标不会自动拼接。
 
 官方说明：关闭 upload_progress 只阻断部分 session 路径，完整修复仍需包含两个漏洞完整补丁的 PHP 版本或已核实回补包。
 
@@ -216,15 +212,15 @@ Web 界面可导入 collect 报告，或不选文件直接填写手工复核：W
 
 默认仅允许本机 HTTP 试用。团队使用应由公司 HTTPS 反向代理终止 TLS，配置准确的 `public_origin`（无尾斜线、路径），并限制后端端口仅代理可达。非回环监听要求 HTTPS public_origin。参见 `nginx.conf.example`；自定义外部端口时确保 Host 带端口。使用低权限专用账号，独立保护状态目录，不要多人共享 admin 账号。
 
-可选容器构建（本次环境未验证 Docker）：
+也可使用项目提供的 Dockerfile 从源码构建容器镜像：
 
 ```bash
-docker build -t php-selfcheck:0.2 .
+docker build -t php-selfcheck:local .
 mkdir -m 700 state
 # 先使用本机构建的二进制生成 state/config.json，并修改范围与 HTTPS public_origin。
 # 将 state 所有权交给容器 UID/GID 10001，再运行：
 docker run -d --name php-selfcheck --restart unless-stopped \
-  -p 127.0.0.1:8080:8080 -v "$PWD/state:/state" php-selfcheck:0.2
+  -p 127.0.0.1:8080:8080 -v "$PWD/state:/state" php-selfcheck:local
 ```
 
 ## 规则与使用边界
@@ -234,7 +230,7 @@ docker run -d --name php-selfcheck --restart unless-stopped \
 - PHP 公告：https://www.php.net/archive/2026.php#2026-10-21-5
 - CVE：CVE-2026-109618、CVE-2026-109619
 
-默认检测只发起指定入口的常规 GET；可选小型 multipart 控制 POST 见下文。工具不执行命令、不发送漏洞利用载荷，不自动发现目录、phpinfo、FastCGI 或额外端口。“疑似受影响”需要核实回补补丁；“达到修复基线”“版本未知”“未发现特征”和“检测受阻”均不能证明无漏洞或已修复。提交只读业务页面，URL 中不要包含令牌。主机命令执行仅用于本地运行已有 PHP 获取版本与选定配置，不接受网络用户提供任意命令。
+默认检测只发起指定入口的常规 GET；可选小型 multipart POST 见“可选 multipart 可达性检查”。远程扫描不执行目标主机命令、不发送漏洞利用载荷，不自动发现目录、phpinfo、FastCGI 或额外端口。“疑似受影响”需要核实回补补丁；“达到修复基线”“版本未知”“未发现特征”和“检测受阻”均不能证明无漏洞或已修复。提交只读业务页面，URL 中不要包含令牌。主机采集器在本地运行已有 PHP 获取版本与选定配置；启用中间件采集时，也会运行相应程序的版本或模块查询命令，不接受网络用户提供任意命令。
 
 ## 开发验证
 
@@ -244,7 +240,7 @@ cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
 ```
 
-测试覆盖基线边界、特征误报与 Cookie 脱敏、危险 URL、混合 DNS、特殊地址、逐跳范围校验、重定向上限、HTTP 阻断状态、固定 IP 的真实模拟 HTTP 传输、响应体截断、TLS 协议拒绝、Python 密码哈希兼容、配置权限、HTTP 认证、Host/Origin、任务隔离、报告导入、CSV 导出与重启中断。网络测试只访问进程内本地测试服务，不扫描真实资产。生产扫描规则没有本地地址放行开关。
+测试覆盖基线边界、特征误报与 Cookie 脱敏、危险 URL、混合 DNS、特殊地址、逐跳范围校验、重定向上限、HTTP 阻断状态、固定 IP 的真实模拟 HTTP 传输、响应体截断、TLS 协议拒绝、PBKDF2 密码校验、配置权限、HTTP 认证、Host/Origin、任务隔离、报告导入、CSV 导出与重启中断。网络测试只访问进程内本地测试服务，不扫描真实资产。生产扫描规则没有本地地址放行开关。
 
 `node --test tests/ui-state.cjs` 可选验证前端任务状态（需 Node.js，运行服务不需要）。
 
