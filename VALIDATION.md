@@ -72,3 +72,23 @@
 - 实际运行发布版 `collect --package-audit` 成功，识别本机 Debian 13，PHP 命令状态 disabled，CLI 运行观测为空，报告可解析且未超限。
 
 厂商修复参考表来自 openai/php2shell-checker 固定提交，保留 Apache 2.0 许可和来源。本次未独立核实全部厂商公告；参考匹配不是确认修复。本机没有部署生产 PHP-FPM/Apache 实例；真实 RHEL/Ubuntu 软件包、生产进程更新及容器部署仍需在相应环境复核。Docker 构建未实际运行。
+
+## Windows / Linux Release 发布验证
+
+版本标签：v0.2.0；发布流程源提交：09c9d9a。
+
+- 修正 Linux 专用中间件测试的平台条件；Windows 使用 MSVC 构建及原生测试，Linux 使用 musl 静态目标。
+- 本地 Rust 1.91.1 `x86_64-unknown-linux-musl` 发布构建成功，51 项测试通过；4 项前端测试通过。
+- Linux ELF 确认为 stripped static-pie。原始程序和打包后解压程序均通过版本/帮助、本机 Web 启动、页面与 API、特殊地址拒绝、默认不调用 PHP 的采集检查。
+- Linux tar.gz 保留程序执行权限，包含公开示例、文档及许可证，不包含真实 config.json、数据库或状态目录。
+- Release workflow 通过 actionlint v1.7.7；发布脚本通过语法检查及隔离模拟 API 验证：必须具备两个平台附件，下载校验成功后才能公开；下载被篡改时不执行公开发布。
+- 云端 Windows MSVC 与 Linux musl 两个任务均通过测试、发布构建和本地启动检查；发布脚本上传附件后下载回验 SHA-256，再公开 Release。已从 release-manifests 分支取得成功回执，核对源提交与 v0.2.0 标签一致。当前环境的 GitHub API 仍返回 403，最终发布状态通过该 Git 回执确认。
+
+发布地址：https://github.com/crazyvv/php2shell_check/releases/tag/v0.2.0
+
+云端构建记录：https://github.com/crazyvv/php2shell_check/actions/runs/39947139307
+
+已发布附件的 SHA-256（以 Release 的 SHA256SUMS 为准）：
+
+- `php-selfcheck-v0.2.0-linux-x86_64.tar.gz`：`7a1af611d777b4fa37243e2d0a8c254e59597cd3c7fc3b4fe6e2d46b99ec3480`
+- `php-selfcheck-v0.2.0-windows-x86_64.zip`：`4c6071c85116e9f2b522648ee9bd10c594d7b456b8f308869bf8404ff613874c`
