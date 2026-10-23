@@ -60,3 +60,14 @@ test('administrator filters, filtered exports and deletion confirmation',async()
   confirmed=true;await remove.onclick();assert(deleted);assert(calls.some(c=>c.path.endsWith('/delete') && JSON.parse(c.options.body).confirm===true));
   assert.equal(document.getElementById('jobs').children.length,1); // Empty-state paragraph.
 });
+
+test('collector switches build a safe command and disable dependent probes',async()=>{
+  const app=setup();await flush();const get=id=>app.document.getElementById(id);
+  assert.equal(get('collectCommand').textContent,'php-selfcheck collect > host-report.json');
+  get('collectMiddleware').checked=true;get('collectMiddleware').onchange();
+  get('collectModules').checked=true;get('collectPorts').checked=true;get('collectPorts').onchange();get('collectWeb').checked=true;get('collectWeb').onchange();
+  get('collectHost').value='app.internal';get('collectHost').oninput();
+  assert(get('collectCommand').textContent.includes("--middleware --php-modules --ports --web-probe --web-host 'app.internal'"));
+  get('collectHost').value="x'; touch /tmp/unsafe";get('collectHost').oninput();assert(!get('collectCommand').textContent.includes('touch'));
+  get('collectMiddleware').checked=false;get('collectMiddleware').onchange();assert.equal(get('collectWeb').checked,false);assert.equal(get('collectWeb').disabled,true);assert.equal(get('collectCommand').textContent,'php-selfcheck collect > host-report.json');
+});

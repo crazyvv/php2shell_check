@@ -177,5 +177,20 @@ pub fn host(payload: &Value) -> Value {
         };
         observations.push(json!({"scope":scope,"sapi":sapi,"version":runtime["version"],"upload_progress":enabled.map(|b|if b{"enabled"}else{"disabled"}).unwrap_or("unknown"),"settings":runtime["settings"],"confidence":"unverified","source":"developer_supplied_runtime_report"}));
     }
-    json!({"trust":"开发者提交，未经独立核验","association":"用户指定关联目标，未验证实例归属","runtime_observations":observations,"review":payload["review"],"patch_status":"unverified","confidence":"unverified","verdict_promoted":false})
+    let raw = &payload["report"]["middleware"];
+    let entries = |key: &str, limit: usize| {
+        raw[key]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|v| v.is_object())
+                    .take(limit)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    let middleware = json!({"status":raw["status"].as_str().unwrap_or("not_collected"),"instances":entries("instances",128),"web_probes":entries("web_probes",64),"source":"developer_supplied_host_report","confidence":"unverified"});
+    json!({"middleware":middleware,"trust":"开发者提交，未经独立核验","association":"用户指定关联目标，未验证实例归属","runtime_observations":observations,"review":payload["review"],"patch_status":"unverified","confidence":"unverified","verdict_promoted":false})
 }

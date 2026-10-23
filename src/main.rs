@@ -51,7 +51,7 @@ enum Command {
         port: u16,
     },
     /// 在当前 Linux 主机执行只读采集，JSON 输出至 stdout
-    Collect,
+    Collect(collector::CollectArgs),
 }
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -133,11 +133,12 @@ async fn main() -> Result<()> {
             cfg.validate(&path, bind)?;
             portal::serve(cfg, std::net::SocketAddr::new(bind, port)).await?;
         }
-        Command::Collect => {
+        Command::Collect(args) => {
+            let options = args.resolve()?;
             ensure!(cfg!(target_os = "linux"), "主机采集目前仅支持 Linux");
             println!(
                 "{}",
-                serde_json::to_string_pretty(&collector::collect().await)?
+                serde_json::to_string_pretty(&collector::collect_with_options(&options).await)?
             );
         }
     }

@@ -41,3 +41,18 @@ async function boot() {
 }
 setInterval(()=>{if(busy) refresh().catch(e=>notice(e.message,true));},4000);
 boot();
+
+function updateCollectCommand(){
+  const middleware=$('collectMiddleware').checked;
+  for(const id of ['collectModules','collectPorts']){$(id).disabled=!middleware;if(!middleware)$(id).checked=false;}
+  $('collectWeb').disabled=!middleware || !$('collectPorts').checked;if($('collectWeb').disabled)$('collectWeb').checked=false;
+  $('collectHost').disabled=!$('collectWeb').checked;
+  const command=['php-selfcheck collect'];
+  for(const [id,flag] of [['collectMiddleware','--middleware'],['collectModules','--php-modules'],['collectPorts','--ports'],['collectWeb','--web-probe']])if($(id).checked)command.push(flag);
+  const host=$('collectHost').value.trim();
+  if($('collectWeb').checked && host){if(!/^[a-zA-Z0-9._:[\]-]+$/.test(host)){$('collectCommand').textContent='请输入不含端口、凭据或路径的 Host；IPv6 使用方括号。';return;}command.push("--web-host '"+host+"'");}
+  $('collectCommand').textContent=command.join(' ')+' > host-report.json';
+}
+for(const id of ['collectMiddleware','collectModules','collectPorts','collectWeb'])$(id).onchange=updateCollectCommand;
+$('collectHost').oninput=updateCollectCommand;
+updateCollectCommand();

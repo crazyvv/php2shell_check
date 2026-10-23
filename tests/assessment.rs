@@ -50,3 +50,24 @@ fn runtime_scope_and_untrusted_claims_are_preserved() {
         json!({"sapi":"fpm-fcgi"})
     );
 }
+
+#[test]
+fn middleware_import_is_scoped_unverified_and_bounded() {
+    let value = assessment::host(
+        &json!({"report":{"middleware":{"status":"completed","instances":[{"pid":"100","family":"nginx"},"invalid"],"web_probes":[{"status":"responded","response":{"http_status":200}}]}}}),
+    );
+    assert_eq!(
+        value["middleware"]["instances"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(value["middleware"]["confidence"], "unverified");
+    assert_eq!(value["verdict_promoted"], false);
+    let malformed =
+        assessment::host(&json!({"report":{"middleware":{"instances":"invalid","web_probes":{}}}}));
+    assert!(
+        malformed["middleware"]["instances"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}

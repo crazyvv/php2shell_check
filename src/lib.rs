@@ -7,3 +7,5 @@ pub mod assessment;
 
 pub mod admin;
 pub mod session;
+
+pub mod middleware;

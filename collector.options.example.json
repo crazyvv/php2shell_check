@@ -1,0 +1,10 @@
+{
+  "middleware": false,
+  "php_modules": false,
+  "ports": false,
+  "web_probe": false,
+  "web_host": null,
+  "web_path": "/",
+  "web_schemes": ["http", "https"],
+  "max_web_probes": 16
+}

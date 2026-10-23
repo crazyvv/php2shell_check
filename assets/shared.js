@@ -28,6 +28,20 @@ function hostEvidenceView(e) {
   for(const r of e.runtime_observations || []) {
     wrap.append(node('p',`${r.scope === 'cli_only' ? '仅 CLI，不能代表 Web' : r.scope === 'web_runtime_claimed' ? '提交人声明为 Web 实例' : '运行环境归属未知'} · SAPI ${r.sapi} · PHP ${r.version || '未知'} · upload_progress ${statusNames[r.upload_progress] || '未知'}`,'fine'));
   }
+  if(e.middleware && !['not_collected','disabled'].includes(e.middleware.status)) {
+    wrap.append(node('b','Web 中间件与监听端口（提交材料，未经独立核验）'));
+    for(const m of e.middleware.instances || []) {
+      const libraries=Array.isArray(m.php_modules?.php_libraries) ? m.php_modules.php_libraries.join(', ') : '';
+      const ports=Array.isArray(m.listeners?.items) ? m.listeners.items.map(p=>`${p.address}:${p.port}`).join(', ') : '';
+      wrap.append(node('p',`${m.family || '未知中间件'} · PID ${m.pid || '未知'} · ${m.binary?.version || '版本未知'} · 监听：${ports || m.listeners?.status || '未知'}`,'fine'));
+      const declared=Array.isArray(m.binary?.modules?.lines) ? m.binary.modules.lines.join(', ') : '';
+      const mapped=libraries || (m.php_modules?.status==='disabled' ? '未启用检查' : m.php_modules?.status==='observed' ? '未发现 PHP 映射（不能排除 PHP）' : '未知或权限不足');
+      wrap.append(node('p',`PHP 进程映射：${mapped}；默认配置模块：${declared || '未取得明确模块声明'}。构建/配置声明不等于当前进程实际使用 PHP。`,'fine'));
+    }
+    for(const probe of e.middleware.web_probes || []) {
+      wrap.append(node('p',`本机 Web：${probe.scheme || ''} ${probe.host || probe.bind_address || ''}:${probe.port || ''}${probe.path || '/'} · ${probe.status} · HTTP ${probe.response?.http_status || '未知'} · ${probe.response?.findings?.verdict || probe.reason || '无法完成请求或证据不足'}`,'fine'));
+    }
+  }
   if(e.review && Object.keys(e.review).length) {
     const r=e.review;
     wrap.append(node('p',`手工复核声明：SAPI ${r.sapi || '未知'} · upload_progress ${statusNames[r.upload_progress] || '未知'} · 补丁 ${statusNames[r.patch_status] || '未知'}`,'fine'));

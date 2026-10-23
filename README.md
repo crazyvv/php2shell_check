@@ -131,6 +131,47 @@ php-selfcheck collect > host-report.json
 
 只读取可见进程名称/可执行文件路径和 PHP 包信息，对 PATH 中的常见 PHP/FPM 二进制执行 `-n -v`，并使用 PHP CLI 的正常配置读取选定 INI 项（不调用 phpinfo 或输出环境）。CLI 观测始终标为 `cli_only`。外部命令有 10 秒超时与输出保留上限；不读取进程环境或命令行，不自动上传。通过 Web 界面关联业务 URL 并导入报告。CLI 版本不能证明 Web/FPM、容器及所有后端实例的版本与补丁状态，报告未签名，关联关系由提交人指定。
 
+## 可选 Web 中间件、PHP 模块与端口采集
+
+这些新功能**默认全部关闭**，原 `php-selfcheck collect` 保持原有 PHP 基础采集。页面“主机采集”区域可勾选功能，生成在目标主机手工执行的命令；不会通过网页远程执行系统命令。
+
+```bash
+# 仅识别 Web 中间件
+php-selfcheck collect --middleware > host-report.json
+
+# 中间件 + PHP 模块线索 + 关联监听端口，不发送 Web 请求
+php-selfcheck collect --middleware --php-modules --ports > host-report.json
+
+# 额外尝试本机监听端口的 HTTP/HTTPS GET
+php-selfcheck collect --middleware --php-modules --ports --web-probe > host-report.json
+
+# 指定虚拟主机 Host/SNI、只尝试 HTTPS、指定只读路径和请求上限
+php-selfcheck collect --middleware --ports --web-probe \
+  --web-host app.example.com --web-schemes https --web-path /index.php \
+  --max-web-probes 8 > host-report.json
+```
+
+四个开关均接受显式 `=true` / `=false`。模块、端口与 Web 功能需要 `--middleware`，Web 功能还需要 `--ports`；不满足依赖会给出错误，不会静默扩大采集。Web Host 用于虚拟主机和证书校验，不用于指定远端地址；IP Host 必须与已关联的本机连接地址一致。
+
+也可复制 `collector.options.example.json`，修改布尔值后使用：
+
+```bash
+php-selfcheck collect --options collector.options.example.json --web-probe=false > host-report.json
+```
+
+命令行显式值覆盖文件。采集器配置与服务端 `config.json` 分开，示例文件包含四个开关、web_host、web_path、web_schemes、max_web_probes。
+
+检测范围与证据边界：
+
+- 识别可见的 Apache/httpd、Nginx、Tengine、LiteSpeed、Lighttpd、FrankenPHP 和 PHP-FPM 进程，以及 PATH/常见路径中的已安装程序。Nginx 名称运行的 Tengine 可结合安装路径和版本识别；已安装不等于正在运行。
+- Apache 检查当前进程 maps 中的 libphp/mod_php 映射，并尝试 `-M` 中的 PHP、proxy_fcgi、fcgid 声明。`-M` 读取的是默认磁盘配置，不一定等于当前 PID 启动时的配置。Nginx/Tengine 检查 PHP 动态库映射及 `-V` 构建线索，不把 FastCGI 与 mod_php 混为一谈。没有 PHP 映射不能否定 PHP-FPM 使用。
+- 通过 `/proc/PID/fd` 中 socket inode 与该 PID 网络命名空间的 tcp/tcp6 LISTEN 表关联 **TCP** 监听端口，不做端口范围扫描。仅在进程身份未变化、网络命名空间与采集器相同、地址确认属于本机时才尝试 Web GET。容器内端口需在对应容器/命名空间采集；Unix socket、UDP、隐藏/无权限进程不在 TCP 探测覆盖内。
+- Web 开关默认关闭；开启后默认分别尝试 HTTP/HTTPS，每次只 GET 指定路径，不跟随跳转、不使用环境代理、不传递自查台凭据、不尝试 FastCGI 端口、不扫描额外端口，TLS 校验保持开启。默认最多 16 次尝试，可设 1–64；每次请求最长 4 秒，只保留最多 16 KiB 正文用于指纹识别，不保存 Cookie 值。普通 GET 仍需选择只读业务入口。
+- 通配监听地址转为本机回环连接；明确绑定的地址需出现在本机地址信息中。共享监听、SO_REUSEPORT 或反向代理可能使响应来自其他 worker/后端，端口归属不等于响应实例证明。证书/虚拟主机可能需要正确 web_host；TLS、权限、命名空间、进程退出等失败会保留未知/跳过原因，不认定为安全或未使用 PHP。
+- 默认最多 128 个进程、16 个不同程序版本检查、每进程 8192 个 FD；达到上限或权限不足时可能不完整。不会自动提升权限、修改配置或重启中间件，不读取进程环境和完整命令行、不导出 Nginx/Apache 完整配置。
+
+导入后，开发者当前结果和管理员历史中会显示中间件、PID、PHP 模块线索、关联端口和本机 Web 观测。JSON/CSV 保留同一份主机证据，仍标为“开发者提交，未经独立核验”，不会自动提升远程漏洞结论。
+
 ## 扩展证据与复核
 
 结果的 `assessment` 包含 Web 服务器声明、SAPI、multipart、upload_progress、版本维护状态、补丁状态和复核优先级。每项包含 `status`、`source`、`confidence`、`detail`；`sources` 指向两份 PHP 官方 GHSA。Apache/nginx 头不能确定 SAPI；GET 页面中的 multipart 表单和上传进度字段仅是线索，没有线索则保持“未知”，不会推断为关闭。EOL 单独显示，补丁状态仍可为未知。
