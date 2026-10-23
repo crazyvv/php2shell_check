@@ -69,6 +69,7 @@ async fn run(exe: &Path, args: &[&str]) -> Value {
 }
 pub async fn collect() -> Value {
     let mut checks = vec![];
+    let mut runtime_observations = vec![];
     for name in [
         "php",
         "php8.2",
@@ -82,7 +83,19 @@ pub async fn collect() -> Value {
         "php-fpm8.5",
     ] {
         if let Some(exe) = which(name) {
-            checks.push(run(&exe, &["-n", "-v"]).await)
+            checks.push(run(&exe, &["-n", "-v"]).await);
+            if !name.contains("fpm") {
+                let runtime = run(&exe, &["-r", PHP_RUNTIME]).await;
+                if runtime["exit_code"] == 0
+                    && let Some(output) = runtime["output"].as_str()
+                    && let Ok(mut parsed) = serde_json::from_str::<Value>(output)
+                    && parsed.is_object()
+                {
+                    parsed["scope"] = json!("cli_only");
+                    parsed["source"] = json!("local_cli_configuration");
+                    runtime_observations.push(parsed);
+                }
+            }
         }
     }
     if let Some(exe) = which("dpkg-query") {
@@ -117,5 +130,8 @@ pub async fn collect() -> Value {
             }
         }
     }
-    json!({"schema":"php-selfcheck-host/v1","hostname":std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim(),"collected_at":chrono::Utc::now().to_rfc3339(),"platform":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"source":"developer_supplied_unverified","checks":checks,"processes":processes,"limitations":["CLI 版本不等于 Web/FPM 实例版本；报告不自动证明补丁或漏洞状态。","仅检查当前主机可见进程与标准路径；容器、远端主机、自定义安装目录需另行核验。","此报告未签名，平台记录为开发者提交材料。"]})
+    json!({"schema":"php-selfcheck-host/v1","hostname":std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim(),"collected_at":chrono::Utc::now().to_rfc3339(),"platform":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"source":"developer_supplied_unverified","checks":checks,"runtime_observations":runtime_observations,"processes":processes,"limitations":["CLI 版本不等于 Web/FPM 实例版本；报告不自动证明补丁或漏洞状态。","仅检查当前主机可见进程与标准路径；容器、远端主机、自定义安装目录需另行核验。","此报告未签名，平台记录为开发者提交材料。"]})
 }
+
+// Selected configuration only, never phpinfo() or the process environment.
+const PHP_RUNTIME: &str = r#"$settings=[]; foreach(['session.upload_progress.enabled','file_uploads','enable_post_data_reading','memory_limit','post_max_size','upload_max_filesize','max_file_uploads','max_multipart_body_parts','fatal_error_backtraces'] as $key){$value=ini_get($key);$settings[$key]=$value===false?null:$value;} echo json_encode(['sapi'=>PHP_SAPI,'version'=>PHP_VERSION,'settings'=>$settings]);"#;

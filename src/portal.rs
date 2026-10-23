@@ -128,6 +128,21 @@ pub fn csv_safe(s: &str) -> String {
         s.into()
     }
 }
+fn enrich(db: &Connection, user: &str, record: &mut Value) -> Result<()> {
+    if let Some(results) = record["results"].as_array_mut() {
+        for result in results {
+            let target = result["target"].as_str().unwrap_or("");
+            let mut query=db.prepare("SELECT id,created,payload FROM reports WHERE owner=? AND target=? ORDER BY created DESC LIMIT 5")?;
+            let evidence=query.query_map(params![user,target],|row|{
+                let payload:String=row.get(2)?;
+                let payload:Value=serde_json::from_str(&payload).unwrap_or(Value::Null);
+                Ok(json!({"id":row.get::<_,String>(0)?,"imported_at":row.get::<_,f64>(1)?,"assessment":crate::assessment::host(&payload)}))
+            })?.collect::<std::result::Result<Vec<_>,_>>()?;
+            result["host_evidence"] = json!(evidence);
+        }
+    }
+    Ok(())
+}
 pub fn router(state: Arc<State>) -> Router {
     Router::new().fallback(move |req: Request<Body>| {
         let state = state.clone();
@@ -273,15 +288,18 @@ fn get(state: &State, user: &str, path: &str, query: &str) -> Result<Response> {
     if path == "/api/jobs" {
         let db = state.db.lock().unwrap();
         let mut q=db.prepare("SELECT id,owner,created,state,results FROM jobs WHERE owner=? ORDER BY created DESC LIMIT 40")?;
-        let records = q
+        let mut records = q
             .query_map([user], job)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        for record in &mut records {
+            enrich(&db, user, record)?;
+        }
         return Ok(json_response(200, json!(records)));
     }
     if path == "/api/reports" {
         let db = state.db.lock().unwrap();
         let mut q=db.prepare("SELECT id,created,target,payload FROM reports WHERE owner=? ORDER BY created DESC LIMIT 40")?;
-        let records=q.query_map([user],|r|{let p:String=r.get(3)?;Ok(json!({"id":r.get::<_,String>(0)?,"created":r.get::<_,f64>(1)?,"target":r.get::<_,String>(2)?,"payload":serde_json::from_str::<Value>(&p).unwrap_or(Value::Null)}))})?.collect::<std::result::Result<Vec<_>,_>>()?;
+        let records=q.query_map([user],|r|{let p:String=r.get(3)?;Ok(json!({"id":r.get::<_,String>(0)?,"created":r.get::<_,f64>(1)?,"target":r.get::<_,String>(2)?,"assessment":crate::assessment::host(&serde_json::from_str::<Value>(&p).unwrap_or(Value::Null)),"payload":serde_json::from_str::<Value>(&p).unwrap_or(Value::Null)}))})?.collect::<std::result::Result<Vec<_>,_>>()?;
         return Ok(json_response(200, json!(records)));
     }
     if let Some(id) = path.strip_prefix("/api/jobs/") {
@@ -298,9 +316,10 @@ fn get(state: &State, user: &str, path: &str, query: &str) -> Result<Response> {
                 )
                 .optional()?
         };
-        let Some(record) = record else {
+        let Some(mut record) = record else {
             return Ok(error(404, "记录不存在"));
         };
+        enrich(&state.db.lock().unwrap(), user, &mut record)?;
         let csv =
             url::form_urlencoded::parse(query.as_bytes()).any(|(k, v)| k == "format" && v == "csv");
         let mut r = if csv {
@@ -313,6 +332,8 @@ fn get(state: &State, user: &str, path: &str, query: &str) -> Result<Response> {
                 "http_status",
                 "connected_ip",
                 "checked_at",
+                "assessment",
+                "host_evidence",
             ];
             writer.write_record(keys)?;
             for result in record["results"].as_array().context("记录损坏")? {
@@ -435,7 +456,11 @@ fn post(state: Arc<State>, user: &str, path: &str, body: Value) -> Result<Respon
             if !report.is_object() || report["schema"] != "php-selfcheck-host/v1" {
                 return Ok(error(400, "报告格式不匹配，请使用 php-selfcheck collect"));
             }
-            let payload = json!({"trust":"开发者提交，未经独立核验","report":report,"association":"用户指定关联目标，未验证此主机是否实际承载该 URL"});
+            let review = match crate::assessment::review(&body["review"]) {
+                Ok(v) => v,
+                Err(e) => return Ok(error(400, &e.to_string())),
+            };
+            let payload = json!({"review":review,"trust":"开发者提交，未经独立核验","report":report,"association":"用户指定关联目标，未验证此主机是否实际承载该 URL"});
             let id = token(16);
             state.db.lock().unwrap().execute(
                 "INSERT INTO reports VALUES(?,?,?,?,?)",
@@ -473,6 +498,7 @@ mod tests {
         let cfg = Config {
             public_origin: "http://127.0.0.1:8080".into(),
             allow_anonymous: false,
+            probe_multipart: false,
             allow_without_whitelist: false,
             allowed_networks: vec![],
             allowed_domains: vec![],

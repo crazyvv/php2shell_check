@@ -15,6 +15,8 @@ pub struct Config {
     #[serde(default)]
     pub allow_anonymous: bool,
     #[serde(default)]
+    pub probe_multipart: bool,
+    #[serde(default)]
     pub allow_without_whitelist: bool,
     #[serde(default)]
     pub allowed_networks: Vec<String>,

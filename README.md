@@ -1,6 +1,6 @@
 # PHP 安全自查台 · Rust 版 v0.2
 
-由 `php2shell-selfcheck-v0.1.zip` 中的 Python 项目迁移。Web 后端、检测器和 Linux 主机采集器均使用 Rust；原中文 HTML/CSS/JavaScript 界面内嵌到可执行文件，不需要 Python、Node.js 或外部 SQLite 服务。
+由 `php2shell-selfcheck-v0.1.zip` 中的 Python 项目迁移。Web 后端、检测器和 Linux 主机采集器均使用 Rust；原中文 HTML/CSS/JavaScript 界面内嵌到可执行文件，不需要 Python、Node.js 或外部 SQLite 服务（可选 Web 配置采集助手在被检查的 PHP 应用侧运行）。
 
 ## 发布包中的预编译程序
 
@@ -80,7 +80,7 @@ cargo build --release --locked -j 4
 - JSON/CSV 导出；CSV 单元格对公式前缀进行中和。服务重启时将旧的 queued/running 任务标记为 interrupted。
 - 主机材料 JSON 导入保留“开发者提交，未经独立核验”标记，不提升远程检测结论。
 
-原版 `config.json` 中的 PBKDF2 密码哈希、数据库表和 `php-selfcheck-host/v1` 报告格式继续兼容。迁移时停止旧服务，备份原配置和 SQLite，再使用 Rust 服务指向该配置；不要两个服务同时运行同一任务库。Rust 不调用 Python。数据库没有自动清理，长期使用前制定保留策略。
+已有 `config.json` 中的 PBKDF2 密码哈希、数据库表和 `php-selfcheck-host/v1` 报告格式继续兼容。迁移时停止旧服务，备份原配置和 SQLite，再使用 Rust 服务指向该配置；不要两个服务同时运行同一任务库。Rust 不调用 Python。数据库没有自动清理，长期使用前制定保留策略。
 
 ## 主机采集
 
@@ -90,7 +90,47 @@ cargo build --release --locked -j 4
 php-selfcheck collect > host-report.json
 ```
 
-只读取可见进程名称/可执行文件路径和 PHP 包信息，对 PATH 中的常见 PHP/FPM 二进制执行 `-n -v`。外部命令有 10 秒超时与输出保留上限；不读取进程环境或命令行，不自动上传。通过 Web 界面关联业务 URL 并导入报告。CLI 版本不能证明 Web/FPM、容器及所有后端实例的版本与补丁状态，报告未签名，关联关系由提交人指定。
+只读取可见进程名称/可执行文件路径和 PHP 包信息，对 PATH 中的常见 PHP/FPM 二进制执行 `-n -v`，并使用 PHP CLI 的正常配置读取选定 INI 项（不调用 phpinfo 或输出环境）。CLI 观测始终标为 `cli_only`。外部命令有 10 秒超时与输出保留上限；不读取进程环境或命令行，不自动上传。通过 Web 界面关联业务 URL 并导入报告。CLI 版本不能证明 Web/FPM、容器及所有后端实例的版本与补丁状态，报告未签名，关联关系由提交人指定。
+
+## 扩展证据与复核
+
+结果的 `assessment` 包含 Web 服务器声明、SAPI、multipart、upload_progress、版本维护状态、补丁状态和复核优先级。每项包含 `status`、`source`、`confidence`、`detail`；`sources` 指向两份 PHP 官方 GHSA。Apache/nginx 头不能确定 SAPI；GET 页面中的 multipart 表单和上传进度字段仅是线索，没有线索则保持“未知”，不会推断为关闭。EOL 单独显示，补丁状态仍可为未知。
+
+### 可选 multipart 可达性检查
+
+在现有 config.json 中设置 `"probe_multipart": true` 并重启，或保留默认 `false`。开启时，只在最终 GET 成功后对同一 URL 额外发送一次约百字节的普通表单 POST，重新校验 DNS/范围并固定连接 IP。不含文件、上传进度字段、嵌套数据或漏洞载荷，不跟随 POST 重定向；保留 TLS 验证且不传递自查台凭据。请只对允许普通表单 POST 的业务页面开启，常规 POST 也可能产生业务副作用。
+
+2xx 仅记为“收到响应，未确认 PHP 解析”，405/415 记为“当前请求被拒绝”，其他状态或错误保持未知；500、超时等不会提升为漏洞成立。POST 的 IP、URL、时间与状态单独记录。此检查不验证 upload_progress，也不执行内存压力或会话污染探测。
+
+### 主机材料与手工复核
+
+Web 界面可导入 collect 报告，或不选文件直接填写手工复核：Web SAPI、upload_progress 开关、补丁厂商/来源、软件包完整修订号、厂商公告链接、实例归属说明。所有内容始终标为“开发者提交，未经独立核验”；“已修复/未修复”只是提交人的声明，不自动提升远程结论。HTTP API 为 `POST /api/reports`，除原有 target/report 外可附 `review` 对象，例如：
+
+```json
+{
+  "target": "https://app.example.com/",
+  "report": {"schema": "php-selfcheck-host/v1"},
+  "review": {
+    "sapi": "fpm-fcgi",
+    "upload_progress": "disabled",
+    "patch_status": "fixed_claimed",
+    "patch_vendor": "Your Linux/LTS vendor",
+    "package_revision": "实际软件包完整修订号",
+    "advisory_url": "https://vendor.example/security/advisory",
+    "notes": "实际实例标识、配置核对时间和修复依据"
+  }
+}
+```
+
+已有受认证内部管理入口可在完成权限检查后，定义 `PHP_SELFCHECK_AUTHORIZED=true` 并 include `tools/web-runtime-report.php`，下载只含选定配置的运行时 JSON 后导入。助手未获得这个常量授权时直接拒绝访问；不要部署为公开诊断接口。通过 Web 执行才能取得该请求实例的 SAPI/配置，通过 CLI 执行得到的仍仅代表 CLI。报告不包含所有 worker，也没有签名或实例归属证明。
+
+导入材料通过**同一账号、相同标准化目标 URL**关联，最新 5 份以 `host_evidence` 附在记录和导出中，包含导入时间；这是展示时关联，不会改写历史扫描结论。不同路径、不同账号和重定向后的其他目标不会自动拼接。SQLite 表保持兼容；旧记录没有 assessment 时可重新检测。
+
+官方说明：关闭 upload_progress 只阻断部分 session 路径，完整修复仍需包含两个漏洞完整补丁的 PHP 版本或已核实回补包。
+
+- https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w
+- https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp
+- https://github.com/NCSC-NL/php2shell
 
 ## 团队部署
 
@@ -109,12 +149,12 @@ docker run -d --name php-selfcheck --restart unless-stopped \
 
 ## 规则与使用边界
 
-**本次是语言迁移，不是公告真实性核实或漏洞利用验证。** 以下 CVE、公告链接、2026-10-23 日期以及 8.2.35 / 8.3.36 / 8.4.27 / 8.5.12 基线沿用附件原版，迁移时未独立重新核实。上线判定前需由维护者核实官方公告与厂商补丁适用范围。JSON 结果新增 `rule_provenance` 明确来源。
+截至 2026-10-23，已交叉核对 PHP 官方安全通告、php-src NEWS 与 CVE 记录，确认两个 CVE 和 8.2.35 / 8.3.36 / 8.4.27 / 8.5.12 修复基线。版本声明不等于实际运行版本，EOL 不等于没有回补补丁；实际实例与厂商补丁仍须核实。JSON 中的 `rule_provenance` 记录规则来源。
 
-- 原版来源：https://www.php.net/archive/2026.php#2026-10-21-5
-- 原版 CVE：CVE-2026-109618、CVE-2026-109619
+- PHP 公告：https://www.php.net/archive/2026.php#2026-10-21-5
+- CVE：CVE-2026-109618、CVE-2026-109619
 
-检测只发起指定入口的常规 GET，不执行命令、不发送漏洞利用载荷，不自动发现目录、phpinfo、FastCGI 或额外端口。“疑似受影响”需要核实回补补丁；“达到修复基线”“版本未知”“未发现特征”和“检测受阻”均不能证明无漏洞或已修复。提交只读业务页面，URL 中不要包含令牌。主机命令执行仅用于本地运行已有 PHP 获取版本，不接受网络用户提供任意命令。
+默认检测只发起指定入口的常规 GET；可选小型 multipart 控制 POST 见下文。工具不执行命令、不发送漏洞利用载荷，不自动发现目录、phpinfo、FastCGI 或额外端口。“疑似受影响”需要核实回补补丁；“达到修复基线”“版本未知”“未发现特征”和“检测受阻”均不能证明无漏洞或已修复。提交只读业务页面，URL 中不要包含令牌。主机命令执行仅用于本地运行已有 PHP 获取版本与选定配置，不接受网络用户提供任意命令。
 
 ## 开发验证
 

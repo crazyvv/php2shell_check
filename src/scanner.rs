@@ -170,6 +170,9 @@ pub struct Reply {
     pub truncated: bool,
 }
 async fn request_pinned(u: &Url, ip: IpAddr) -> Result<Reply> {
+    request_method(u, ip, false).await
+}
+async fn request_method(u: &Url, ip: IpAddr, multipart: bool) -> Result<Reply> {
     let host = u.host_str().unwrap();
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -181,8 +184,13 @@ async fn request_pinned(u: &Url, ip: IpAddr) -> Result<Reply> {
             SocketAddr::new(ip, u.port_or_known_default().unwrap()),
         )
         .build()?;
-    let mut response = client
-        .get(u.clone())
+    let request = if multipart {
+        client.post(u.clone()).header("Content-Type","multipart/form-data; boundary=PHPSELFCheckControl")
+            .body("--PHPSELFCheckControl\r\nContent-Disposition: form-data; name=\"selfcheck_control\"\r\n\r\n1\r\n--PHPSELFCheckControl--\r\n")
+    } else {
+        client.get(u.clone())
+    };
+    let mut response = request
         .header("User-Agent", "Company-PHP-SelfCheck/0.2")
         .header("Accept", "text/html,application/json")
         .header("Accept-Encoding", "identity")
@@ -242,7 +250,7 @@ pub fn version_risk(v: &str) -> (&'static str, &'static str) {
         if p[2] < fix {
             return (
                 "疑似受影响",
-                "披露版本低于原版修复基线；需排除发行版回补补丁",
+                "披露版本低于官方修复基线；需排除发行版回补补丁",
             );
         }
         return (
@@ -253,7 +261,7 @@ pub fn version_risk(v: &str) -> (&'static str, &'static str) {
     if p.as_slice() >= [5, 4, 0].as_slice() && p.as_slice() < [8, 2, 0].as_slice() {
         return (
             "疑似受影响",
-            "旧版 PHP；需核验厂商回补补丁或升级至受支持版本",
+            "已停止上游维护的 PHP；补丁状态未知，需核验厂商或源码回补",
         );
     }
     ("无法判断", "规则未覆盖此版本，不推断安全状态")
@@ -302,22 +310,68 @@ pub fn inspect(headers: &[(String, String)], body: &[u8]) -> Value {
     } else {
         ("未发现 PHP 特征", "不代表未使用 PHP，也不代表无漏洞")
     };
-    json!({"verdict":verdict,"reason":reason,"versions":versions,"evidence":evidence,"cves":["CVE-2026-109618","CVE-2026-109619"],"rule_date":RULE_DATE,"source":SOURCE,"rule_provenance":"原 Python v0.1 规则，迁移时未重新核实公告","exploitation_verified":false})
+    let assessment = crate::assessment::remote(headers, body, &versions);
+    json!({"assessment":assessment,"verdict":verdict,"reason":reason,"versions":versions,"evidence":evidence,"cves":["CVE-2026-109618","CVE-2026-109619"],"rule_date":RULE_DATE,"source":SOURCE,"rule_provenance":"2026-10-23 已核对 PHP 官方 GHSA 与 php-src NEWS","exploitation_verified":false})
 }
 pub async fn scan(target: &str, cfg: &Config) -> Value {
-    scan_using(target, |u: Url| async move {
+    let mut result = scan_using(target, |u: Url| async move {
         let ips = resolve(&u, cfg).await?;
         Ok((request_pinned(&u, ips[0]).await?, ips[0]))
     })
-    .await
+    .await;
+    if cfg.probe_multipart
+        && result["http_status"]
+            .as_u64()
+            .is_some_and(|s| (200..300).contains(&s))
+        && result["verdict"] != "无法完成检测"
+    {
+        let probe: Result<(Reply, IpAddr, Url)> = async {
+            let u = normalize(
+                result["final_url"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("缺少目标"))?,
+            )?;
+            let ips = resolve(&u, cfg).await?;
+            Ok((request_method(&u, ips[0], true).await?, ips[0], u))
+        }
+        .await;
+        result["assessment"]["multipart"] = match probe {
+            Ok((reply, ip, u)) => {
+                let status = if (200..300).contains(&reply.status) {
+                    "responded"
+                } else if matches!(reply.status, 405 | 415) {
+                    "rejected"
+                } else {
+                    "unknown"
+                };
+                let mut observation = crate::assessment::observation(
+                    status,
+                    "minimal_multipart_control",
+                    "low",
+                    "一次小型普通表单 POST；响应不证明 PHP 解析、upload_progress 开启或漏洞存在；不跟随 POST 跳转",
+                );
+                observation["http_status"] = json!(reply.status);
+                observation["connected_ip"] = json!(ip.to_string());
+                observation["url"] = json!(u.as_str());
+                observation["checked_at"] = json!(chrono::Utc::now().to_rfc3339());
+                observation
+            }
+            Err(_) => crate::assessment::observation(
+                "unknown",
+                "minimal_multipart_control",
+                "none",
+                "范围、TLS、DNS 或传输失败，不能据此认定不支持 multipart",
+            ),
+        };
+    }
+    result
 }
 async fn scan_using<F, Fut>(target: &str, mut fetch: F) -> Value
 where
     F: FnMut(Url) -> Fut,
     Fut: std::future::Future<Output = Result<(Reply, IpAddr)>>,
 {
-    let mut result =
-        json!({"target":target,"checked_at":chrono::Utc::now().to_rfc3339(),"hops":[]});
+    let mut result = json!({"target":target,"checked_at":chrono::Utc::now().to_rfc3339(),"hops":[],"assessment":crate::assessment::remote(&[],&[],&[])});
     let outcome: Result<()> = async {
         let mut u = normalize(target)?;
         for hop in 0..4 {
@@ -371,6 +425,7 @@ mod tests {
         let cfg = Config {
             public_origin: "http://localhost".into(),
             allow_anonymous: false,
+            probe_multipart: false,
             allow_without_whitelist: false,
             allowed_networks: vec!["10.0.0.0/8".into()],
             allowed_domains: vec![],
@@ -455,6 +510,46 @@ mod tests {
             .await
             .is_err()
         );
+        server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn multipart_control_is_small_and_does_not_follow_redirect() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut data = vec![];
+            loop {
+                let mut buf = [0; 4096];
+                let n = stream.read(&mut buf).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                data.extend_from_slice(&buf[..n]);
+                if data.ends_with(b"--PHPSELFCheckControl--\r\n") {
+                    break;
+                }
+            }
+            let text = String::from_utf8(data).unwrap();
+            assert!(text.starts_with("POST /check "));
+            assert!(text.len() < 1024);
+            assert!(text.contains("selfcheck_control"));
+            assert!(!text.contains("PHP_SESSION_UPLOAD_PROGRESS"));
+            assert!(!text.contains("filename="));
+            stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+        });
+        let reply = request_method(
+            &Url::parse(&format!("http://control.invalid:{port}/check")).unwrap(),
+            "127.0.0.1".parse().unwrap(),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply.status, 302);
         server.await.unwrap();
     }
     #[tokio::test]

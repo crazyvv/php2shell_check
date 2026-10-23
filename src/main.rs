@@ -63,6 +63,7 @@ async fn main() -> Result<()> {
             let cfg = Config {
                 public_origin: "http://127.0.0.1:8080".into(),
                 allow_anonymous,
+                probe_multipart: false,
                 allow_without_whitelist,
                 allowed_networks: vec![],
                 allowed_domains: vec![],

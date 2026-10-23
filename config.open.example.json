@@ -6,5 +6,6 @@
   "allowed_domains": [],
   "allowed_ports": [],
   "database": "data/selfcheck.sqlite3",
-  "users": {}
+  "users": {},
+  "probe_multipart": false
 }
