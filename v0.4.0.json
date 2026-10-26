@@ -1,0 +1,32 @@
+{
+  "state": "published",
+  "tag": "v0.4.0",
+  "repository": "crazyvv/php2shell_check",
+  "source_commit": "afe3d80270712da7f6731a5f609e5b9f2536a48e",
+  "release_url": "https://github.com/crazyvv/php2shell_check/releases/tag/v0.4.0",
+  "published_at": "2026-10-26T07:20:04Z",
+  "checksums": {
+    "php-selfcheck-v0.4.0-linux-x86_64.tar.gz": "a82f684a3b1eb37ba482b393b62f38f981b2a2a400393e54d78a0042759ad86a",
+    "php-selfcheck-v0.4.0-windows-x86_64.zip": "a3d2c9e437c3d873fc6932d6ade62a5d9418d6234ce62bce1336ce53b0ad6ffd"
+  },
+  "verified_by_download": true,
+  "workflow_run": "https://github.com/crazyvv/php2shell_check/actions/runs/40284587356",
+  "browser_check": {
+    "state": "passed",
+    "checks": [
+      "evidence-fonts-colors",
+      "text-only-rendering",
+      "rule-edit-validation-save",
+      "live-activation",
+      "conflict-preserves-draft",
+      "logout-cleanup"
+    ],
+    "evidence_style": {
+      "family": "ui-monospace, \"Cascadia Code\", Consolas, monospace",
+      "weight": "700",
+      "color": "rgb(143, 28, 23)",
+      "background": "rgb(249, 220, 213)"
+    }
+  },
+  "recorded_at": "2026-10-26T07:20:05.003358+00:00"
+}
