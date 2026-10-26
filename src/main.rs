@@ -207,8 +207,11 @@ async fn main() -> Result<()> {
         } => {
             let loaded: Result<config::Config> = (|| {
                 let mut cfg = config::load(&path)?;
-                fingerprint_override(&mut cfg, fingerprints)?;
+                fingerprint_override(&mut cfg, fingerprints.clone())?;
                 cfg.validate(&path, "127.0.0.1".parse()?)?;
+                if let Some(file) = fingerprints {
+                    cfg.fingerprint_library = Some(fingerprints::Library::load(&file)?);
+                }
                 cfg.headers_only |= headers_only;
                 Ok(cfg)
             })();

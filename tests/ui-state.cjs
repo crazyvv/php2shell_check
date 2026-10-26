@@ -45,6 +45,7 @@ test('administrator filters, filtered exports and deletion confirmation',async()
   const context=vm.createContext({document,console,confirm:message=>{confirmation=message;return confirmed;},fetch:async(path,options)=>{
     calls.push({path,options});let data;
     if(path==='/api/admin/me')data={user:'admin'};
+    else if(path==='/api/admin/fingerprints')data={revision:0,origin:'builtin',document:JSON.stringify({schema:'php-selfcheck-fingerprints/v1',version:'test',mode:'replace',rules:[]}),builtin_document:JSON.stringify({rules:[]}),metadata:{version:'test',rule_count:0}};
     else if(path.endsWith('/delete')){deleted=true;data={ok:true};}
     else if(path.startsWith('/api/admin/jobs?'))data={jobs:deleted?[]:[{id:'mixed',owner:'visitor:test',created:1,state:'done',total_results:3,results:[{target:'risk.example',verdict:'疑似受影响'}]}],total:deleted?0:1,summary:{jobs:deleted?0:1,reports:1,states:{done:1},verdicts:{'疑似受影响':1}}};
     else throw Error(path);
@@ -93,4 +94,44 @@ test('fingerprint rendering shows evidence as plain text and handles older recor
   assert(content.includes('<script>unsafe</script>'));assert(content.includes('仅外部资源引用'));assert(content.includes('https://other.example'));assert(content.includes('company-1'));
   assert(!flatten(view).some(n=>n.innerHTML));
   assert.equal(vm.runInContext('fingerprintsView(undefined).children.length',app.context),0);
+});
+
+test('administrator rule drafts validate, save, preserve conflicts and clear on logout',async()=>{
+  const elements=new Map(),calls=[];let revision=0;
+  const definition={schema:'php-selfcheck-fingerprints/v1',version:'test-1',mode:'replace',rules:[{id:'example',name:'Example',category:'framework',any:[{source:'header',header:'x-app',pattern:'yes'}]}]};
+  let stored=JSON.stringify(definition);const builtin=stored;
+  const get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  get('sortOrder').value='newest';
+  const data=()=>({revision,origin:revision?'database':'builtin',document:stored,builtin_document:builtin,metadata:{version:JSON.parse(stored).version,rule_count:1}});
+  const document={getElementById:get,createElement:()=>new Element()};
+  const context=vm.createContext({document,console,confirm:()=>true,fetch:async(path,options)=>{
+    calls.push({path,body:options?.body?JSON.parse(options.body):null});let result,status=200;
+    if(path==='/api/admin/me')result={user:'admin'};
+    else if(path.startsWith('/api/admin/jobs?'))result={jobs:[],total:0,summary:{jobs:0,reports:0,states:{},verdicts:{}}};
+    else if(path==='/api/admin/fingerprints')result=data();
+    else if(path.endsWith('/validate'))result={valid:true,metadata:{rule_count:1}};
+    else if(path.endsWith('/save')){const body=JSON.parse(options.body);if(body.revision!==revision){status=409;result={error:'其他管理员已更新，请合并草稿'};}else{stored=body.document;revision++;result=data();}}
+    else if(path==='/api/admin/logout')result={ok:true};else throw Error(path);
+    return {ok:status===200,status,json:async()=>result};
+  }});
+  vm.runInContext(fs.readFileSync('assets/shared.js','utf8'),context);vm.runInContext(fs.readFileSync('assets/admin.js','utf8'),context);await flush();
+  assert.equal(JSON.parse(get('ruleObject').value).id,'example');
+  const edited=JSON.parse(get('ruleObject').value);edited.name='Changed';get('ruleObject').value=JSON.stringify(edited);get('ruleObject').oninput();
+  await get('rulesSave').onclick();assert(!calls.some(c=>c.path.endsWith('/save')));assert(get('rulesNotice').textContent.includes('先应用'));
+  get('ruleApply').onclick();await get('rulesValidate').onclick();assert.equal(revision,0);assert(get('rulesNotice').textContent.includes('尚未保存'));
+  await get('rulesSave').onclick();assert.equal(revision,1);assert.equal(JSON.parse(stored).rules[0].name,'Changed');
+  get('ruleToggle').onclick();assert.deepEqual(JSON.parse(get('rulesDocument').value).disabled_rules,['example']);await get('rulesSave').onclick();assert.equal(revision,2);
+  revision++;const draft=JSON.parse(get('rulesDocument').value);draft.version='unsaved';get('rulesDocument').value=JSON.stringify(draft);await get('rulesSave').onclick();
+  assert(get('rulesNotice').textContent.includes('合并'));assert.equal(JSON.parse(get('rulesDocument').value).version,'unsaved');
+  await get('logout').onclick();assert.equal(get('rulesDocument').value,'');assert.equal(get('ruleObject').value,'');assert.equal(get('dashboard').hidden,true);
+});
+
+test('important evidence has semantic emphasis without HTML injection or safe-status claims',async()=>{
+  const app=setup();await flush();app.context.fixture={verdict:'疑似受影响',reason:'回补状态未知',versions:['8.4.26'],evidence:[{kind:'response_header',detail:'X-Powered-By: PHP/8.4.26 <img onerror=unsafe>'}]};
+  const element=vm.runInContext('evidenceSummary(fixture)',app.context);
+  const flat=e=>[e,...(e.children||[]).flatMap(flat)];const nodes=flat(element);
+  assert(element.className.includes('risk'));assert(nodes.some(n=>n.className?.includes('evidence-value') && n.textContent==='PHP 8.4.26'));
+  assert(nodes.some(n=>n.className?.includes('evidence-mark risk') && n.textContent==='8.4.26'));
+  assert(nodes.some(n=>n.textContent.includes('<img onerror=unsafe>')));assert(!nodes.some(n=>n.innerHTML));
+  const step=vm.runInContext('nextStep(fixture)',app.context);assert(flat(step).some(n=>n.textContent==='下一步'));assert(!flat(step).some(n=>n.textContent.includes('漏洞已确认')));
 });

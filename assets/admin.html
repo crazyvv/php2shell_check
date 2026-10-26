@@ -1,10 +1,19 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>管理员 · PHP 安全自查台</title><link rel="stylesheet" href="/admin.css"><script src="/admin-shared.js" defer></script><script src="/admin.js" defer></script></head>
-<body><header><div class="brand"><span class="mark">P</span><div>PHP 安全自查台<small>管理员 · 历史与汇总</small></div></div><a href="/">返回扫描页</a></header>
+<body><header><div class="brand"><span class="mark">P</span><div>PHP 安全自查台<small>管理员 · 扫描汇总与特征维护</small></div></div><a href="/">返回扫描页</a></header>
 <main><div id="notice" role="status" aria-live="polite"></div>
-<section class="card" id="loginPanel"><h1>管理员登录</h1><p>输入独立管理员账号和密码后查看全站历史扫描。普通扫描页无需管理员密码。</p>
+<section class="card" id="loginPanel"><h1>管理员登录</h1><p>输入独立管理员账号和密码后查看全站历史扫描并维护特征库。普通扫描页无需管理员密码。</p>
 <form id="loginForm"><div class="importrow"><div><label for="adminUser">管理员账号</label><input id="adminUser" value="admin" autocomplete="username" maxlength="64" required></div><div><label for="adminPassword">密码</label><input id="adminPassword" type="password" autocomplete="current-password" maxlength="4096" required></div><button id="loginButton" class="primary" type="submit">登录</button></div></form>
 <p class="hint">已有配置首次启用后台时，在服务器运行 <code>php-selfcheck add-admin --user admin</code>，保存随机密码并重启服务。</p></section>
 <div id="dashboard" hidden><section class="card"><div class="sectionhead"><h1>全站扫描汇总</h1><div><span id="adminAccount"></span> <button id="logout" class="secondary">退出登录</button></div></div><div id="summary"></div></section>
+<section class="card" id="fingerprintPanel"><div class="sectionhead"><h2>网站特征库维护</h2><button id="rulesReload" class="secondary">重新加载当前规则</button></div>
+<p class="hint">可逐条编辑或修改完整 JSON。先应用到草稿，再校验和保存；保存后立即用于新提交的扫描，已提交任务和历史保留原规则。多个管理员同时修改时会提示版本冲突。后台保存的规则持久化在数据库中，并优先于启动文件。</p>
+<p id="rulesMeta" class="fine"></p><label for="rulesVersion">草稿特征库版本（保存后显示在新扫描结果中）</label><input id="rulesVersion" maxlength="100" placeholder="company-2026-10-26-1"><div id="rulesNotice" role="status" aria-live="polite"></div>
+<div class="importrow"><div><label for="ruleSearch">筛选规则</label><input id="ruleSearch" placeholder="ID 或名称"></div><div><label for="ruleSelect">选择规则（含禁用项）</label><select id="ruleSelect"></select></div><button id="ruleNew" class="secondary">新增规则</button></div>
+<label for="ruleObject">单条规则 JSON</label><textarea id="ruleObject" rows="9" spellcheck="false" aria-label="单条规则 JSON"></textarea>
+<div class="rule-actions"><button id="ruleApply" class="secondary">应用单条修改到草稿</button><button id="ruleToggle" class="secondary">启用 / 禁用</button><button id="ruleRemove" class="secondary">删除自定义项</button></div>
+<details><summary>完整 JSON / 粘贴导入</summary><label for="rulesDocument">完整特征库 JSON</label><textarea id="rulesDocument" rows="18" spellcheck="false"></textarea><button id="rulesFormat" class="secondary">格式化并刷新规则列表</button></details>
+<div class="rule-actions"><button id="rulesValidate" class="secondary">校验草稿</button><button id="rulesSave" class="save-rules">保存并立即启用</button><button id="rulesBuiltin" class="secondary">将内置库加载为草稿</button></div>
+<p class="fine">特征仅为线索，不会直接认定漏洞或修复。删除扩展库中的覆盖项会恢复同 ID 内置项，可用“禁用”关闭该规则。恢复内置库也需保存才生效。</p></section>
 <section class="card"><h2>历史扫描记录</h2><form id="searchForm"><div class="importrow"><div><label for="search">目标 URL / 访问者标识 / 任务 ID</label><input id="search" maxlength="200" placeholder="输入关键字"></div><div><label for="verdictFilter">只看某个检测结论</label><select id="verdictFilter"><option value="">全部检测结论</option></select></div><div><label for="sortOrder">排序方式</label><select id="sortOrder"><option value="newest">最新扫描优先</option><option value="oldest">最早扫描优先</option><option value="risk_desc">按结果：优先复核高风险</option><option value="risk_asc">按结果：反向排序</option></select></div><button type="submit" class="secondary">搜索</button><button id="adminRefresh" type="button" class="secondary">刷新</button></div></form>
 <p class="fine">结果筛选只显示命中的目标，导出沿用筛选；删除会删除整次扫描。排队或执行中的扫描需完成后再删除。<br>免密码访问以浏览器会话标识区分，不代表实名；同一浏览器配置内的使用者共用会话。</p><div id="jobs"></div><div class="sectionhead"><button id="previous" class="secondary">上一页</button><span id="pageInfo"></span><button id="next" class="secondary">下一页</button></div></section></div></main></body></html>

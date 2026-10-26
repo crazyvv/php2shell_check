@@ -21,6 +21,9 @@ def command(*args, check=True):
 
 def main(tag, directory):
     packaging.validate_tag(tag)
+    browser_report = ROOT / "release-diagnostics/browser-result.json"
+    if not browser_report.is_file() or json.loads(browser_report.read_text(encoding="utf-8")).get("state") != "passed":
+        raise RuntimeError("A successful real-browser verification report is required before publication")
     repository = os.environ["GITHUB_REPOSITORY"]
     expected = {f"php-selfcheck-{tag}-linux-x86_64.tar.gz",
                 f"php-selfcheck-{tag}-windows-x86_64.zip"}
@@ -44,7 +47,7 @@ def main(tag, directory):
 
 包含独立扫描页面、管理员历史/筛选/删除、SQLite 持久化、轻量响应头模式、CI 检查命令，以及可选 PHP 命令、中间件、进程端口和厂商补丁参考核验。
 
-本版增加可配置的被动网站特征库：51 条内置规则，支持 CMS/框架、静态生成器、托管平台、中间件、CDN/WAF 与挑战页识别；JSON 扩展/覆盖/禁用、命中证据和规则版本追踪。规则不增加请求，CMS 版本不作为 PHP 版本，外部资源及托管平台线索不作为当前站点已修复证明。使用 `fingerprints export` / `fingerprints validate` 管理特征库，参见 README 和 fingerprints.example.json。
+支持可配置的被动网站特征库：51 条内置规则，支持 CMS/框架、静态生成器、托管平台、中间件、CDN/WAF 与挑战页识别；JSON 扩展/覆盖/禁用、命中证据和规则版本追踪。规则不增加请求，CMS 版本不作为 PHP 版本，外部资源及托管平台线索不作为当前站点已修复证明。本版增加管理员后台逐条编辑、新增、禁用/启用、删除、完整 JSON 校验及保存，持久化到 SQLite 并立即用于新提交的扫描；包含修订冲突保护和审计。关键证据采用等宽粗体与风险色强调，单列下一步。也可使用 `fingerprints export` / `fingerprints validate`，参见 README 和 fingerprints.example.json。
 
 Windows 支持 Web 服务及 URL 检查；`collect` 主机采集目前仅支持 Linux。Linux 的 HTTPS 检测仍需系统 CA 证书。Windows 如提示缺少运行库，请安装微软官方 Visual C++ 2015–2022 Redistributable x64。
 

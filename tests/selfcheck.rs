@@ -1135,3 +1135,279 @@ async fn admin_result_filters_sort_and_confirmed_deletion() {
         1
     );
 }
+
+#[tokio::test]
+async fn administrator_fingerprint_editor_authorization_validation_conflicts_and_restart() {
+    let p = Portal::with_options(true).await;
+    let anonymous = reqwest::Client::builder().no_proxy().build().unwrap();
+    assert_eq!(
+        anonymous
+            .get(format!("{}/api/admin/fingerprints", p.base))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert_eq!(
+        admin_post(
+            &anonymous,
+            &p,
+            "/api/admin/fingerprints/save",
+            json!({"document":"{}","revision":0})
+        )
+        .await
+        .status(),
+        401
+    );
+    let login = admin_post(
+        &anonymous,
+        &p,
+        "/api/admin/login",
+        json!({"user":"admin","password":"a"}),
+    )
+    .await;
+    assert_eq!(login.status(), 200);
+    let admin = cookie_client(login.headers()["set-cookie"].to_str().unwrap());
+    let initial = admin
+        .get(format!("{}/api/admin/fingerprints", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(initial["revision"], 0);
+    assert_eq!(initial["metadata"]["rule_count"], 51);
+    let valid=json!({"schema":"php-selfcheck-fingerprints/v1","version":"admin-1","mode":"replace","rules":[{"id":"owned","name":"Our app","category":"framework","runtime":"php","any":[{"source":"header","header":"x-owned-app","pattern":"^yes$"}]}]}).to_string();
+    let origin = admin
+        .post(format!("{}/api/admin/fingerprints/save", p.base))
+        .header("x-requested-with", "PHP-SelfCheck")
+        .json(&json!({"document":valid,"revision":0}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(origin.status(), 403);
+    let validated = admin_post(
+        &admin,
+        &p,
+        "/api/admin/fingerprints/validate",
+        json!({"document":valid}),
+    )
+    .await;
+    assert_eq!(validated.status(), 200);
+    let unchanged = admin
+        .get(format!("{}/api/admin/fingerprints", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(unchanged["revision"], 0);
+    let bad=json!({"schema":"php-selfcheck-fingerprints/v1","version":"bad","mode":"replace","rules":[{"id":"bad","name":"bad","category":"cms","any":[{"source":"body","pattern":"("}]}]}).to_string();
+    assert_eq!(
+        admin_post(
+            &admin,
+            &p,
+            "/api/admin/fingerprints/save",
+            json!({"document":bad,"revision":0})
+        )
+        .await
+        .status(),
+        400
+    );
+    assert_eq!(
+        admin_post(
+            &admin,
+            &p,
+            "/api/admin/fingerprints/save",
+            json!({"document":valid})
+        )
+        .await
+        .status(),
+        400
+    );
+    let padded = format!("{}{}", " ".repeat(270000), valid);
+    assert_eq!(
+        admin_post(
+            &admin,
+            &p,
+            "/api/admin/fingerprints/validate",
+            json!({"document":padded})
+        )
+        .await
+        .status(),
+        200
+    );
+    assert_eq!(
+        admin_post(
+            &admin,
+            &p,
+            "/api/admin/fingerprints/validate",
+            json!({"document":" ".repeat(524289)})
+        )
+        .await
+        .status(),
+        400
+    );
+    let old_library = p
+        .state
+        .config
+        .fingerprint_library
+        .clone()
+        .unwrap_or_else(php_selfcheck::fingerprints::builtin);
+    let saved = admin_post(
+        &admin,
+        &p,
+        "/api/admin/fingerprints/save",
+        json!({"document":valid,"revision":0}),
+    )
+    .await;
+    assert_eq!(saved.status(), 200);
+    let saved = saved.json::<Value>().await.unwrap();
+    assert_eq!(saved["revision"], 1);
+    assert_eq!(saved["origin"], "database");
+    assert_eq!(saved["metadata"]["version"], "admin-1");
+    assert_eq!(old_library.metadata()["version"], "2026-10-26.1");
+    let me = anonymous
+        .get(format!("{}/api/me", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(me["fingerprint_library"]["version"], "admin-1");
+    assert!(me.get("document").is_none());
+    assert_eq!(
+        admin_post(
+            &admin,
+            &p,
+            "/api/admin/fingerprints/save",
+            json!({"document":php_selfcheck::fingerprints::BUILTIN,"revision":0})
+        )
+        .await
+        .status(),
+        409
+    );
+    let cfg_path = p._dir.path().join("config.json");
+    let mut cfg = p.state.config.clone();
+    cfg.fingerprint_file = Some("deleted-startup-rules.json".into());
+    config::write_config(&cfg_path, &cfg, true).unwrap();
+    let mut loaded = config::load(&cfg_path).unwrap();
+    loaded
+        .validate(&cfg_path, "127.0.0.1".parse().unwrap())
+        .unwrap();
+    assert_eq!(
+        loaded.fingerprint_library.as_ref().unwrap().metadata()["version"],
+        "admin-1"
+    );
+    let restarted = portal::State::new(loaded).unwrap();
+    let saved_doc =
+        php_selfcheck::rulebook::saved_document(std::path::Path::new(&restarted.config.database))
+            .unwrap()
+            .unwrap();
+    assert_eq!(saved_doc.0, 1);
+    assert_eq!(
+        serde_json::from_str::<Value>(&saved_doc.1).unwrap()["version"],
+        "admin-1"
+    );
+    let submitted = admin_post(
+        &anonymous,
+        &p,
+        "/api/scan",
+        json!({"targets":["http://127.0.0.1/"],"headers_only":true}),
+    )
+    .await;
+    assert_eq!(submitted.status(), 202);
+    // The job belongs to the fresh visitor Cookie returned with submission.
+    let visitor = cookie_client(submitted.headers()["set-cookie"].to_str().unwrap());
+    let id = submitted.json::<Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut record = Value::Null;
+    for _ in 0..30 {
+        record = visitor
+            .get(format!("{}/api/jobs/{id}", p.base))
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        if record["state"] == "done" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        record["results"][0]["fingerprints"]["library"]["version"],
+        "admin-1"
+    );
+    let db = rusqlite::Connection::open(&p.state.config.database).unwrap();
+    let count: i64 = db
+        .query_row(
+            "SELECT count(*) FROM audit WHERE action='fingerprints_save'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+    let mut disabled: Value = serde_json::from_str(php_selfcheck::fingerprints::BUILTIN).unwrap();
+    disabled["disabled_rules"] = json!(["wordpress"]);
+    let off = admin_post(
+        &admin,
+        &p,
+        "/api/admin/fingerprints/save",
+        json!({"document":disabled.to_string(),"revision":1}),
+    )
+    .await;
+    assert_eq!(off.status(), 200);
+    assert_eq!(
+        off.json::<Value>().await.unwrap()["metadata"]["rule_count"],
+        50
+    );
+    db.execute_batch("CREATE TRIGGER prevent_rule_audit BEFORE INSERT ON audit WHEN new.action='fingerprints_save' BEGIN SELECT RAISE(ABORT,'test audit failure'); END;").unwrap();
+    assert_eq!(
+        admin_post(
+            &admin,
+            &p,
+            "/api/admin/fingerprints/save",
+            json!({"document":valid,"revision":2})
+        )
+        .await
+        .status(),
+        500
+    );
+    let untouched = admin
+        .get(format!("{}/api/admin/fingerprints", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(untouched["revision"], 2);
+    assert_eq!(untouched["metadata"]["rule_count"], 50);
+    db.execute_batch("DROP TRIGGER prevent_rule_audit;")
+        .unwrap();
+    let (one, two) = tokio::join!(
+        admin_post(
+            &admin,
+            &p,
+            "/api/admin/fingerprints/save",
+            json!({"document":valid,"revision":2})
+        ),
+        admin_post(
+            &admin,
+            &p,
+            "/api/admin/fingerprints/save",
+            json!({"document":valid,"revision":2})
+        )
+    );
+    let mut codes = [one.status().as_u16(), two.status().as_u16()];
+    codes.sort();
+    assert_eq!(codes, [200, 409]);
+}

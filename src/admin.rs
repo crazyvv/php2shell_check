@@ -79,6 +79,9 @@ pub async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response>
         return Ok(error(401, "请先登录管理员页面"));
     };
     let actor = format!("admin:{user}");
+    if path == "/api/admin/fingerprints" || path.starts_with("/api/admin/fingerprints/") {
+        return crate::rulebook::dispatch(state, req, &actor).await;
+    }
     if method == axum::http::Method::POST && path == "/api/admin/logout" {
         let headers = req.headers().clone();
         if let Err((status, message)) = portal::read_body(&state.config, req).await {

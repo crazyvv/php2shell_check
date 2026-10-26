@@ -112,6 +112,7 @@ struct CompiledRule {
 }
 #[derive(Debug)]
 pub struct Library {
+    document: String,
     rules: Vec<CompiledRule>,
     metadata: Value,
 }
@@ -163,24 +164,8 @@ impl Library {
             version = file.version;
             mode = file.mode;
             if mode == Mode::Replace {
-                ensure!(
-                    file.disabled_rules.is_empty(),
-                    "replace 模式不接受 disabled_rules"
-                );
                 effective = file.rules;
             } else {
-                let ids: BTreeSet<_> = effective
-                    .iter()
-                    .map(|r| r.id.clone())
-                    .chain(file.rules.iter().map(|r| r.id.clone()))
-                    .collect();
-                let mut disabled = BTreeSet::new();
-                for id in &file.disabled_rules {
-                    ensure!(
-                        ids.contains(id) && disabled.insert(id),
-                        "禁用的规则 ID 不存在或重复: {id}"
-                    );
-                }
                 for rule in file.rules {
                     if let Some(at) = effective.iter().position(|r| r.id == rule.id) {
                         effective[at] = rule;
@@ -188,8 +173,16 @@ impl Library {
                         effective.push(rule);
                     }
                 }
-                effective.retain(|r| !disabled.contains(&r.id));
             }
+            let ids: BTreeSet<_> = effective.iter().map(|r| r.id.clone()).collect();
+            let mut disabled = BTreeSet::new();
+            for id in &file.disabled_rules {
+                ensure!(
+                    ids.contains(id) && disabled.insert(id),
+                    "禁用的规则 ID 不存在或重复: {id}"
+                );
+            }
+            effective.retain(|r| !disabled.contains(&r.id));
         }
         ensure!(effective.len() <= MAX_RULES, "有效特征规则不能超过 256 条");
         let digest = hex::encode(Sha256::digest(serde_json::to_vec(&effective)?));
@@ -274,7 +267,14 @@ impl Library {
             rules.push(CompiledRule { rule, all, any });
         }
         let metadata = json!({"schema":SCHEMA,"version":version,"builtin_version":builtin_version,"source":if custom.is_none(){"builtin"}else if mode==Mode::Extend{"custom_extend"}else{"custom_replace"},"sha256":digest,"rule_count":rules.len()});
-        Ok(Self { rules, metadata })
+        Ok(Self {
+            document: custom.unwrap_or(BUILTIN).to_owned(),
+            rules,
+            metadata,
+        })
+    }
+    pub fn document(&self) -> &str {
+        &self.document
     }
     pub fn metadata(&self) -> &Value {
         &self.metadata

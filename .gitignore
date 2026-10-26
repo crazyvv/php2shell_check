@@ -7,3 +7,6 @@
 /dist/
 /release-status.json
 __pycache__/
+
+/artifacts/
+/release-diagnostics/

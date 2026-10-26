@@ -28,6 +28,9 @@ def main(tag):
                   "publish_result": os.environ.get("PUBLISH_RESULT", "unknown"),
                   "source_commit": git("rev-parse", "HEAD").stdout.strip(),
                   "workflow_run": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"}
+    report = ROOT / "release-diagnostics/browser-result.json"
+    if report.is_file():
+        status["browser_check"] = json.loads(report.read_text(encoding="utf-8"))
     status["recorded_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     fetch = git("fetch", "origin", "refs/heads/release-manifests", check=False)
     with tempfile.TemporaryDirectory() as temp:

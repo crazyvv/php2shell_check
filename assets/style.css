@@ -2,3 +2,17 @@
 
 select{width:100%;padding:10px;border:1px solid #d5dce1;border-radius:8px;background:#fff;color:#172832;font:inherit}
 input[type="checkbox"]{width:auto;margin-right:6px;accent-color:#13736a}
+
+/* Evidence hierarchy: observed facts stand out; risk colors never imply confirmed exploitation. */
+.evidence-summary{padding:12px 14px;margin:0 0 12px;border:1px solid #c9dbeb;border-left:4px solid #316d9a;border-radius:8px;background:#f2f7fc;overflow-wrap:anywhere}
+.evidence-summary.risk{border-color:#e8beb6;border-left-color:#b32f26;background:#fff3ef}.evidence-summary.warning{border-color:#dfce9c;border-left-color:#9b6900;background:#fff8e6}
+.evidence-heading{display:block;font-size:14px;font-weight:800;color:#164f80}.risk>.evidence-heading{color:#9c241c}.warning>.evidence-heading{color:#795000}
+.evidence-value,.technology-version{display:inline-block;margin:3px 5px 3px 0;padding:2px 7px;border-radius:4px;font:700 13px/1.7 ui-monospace,"Cascadia Code",Consolas,monospace;background:#e2edf9;color:#164f80;overflow-wrap:anywhere}
+.evidence-value.risk{color:#8f1c17;background:#f9dcd5}.evidence-value.warning{color:#735000;background:#f9e9b8}
+.direct-evidence{font:12px/1.7 ui-monospace,"Cascadia Code",Consolas,monospace}.direct-evidence>strong{font-family:system-ui,"Microsoft YaHei",sans-serif}
+.evidence-mark{font-weight:850;border-radius:3px;padding:1px 3px;color:#164f80;background:#d8e9fb}.evidence-mark.risk{color:#8f1c17;background:#f9d2c8}.evidence-mark.warning{color:#735000;background:#f7e4a9}
+.assessment-fact{font-size:12px;color:#52686b;padding:4px 0}.assessment-fact.risk{color:#8f1c17;border-left:3px solid #bd483b;background:#fff4f1;padding:7px 9px}.assessment-fact.warning{color:#735000;background:#fff8e6;padding:7px 9px}.fact-status{font-weight:750}.review-priority{font-weight:750;color:#8f1c17}
+.technology-heading{margin-top:14px}.technology-name{font-size:14px;color:#174e78;font-weight:800}.technology-proof{padding:7px 9px;border-left:3px solid #4c82a8;background:#f1f6fb;color:#204f70;overflow-wrap:anywhere}.proof-location{font:700 12px ui-monospace,Consolas,monospace;background:#deebf7;padding:2px 5px;border-radius:3px}
+.next-step{padding:10px 12px;border-left:3px solid #9c6c11;background:#fff8e8;margin:12px 0;font-size:12px;color:#765116}.next-step>strong{font-size:13px;font-weight:800}.next-step p{margin:5px 0}
+.rule-actions{display:flex;gap:9px;flex-wrap:wrap;margin:14px 0}.save-rules{background:#087e73;border-color:#087e73;color:#fff}.save-rules:hover{background:#06675e}#ruleObject,#rulesDocument{font:13px/1.7 ui-monospace,"Cascadia Code",Consolas,monospace;tab-size:2;max-height:620px}#rulesNotice:not(:empty){padding:10px 13px;margin:12px 0;border-radius:7px}#rulesNotice.rule-error{color:#8f1c17;background:#fff0eb;border:1px solid #e8bdb0}#rulesNotice.rule-success{color:#20594f;background:#eef7f3;border:1px solid #c9e0d6}
+@media print{.evidence-summary,.technology-proof,.next-step{border-left-width:4px}.evidence-mark{font-weight:900;text-decoration:underline}}

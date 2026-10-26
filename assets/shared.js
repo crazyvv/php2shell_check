@@ -13,13 +13,35 @@ function details(label, data) { const d = node('details'); d.append(node('summar
 const statusNames = {unknown:'未知',header_claim:'响应头声明',form_hint:'页面表单线索',field_hint:'页面字段线索',responded:'收到响应，未确认 PHP 解析',rejected:'当前请求被拒绝',below_upstream_fix:'低于上游修复基线',meets_upstream_fix:'达到上游基线，待核验',eol:'停止上游维护，补丁未知',supported_branch:'上游支持分支',enabled:'开启（提交材料声明）',disabled:'关闭（提交材料声明）',fixed_claimed:'已修复（提交材料声明）',missing_claimed:'未修复（提交材料声明）'};
 const sourceNames={response_header:'HTTP 响应头',page_reference:'页面线索',not_observed:'未观测到',not_tested:'未进行主动检查',minimal_multipart_control:'小型表单请求'};
 const confidenceNames={none:'未知',low:'低可信线索',unverified:'提交材料，未独立核验'};
+function emphasizedText(text,terms,tone='info') {
+  text=typeof text==='string'?text:'';terms=Array.isArray(terms)?terms:[];
+  const wrap=node('span'),words=[...new Set(terms.filter(v=>typeof v==='string' && v.length>0 && v.length<=100))].slice(0,16);let at=0;
+  while(at<text.length){let index=-1,word='';for(const candidate of words){const found=text.indexOf(candidate,at);if(found>=0 && (index<0 || found<index || found===index && candidate.length>word.length)){index=found;word=candidate;}}if(index<0){wrap.append(node('span',text.slice(at)));break;}if(index>at)wrap.append(node('span',text.slice(at,index)));wrap.append(node('mark',word,'evidence-mark '+tone));at=index+word.length;}
+  return wrap;
+}
+function evidenceSummary(r) {
+  const versions=Array.isArray(r.versions)?r.versions.filter(v=>typeof v==='string'):[];
+  const tone=r.verdict==='疑似受影响'?'risk':r.verdict==='无法完成检测' || r.verdict==='无法判断'?'warning':'info';
+  const wrap=node('div',undefined,'evidence-summary '+tone);
+  wrap.append(node('strong',tone==='risk'?'优先复核 · 版本风险线索':tone==='warning'?'证据受限 · 需要复核':'已观测到的证据','evidence-heading'));
+  if(versions.length){const row=node('p');row.append(node('span','PHP 版本声明：'));for(const version of versions.slice(0,8))row.append(node('code','PHP '+version,'evidence-value '+tone));wrap.append(row);}
+  wrap.append(node('p',r.reason || '请结合下面的观测与主机材料复核。','evidence-reason'));
+  for(const evidence of (Array.isArray(r.evidence)?r.evidence:[]).filter(e=>e && typeof e==='object').slice(0,4)){const row=node('p',undefined,'direct-evidence');row.append(node('strong',evidence.kind==='response_header'?'响应头：':evidence.kind==='cookie_name'?'Cookie 名称：':'页面线索：'));row.append(emphasizedText(evidence.detail || '',versions,tone));wrap.append(row);}
+  return wrap;
+}
+function nextStep(r){
+  const wrap=node('div',undefined,'next-step');wrap.append(node('strong','下一步'));
+  const advice=r.verdict==='疑似受影响'?'核对实际 Web/FPM 版本、厂商回补记录并安排修复，逐个后端实例复核。':r.verdict==='无法完成检测'?'先核对访问控制、防护页或服务异常，再从允许访问的环境复测。':r.verdict==='版本达到修复基线（待核验）'?'核对实际 Web 实例与完整修补包，确认更新后的进程已重启。':'补充实际 Web/FPM 运行时和软件包材料；隐藏版本或未命中特征不能认定安全。';
+  wrap.append(node('p',advice));return wrap;
+}
 function assessmentView(a) {
   const wrap=node('div');
   for (const [key,label] of [['web_server','Web 服务器'],['sapi','SAPI'],['multipart','multipart'],['upload_progress','upload_progress'],['patch','补丁状态'],['lifecycle','版本维护状态']]) {
     const o=a?.[key]; if(!o) continue;
-    wrap.append(node('p',`${label}：${statusNames[o.status] || o.status} · ${o.detail || ''}〔${sourceNames[o.source] || o.source || '未知来源'} / ${confidenceNames[o.confidence] || o.confidence || '未知可信度'}〕`,'fine'));
+    const tone=['below_upstream_fix','eol'].includes(o.status)?'risk':['meets_upstream_fix','form_hint','field_hint','responded'].includes(o.status)?'warning':'';
+    const row=node('p',undefined,'assessment-fact '+tone);row.append(node('strong',label+'：'),node('span',statusNames[o.status] || o.status,'fact-status'));row.append(node('span',` · ${o.detail || ''}〔${sourceNames[o.source] || o.source || '未知来源'} / ${confidenceNames[o.confidence] || o.confidence || '未知可信度'}〕`));wrap.append(row);
   }
-  if(a?.review_priority) wrap.append(node('p',`复核优先级：${a.review_priority === 'high' ? '高' : '需复核'}；不代表漏洞已确认。`,'fine'));
+  if(a?.review_priority) wrap.append(node('p',`复核优先级：${a.review_priority === 'high' ? '高' : '需复核'}；不代表漏洞已确认。`,a.review_priority==='high'?'review-priority':'fine'));
   return wrap;
 }
 function fingerprintsView(f) {
@@ -27,11 +49,12 @@ function fingerprintsView(f) {
   if(!f) return wrap;
   const categories={cms:'CMS / 商城',framework:'框架',runtime:'运行时声明',static_generator:'静态生成器',hosted_platform:'托管平台',hosting:'托管服务',web_server:'Web 中间件',cdn:'CDN',waf:'WAF',challenge:'挑战页'};
   if(f.matches?.length) wrap.append(node('b','网站特征（仅为线索）'));
-  for(const hit of f.matches || []) {
-    wrap.append(node('p',`${categories[hit.category] || hit.category} · ${hit.name} ${hit.versions?.length ? hit.versions.join(' / ') : ''} · ${hit.relation==='external_reference' ? '仅外部资源引用' : '响应中的线索'} · ${hit.confidence==='medium' ? '中等特征可信度' : '低可信特征'}${hit.version_conflict ? ' · 产品版本声明冲突' : ''}`,'fine'));
+  for(const hit of (Array.isArray(f.matches)?f.matches:[]).filter(h=>h && typeof h==='object').slice(0,64)) {
+    const heading=node('p',undefined,'technology-heading');heading.append(node('span',(categories[hit.category] || hit.category)+' · '),node('strong',hit.name,'technology-name'));for(const version of (Array.isArray(hit.versions)?hit.versions:[]).filter(v=>typeof v==='string').slice(0,8))heading.append(node('code',version,'technology-version'));heading.append(node('span',` · ${hit.relation==='external_reference' ? '仅外部资源引用' : '响应中的线索'} · ${hit.confidence==='medium' ? '中等特征可信度' : '低可信特征'}${hit.version_conflict ? ' · 产品版本声明冲突' : ''}`,'fine'));wrap.append(heading);
+    const first=hit.evidence?.[0];if(first){const proof=node('p',undefined,'technology-proof');proof.append(node('strong','命中依据：'),node('code',first.header || first.source,'proof-location'),node('span',' · '+(first.detail || '规则匹配')));wrap.append(proof);}
     if(hit.advice) wrap.append(node('p',hit.advice,'fine'));
     const observed=node('details');observed.append(node('summary','命中依据'));
-    for(const e of hit.evidence || []) observed.append(node('p',`${e.source}${e.header ? ' / '+e.header : ''} · ${e.detail || ''} ${e.resource_origin ? ' · 资源来源 '+e.resource_origin : ''} · 规则 ${e.pattern}${e.pattern_truncated ? '…（表达式已截断）' : ''} · 来源 ${e.url || '本地观测'}`,'fine'));
+    for(const e of (Array.isArray(hit.evidence)?hit.evidence:[]).filter(e=>e && typeof e==='object').slice(0,8)) observed.append(node('p',`${e.source}${e.header ? ' / '+e.header : ''} · ${e.detail || ''} ${e.resource_origin ? ' · 资源来源 '+e.resource_origin : ''} · 规则 ${e.pattern}${e.pattern_truncated ? '…（表达式已截断）' : ''} · 来源 ${e.url || '本地观测'}`,'fine'));
     wrap.append(observed);
   }
   if(f.matches_truncated) wrap.append(node('p','命中特征达到数量上限，结果可能不完整。','fine'));
@@ -105,11 +128,11 @@ function renderJobs(jobs, endpoint='/api/jobs', showOwners=false, options={}) {
       for (const r of j.results) {
         const row=node('tr'), target=node('td'), verdict=node('td'), evidence=node('td');
         target.append(node('div',r.target),node('p',`${r.connected_ip || '—'} · HTTP ${r.http_status || '—'}`,'fine'));
-        verdict.append(badge(r.verdict)); evidence.append(node('div',r.reason));
+        verdict.append(badge(r.verdict)); evidence.append(evidenceSummary(r));
         evidence.append(assessmentView(r.assessment),fingerprintsView(r.fingerprints));
         if(r.version_warnings?.length) evidence.append(node('p',`需优先复核的版本声明：${r.version_warnings.join('、')}。多版本冲突时仍需确认实际后端。`,'fine'));
         for(const h of r.host_evidence || []) evidence.append(hostEvidenceView(h.assessment));
-        evidence.append(details('查看完整检测依据',r));
+        evidence.append(nextStep(r),details('查看完整检测依据',r));
         row.append(target,verdict,evidence); tbody.append(row);
       }
       table.append(tbody); const wrap=node('div',undefined,'tablewrap'); wrap.append(table); block.append(wrap);

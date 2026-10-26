@@ -17,7 +17,7 @@ use std::{
     collections::HashMap,
     net::SocketAddr,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Semaphore;
@@ -30,6 +30,7 @@ pub fn now() -> f64 {
 }
 pub struct State {
     pub config: Config,
+    pub(crate) rulebook: RwLock<crate::rulebook::Snapshot>,
     pub(crate) db: Mutex<Connection>,
     rates: Mutex<HashMap<String, Vec<Instant>>>,
     pub(crate) failures: Mutex<HashMap<String, Vec<Instant>>>,
@@ -68,12 +69,15 @@ impl State {
             CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,owner TEXT,created REAL,state TEXT,results TEXT);
             CREATE TABLE IF NOT EXISTS reports(id TEXT PRIMARY KEY,owner TEXT,created REAL,target TEXT,payload TEXT);
             CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,created REAL,owner TEXT,action TEXT,detail TEXT);
+            CREATE TABLE IF NOT EXISTS fingerprint_rules(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,document TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,owner TEXT,kind TEXT,expires REAL,credential TEXT);
             CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires);
             CREATE INDEX IF NOT EXISTS jobs_owner_created ON jobs(owner,created);
             CREATE INDEX IF NOT EXISTS reports_owner_target ON reports(owner,target);
             UPDATE jobs SET state='interrupted' WHERE state IN ('queued','running');")?;
+        let rulebook = crate::rulebook::Snapshot::load(&db, &config)?;
         Ok(Arc::new(Self {
+            rulebook: RwLock::new(rulebook),
             config,
             db: Mutex::new(db),
             rates: Mutex::new(HashMap::new()),
@@ -314,6 +318,13 @@ pub(crate) async fn read_body(
     config: &Config,
     req: Request<Body>,
 ) -> std::result::Result<Value, (u16, &'static str)> {
+    read_body_limit(config, req, 262144).await
+}
+pub(crate) async fn read_body_limit(
+    config: &Config,
+    req: Request<Body>,
+    limit: usize,
+) -> std::result::Result<Value, (u16, &'static str)> {
     if text(req.headers(), "origin") != config.public_origin
         || text(req.headers(), "x-requested-with") != "PHP-SelfCheck"
         || !text(req.headers(), "content-type")
@@ -331,10 +342,10 @@ pub(crate) async fn read_body(
     let size = text(req.headers(), "content-length")
         .parse::<usize>()
         .unwrap_or(0);
-    if !(1..=262144).contains(&size) {
-        return Err((400, "请求体应为 1–262144 字节"));
+    if !(1..=limit).contains(&size) {
+        return Err((400, "请求体为空或超出允许大小"));
     }
-    let bytes = match to_bytes(req.into_body(), 262144).await {
+    let bytes = match to_bytes(req.into_body(), limit).await {
         Ok(b) => b,
         Err(_) => return Err((400, "请求体无效或过大")),
     };
@@ -377,7 +388,7 @@ fn get(state: &State, user: &str, path: &str, query: &str) -> Result<Response> {
         "/api/me" => {
             return Ok(json_response(
                 200,
-                json!({"fingerprint_library":state.config.fingerprint_library.clone().unwrap_or_else(crate::fingerprints::builtin).metadata(),"headers_only":state.config.headers_only,"user":user,"rule_date":scanner::RULE_DATE,"allowed_ports":state.config.allowed_ports,"scope_configured":state.config.allow_without_whitelist || !state.config.allowed_networks.is_empty(),"allow_anonymous":state.config.allow_anonymous,"allow_without_whitelist":state.config.allow_without_whitelist}),
+                json!({"fingerprint_library":state.rulebook.read().unwrap().library.metadata(),"headers_only":state.config.headers_only,"user":user,"rule_date":scanner::RULE_DATE,"allowed_ports":state.config.allowed_ports,"scope_configured":state.config.allow_without_whitelist || !state.config.allowed_networks.is_empty(),"allow_anonymous":state.config.allow_anonymous,"allow_without_whitelist":state.config.allow_without_whitelist}),
             ));
         }
         _ => {}
@@ -492,6 +503,7 @@ fn post(state: Arc<State>, user: &str, path: &str, body: Value) -> Result<Respon
                 return Ok(error(400, "headers_only 必须为布尔值"));
             }
             let mut scan_config = state.config.clone();
+            scan_config.fingerprint_library = Some(state.rulebook.read().unwrap().library.clone());
             scan_config.headers_only |= body["headers_only"].as_bool().unwrap_or(false);
             let mut targets = vec![];
             for t in raw {
@@ -530,7 +542,7 @@ fn post(state: Arc<State>, user: &str, path: &str, body: Value) -> Result<Respon
             state.audit(
                 user,
                 "scan_submit",
-                json!({"job":id,"targets":targets,"headers_only":scan_config.headers_only}),
+                json!({"job":id,"targets":targets,"headers_only":scan_config.headers_only,"fingerprint_library":scan_config.fingerprint_library.as_ref().map(|l|l.metadata())}),
             )?;
             let job_id = id.clone();
             tokio::spawn(async move {

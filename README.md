@@ -137,6 +137,22 @@ cargo build --release --locked -j 4
 - JSON/CSV 导出；CSV 单元格对公式前缀进行中和。服务重启时将旧的 queued/running 任务标记为 interrupted。
 - 主机材料 JSON 导入保留“开发者提交，未经独立核验”标记，不提升远程检测结论。
 
+## 管理员后台维护特征库
+
+登录 `/admin` 后使用“网站特征库维护”，可筛选和选择规则，编辑单条 JSON、新增、启用/禁用、删除自定义项，也可修改完整 JSON 和特征库版本。
+
+1. 单条编辑后点击“应用单条修改到草稿”。
+2. 点击“校验草稿”，检查 JSON、规则 ID、正则和资源限制。
+3. 点击“保存并立即启用”。只有保存才会改变当前规则；不需要重启。
+
+保存后的规则与修订号持久化到 SQLite，重启后恢复，并优先于 `fingerprint_file` 启动文件。初次没有后台保存记录时，加载启动文件或内置库。后台不会改写原 JSON 文件；要采用更新后的文件，可在完整 JSON 中粘贴并校验保存。本机采集器仍使用所在机器上的文件，可复制后台完整 JSON 作为 `--fingerprints` 文件。数据库、规则和审计应一起备份。
+
+多管理员保存使用修订号检查，发现冲突返回提示并保留草稿；备份草稿、重新加载后合并再保存。保存与审计写入同一事务，失败时保留原规则。已提交的任务持有原规则快照，只有新提交的任务使用更新，历史结果不会重判。“将内置库加载为草稿”也须保存才生效。
+
+管理接口仅允许独立管理员会话：`GET /api/admin/fingerprints`、`POST /api/admin/fingerprints/validate`、`POST /api/admin/fingerprints/save`。POST 沿用 Origin 与请求格式检查；提交 `document` JSON 文本，保存另需读取时的 `revision`，冲突返回 409。普通扫描会话不能维护规则。
+
+“证据与下一步”将版本声明与直接响应头单独展示：等宽粗体突出 PHP 版本，红色标记版本风险线索，琥珀色提示受阻/待核验状态，蓝色强调产品名称和命中位置，并单列下一步。颜色同时配有文字含义；达到上游基线仍显示待核验，所有目标和证据均以文本渲染。
+
 ## 可配置的网站特征库
 
 扫描结果可展示 CMS/商城、框架、运行时声明、静态生成器、托管平台、Web 中间件、CDN/WAF 和挑战页等特征。内置 51 条规则，覆盖 WordPress/WooCommerce、Drupal、Joomla、Magento、Laravel、ThinkPHP、Discuz!、Next.js、Nuxt、Shopify、Nginx、Tengine、Cloudflare 等。
@@ -162,9 +178,9 @@ php-selfcheck fingerprints export --output fingerprints.json
 php-selfcheck fingerprints validate --file fingerprints.json
 ```
 
-导出不会覆盖已有文件。校验检查 schema、ID、正则、字段和资源上限；文件缺失或规则错误会阻止服务启动，避免静默使用其他规则。文件修改后须重启服务；单次任务使用同一份已加载规则。
+导出不会覆盖已有文件。校验检查 schema、ID、正则、字段和资源上限；文件缺失或规则错误会阻止服务启动，避免静默使用其他规则。尚无后台保存记录时，文件修改后须重启服务；后台保存后以数据库规则为准。单次任务使用同一份已加载规则。
 
-也可显式指定文件（这里相对路径以当前终端目录为基准），覆盖服务配置：
+也可显式指定文件（这里相对路径以当前终端目录为基准），作为启动文件或覆盖单次 check 的规则（已有后台保存时，服务仍优先使用数据库规则）：
 
 ```bash
 php-selfcheck serve --config config.json --fingerprints fingerprints.json
@@ -203,7 +219,7 @@ php-selfcheck collect --middleware --ports --web-probe --fingerprints fingerprin
 ```
 
 - `mode: "extend"` 保留内置库；相同 ID 覆盖原规则，新 ID 追加。`disabled_rules` 按 ID 禁用规则，未知/重复 ID 报错。先覆盖、追加，再禁用。
-- `mode: "replace"` 完全采用文件中的规则；可用空 `rules` 关闭技术特征匹配，此模式不接受非空 `disabled_rules`。PHP 专属版本声明和漏洞基线检查独立运行，不能由特征库替换或关闭。
+- `mode: "replace"` 完全采用文件中的规则；可用空 `rules` 关闭技术特征匹配，`disabled_rules` 在两种模式下均按 ID 禁用规则。PHP 专属版本声明和漏洞基线检查独立运行，不能由特征库替换或关闭。
 - `all` 中所有条件均须命中；`any` 非空时至少命中一个。两者同时存在时都需满足，至少提供一个条件。
 - `source` 支持 `header`、`cookie_name`、`meta_generator`、`title`、`resource_path`、`body`。`header` 条件必须提供头名称；Cookie 和认证敏感头禁止作为 header 匹配，以免读取其值。Cookie 仅匹配名称，不匹配或保存值。
 - `pattern` 使用 Rust regex 语法，默认区分大小写，可加 `(?i)`。不支持反向引用或环视。`resource_path` 匹配已引用资源的路径，不包含查询和片段；`same_origin` 默认 `true`，设为 `false` 可记录外部资源引用，但不请求资源，也不把外部引用当作当前站点运行时证明。

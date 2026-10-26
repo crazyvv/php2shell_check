@@ -8,7 +8,7 @@ on:
       tag:
         description: Existing version tag to publish (must match Cargo.toml)
         required: true
-        default: v0.3.0
+        default: v0.4.0
 
 permissions:
   contents: read
@@ -61,6 +61,22 @@ jobs:
         run: cargo build --release --locked --target "${{ matrix.target }}" -j 4
       - name: Smoke check native executable
         run: python scripts/smoke-release.py "target/${{ matrix.target }}/release/${{ matrix.executable }}"
+      - name: Verify administrator editor and evidence in Chrome
+        if: runner.os == 'Linux'
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ui-check" --no-save playwright
+          chrome_bin="$(command -v google-chrome || command -v chromium || true)"
+          if [ -z "$chrome_bin" ]; then
+            node "$RUNNER_TEMP/ui-check/node_modules/playwright/cli.js" install chromium --with-deps
+          fi
+          NODE_PATH="$RUNNER_TEMP/ui-check/node_modules" CHROME_BIN="$chrome_bin" node scripts/browser-smoke.cjs "target/${{ matrix.target }}/release/${{ matrix.executable }}" "$RUNNER_TEMP/ui-screenshots"
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux' && always()
+        with:
+          name: browser-screenshots
+          path: ${{ runner.temp }}/ui-screenshots/*
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Package public files
         run: python scripts/package-release.py --target "${{ matrix.target }}" --tag "$RELEASE_TAG" --output dist
       - uses: actions/upload-artifact@v4
@@ -89,8 +105,14 @@ jobs:
       - uses: actions/download-artifact@v4
         if: needs.build.result == 'success'
         with:
+          pattern: "*-x86_64"
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: browser-screenshots
+          path: release-diagnostics
       - name: Verify uploads and publish
         if: needs.build.result == 'success'
         env:
