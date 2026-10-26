@@ -1,0 +1,21 @@
+{
+  "schema": "php-selfcheck-fingerprints/v1",
+  "version": "company-1",
+  "mode": "extend",
+  "disabled_rules": [],
+  "rules": [
+    {
+      "id": "company-php-app",
+      "name": "公司 PHP 应用（组合线索）",
+      "category": "framework",
+      "runtime": "php",
+      "confidence": "low",
+      "all": [
+        { "source": "header", "header": "x-company-app", "pattern": "(?i)^erp$" },
+        { "source": "cookie_name", "pattern": "^company_session$" }
+      ],
+      "any": [],
+      "advice": "公司应用特征命中，仍需核实实际 Web/FPM PHP 版本与补丁。"
+    }
+  ]
+}

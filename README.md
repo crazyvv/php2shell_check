@@ -137,6 +137,83 @@ cargo build --release --locked -j 4
 - JSON/CSV 导出；CSV 单元格对公式前缀进行中和。服务重启时将旧的 queued/running 任务标记为 interrupted。
 - 主机材料 JSON 导入保留“开发者提交，未经独立核验”标记，不提升远程检测结论。
 
+## 可配置的网站特征库
+
+扫描结果可展示 CMS/商城、框架、运行时声明、静态生成器、托管平台、Web 中间件、CDN/WAF 和挑战页等特征。内置 51 条规则，覆盖 WordPress/WooCommerce、Drupal、Joomla、Magento、Laravel、ThinkPHP、Discuz!、Next.js、Nuxt、Shopify、Nginx、Tengine、Cloudflare 等。
+
+匹配仅使用已经取得的响应头、Cookie **名称**、generator 标签、标题、资源路径及有限正文；不会请求额外路径、登录页或外部资源。每个命中保留规则 ID、表达式、来源 URL、证据位置、资源来源和可信度。页面、管理员历史、JSON/CSV 导出和本机端口 Web 观测均展示这些信息；结果记录特征库版本、有效规则数和内容 SHA-256，已有历史不因修改规则而重判。
+
+产品特征是线索：CMS/框架版本不当作 PHP 版本；第三方资源单独标为外部引用，不据此推断当前站点运行 PHP。Next.js 等也可能来自静态导出；CDN、WAF 或托管平台命中不代表没有 PHP 后端或已修复。明确的挑战页线索使检测保持“无法完成检测”，保留命中依据，不自动绕过或继续跳转。普通 CDN 特征不会单独认定为受阻。
+
+### 使用自己的规则文件
+
+特征文件采用 UTF-8 JSON。在服务器 `config.json` 中设置以下字段，保留其他字段并重启服务。相对路径以该配置文件所在目录为基准：
+
+```json
+{
+  "fingerprint_file": "fingerprints.json"
+}
+```
+
+不设置或设为 `null` 时使用内置库。可先复制 `fingerprints.example.json` 作为扩展示例；也可导出完整库后编辑：
+
+```bash
+php-selfcheck fingerprints export --output fingerprints.json
+php-selfcheck fingerprints validate --file fingerprints.json
+```
+
+导出不会覆盖已有文件。校验检查 schema、ID、正则、字段和资源上限；文件缺失或规则错误会阻止服务启动，避免静默使用其他规则。文件修改后须重启服务；单次任务使用同一份已加载规则。
+
+也可显式指定文件（这里相对路径以当前终端目录为基准），覆盖服务配置：
+
+```bash
+php-selfcheck serve --config config.json --fingerprints fingerprints.json
+php-selfcheck check https://app.example.com/ --config config.json --fingerprints fingerprints.json --json
+php-selfcheck collect --middleware --ports --web-probe --fingerprints fingerprints.json > host-report.json
+```
+
+本机采集的 `collector.options.example.json` 也支持 `fingerprint_file`，相对路径以采集器选项文件所在目录为基准；该文件需要放在被采集的机器上。命令行文件优先于选项文件。仅响应头模式不会匹配未取得的页面正文、generator、标题或资源路径。
+
+### 规则格式
+
+下面是一份完整的扩展文件，要求响应头和 Cookie 名称同时命中：
+
+```json
+{
+  "schema": "php-selfcheck-fingerprints/v1",
+  "version": "company-1",
+  "mode": "extend",
+  "disabled_rules": [],
+  "rules": [
+    {
+      "id": "company-php-app",
+      "name": "公司 PHP 应用",
+      "category": "framework",
+      "runtime": "php",
+      "confidence": "low",
+      "all": [
+        { "source": "header", "header": "x-company-app", "pattern": "(?i)^erp$" },
+        { "source": "cookie_name", "pattern": "^company_session$" }
+      ],
+      "any": [],
+      "advice": "应用特征命中，实际 PHP 版本和补丁仍需核验。"
+    }
+  ]
+}
+```
+
+- `mode: "extend"` 保留内置库；相同 ID 覆盖原规则，新 ID 追加。`disabled_rules` 按 ID 禁用规则，未知/重复 ID 报错。先覆盖、追加，再禁用。
+- `mode: "replace"` 完全采用文件中的规则；可用空 `rules` 关闭技术特征匹配，此模式不接受非空 `disabled_rules`。PHP 专属版本声明和漏洞基线检查独立运行，不能由特征库替换或关闭。
+- `all` 中所有条件均须命中；`any` 非空时至少命中一个。两者同时存在时都需满足，至少提供一个条件。
+- `source` 支持 `header`、`cookie_name`、`meta_generator`、`title`、`resource_path`、`body`。`header` 条件必须提供头名称；Cookie 和认证敏感头禁止作为 header 匹配，以免读取其值。Cookie 仅匹配名称，不匹配或保存值。
+- `pattern` 使用 Rust regex 语法，默认区分大小写，可加 `(?i)`。不支持反向引用或环视。`resource_path` 匹配已引用资源的路径，不包含查询和片段；`same_origin` 默认 `true`，设为 `false` 可记录外部资源引用，但不请求资源，也不把外部引用当作当前站点运行时证明。
+- 仅 `header` 和 `meta_generator` 可用 `(?P<version>...)` 捕获产品自己的版本声明；冲突会显式显示，不能把资源文件名、CMS 版本或自定义捕获结果加入 PHP 漏洞版本判定。
+- `category` 可选 `cms`、`framework`、`runtime`、`static_generator`、`hosted_platform`、`hosting`、`web_server`、`cdn`、`waf`、`challenge`；`runtime` 可选 `php`、`nodejs`、`static`、`unknown`；`confidence` 为 `low` 或 `medium`，都不是已核实结论。
+
+库文件最多 512 KiB，有效规则最多 256 条，每条 1–16 个条件；表达式最多 4096 字节并限制编译规模。最多输出 64 个命中、每项 8 条证据；表达式展示超过 256 字符会截断并标记，完整规则保留在文件中。正文沿用扫描的 128 KiB 上限，本机端口观测最多 16 KiB；仅解析最多 256 个相关标签，较长/复杂页面可能漏识别。规则与说明会出现在命中结果中，请勿把密码或密钥写入特征库。
+
+内置覆盖参考 [spcaeo/php2shell-check](https://github.com/spcaeo/php2shell-check)，Rust 匹配引擎及配置格式在本项目实现，MIT 许可与来源见 `THIRD_PARTY_NOTICES.md`。
+
 ## 轻量扫描与 CI 命令
 
 扫描页可勾选“仅检查响应头”，只发送 HEAD；收到 405/501 才回退 GET，回退请求也不读取正文。此模式不跟随跳转、不进行页面特征分析或 multipart POST，隐藏版本时保持未知。每次请求仍校验资产范围、重新解析 DNS 并固定已校验的 IP，保持 TLS 验证。
@@ -317,7 +394,7 @@ docker run -d --name php-selfcheck --restart unless-stopped \
 ## 开发验证
 
 ```bash
-cargo test --locked -j 4
+cargo test --locked -j 4 -- --test-threads=2
 cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
 ```

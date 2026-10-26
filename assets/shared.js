@@ -22,6 +22,22 @@ function assessmentView(a) {
   if(a?.review_priority) wrap.append(node('p',`复核优先级：${a.review_priority === 'high' ? '高' : '需复核'}；不代表漏洞已确认。`,'fine'));
   return wrap;
 }
+function fingerprintsView(f) {
+  const wrap=node('div');
+  if(!f) return wrap;
+  const categories={cms:'CMS / 商城',framework:'框架',runtime:'运行时声明',static_generator:'静态生成器',hosted_platform:'托管平台',hosting:'托管服务',web_server:'Web 中间件',cdn:'CDN',waf:'WAF',challenge:'挑战页'};
+  if(f.matches?.length) wrap.append(node('b','网站特征（仅为线索）'));
+  for(const hit of f.matches || []) {
+    wrap.append(node('p',`${categories[hit.category] || hit.category} · ${hit.name} ${hit.versions?.length ? hit.versions.join(' / ') : ''} · ${hit.relation==='external_reference' ? '仅外部资源引用' : '响应中的线索'} · ${hit.confidence==='medium' ? '中等特征可信度' : '低可信特征'}${hit.version_conflict ? ' · 产品版本声明冲突' : ''}`,'fine'));
+    if(hit.advice) wrap.append(node('p',hit.advice,'fine'));
+    const observed=node('details');observed.append(node('summary','命中依据'));
+    for(const e of hit.evidence || []) observed.append(node('p',`${e.source}${e.header ? ' / '+e.header : ''} · ${e.detail || ''} ${e.resource_origin ? ' · 资源来源 '+e.resource_origin : ''} · 规则 ${e.pattern}${e.pattern_truncated ? '…（表达式已截断）' : ''} · 来源 ${e.url || '本地观测'}`,'fine'));
+    wrap.append(observed);
+  }
+  if(f.matches_truncated) wrap.append(node('p','命中特征达到数量上限，结果可能不完整。','fine'));
+  if(f.library) wrap.append(node('p',`特征库 ${f.library.version || '未知'} · ${f.library.rule_count ?? '未知'} 条规则 · ${f.library.source || ''}`,'fine'));
+  return wrap;
+}
 function hostEvidenceView(e) {
   const wrap=node('div');
   wrap.append(node('b','主机材料 / 手工复核：未经独立核验'));
@@ -42,6 +58,7 @@ function hostEvidenceView(e) {
     }
     for(const probe of e.middleware.web_probes || []) {
       wrap.append(node('p',`本机 Web：${probe.scheme || ''} ${probe.host || probe.bind_address || ''}:${probe.port || ''}${probe.path || '/'} · ${probe.status} · HTTP ${probe.response?.http_status || '未知'} · ${probe.response?.findings?.verdict || probe.reason || '无法完成请求或证据不足'}`,'fine'));
+      if(probe.response?.findings?.fingerprints) wrap.append(fingerprintsView(probe.response.findings.fingerprints));
     }
   }
   if(e.package_audit && !['not_collected','disabled'].includes(e.package_audit.status)) {
@@ -89,7 +106,7 @@ function renderJobs(jobs, endpoint='/api/jobs', showOwners=false, options={}) {
         const row=node('tr'), target=node('td'), verdict=node('td'), evidence=node('td');
         target.append(node('div',r.target),node('p',`${r.connected_ip || '—'} · HTTP ${r.http_status || '—'}`,'fine'));
         verdict.append(badge(r.verdict)); evidence.append(node('div',r.reason));
-        evidence.append(assessmentView(r.assessment));
+        evidence.append(assessmentView(r.assessment),fingerprintsView(r.fingerprints));
         if(r.version_warnings?.length) evidence.append(node('p',`需优先复核的版本声明：${r.version_warnings.join('、')}。多版本冲突时仍需确认实际后端。`,'fine'));
         for(const h of r.host_evidence || []) evidence.append(hostEvidenceView(h.assessment));
         evidence.append(details('查看完整检测依据',r));

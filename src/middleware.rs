@@ -203,6 +203,14 @@ pub async fn collect(options: &CollectOptions) -> Value {
     collect_at(options, Path::new("/proc")).await
 }
 async fn collect_at(options: &CollectOptions, proc: &Path) -> Value {
+    let library = if let Some(file) = &options.fingerprint_file {
+        match crate::fingerprints::Library::load(file) {
+            Ok(lib) => lib,
+            Err(e) => return json!({"status":"invalid_options","error":e.to_string()}),
+        }
+    } else {
+        crate::fingerprints::builtin()
+    };
     let mut instances = vec![];
     let mut errors = vec![];
     let mut cache: HashMap<String, Value> = HashMap::new();
@@ -301,7 +309,9 @@ async fn collect_at(options: &CollectOptions, proc: &Path) -> Value {
                         a.is_loopback() || a.is_unspecified() || local_addresses.contains(&a)
                     });
                     if allowed {
-                        probes.push(probe(listener, &pid, scheme, options).await);
+                        probes.push(
+                            probe_with_library(listener, &pid, scheme, options, &library).await,
+                        );
                     } else {
                         probes.push(json!({"pid":pid,"bind_address":listener.address,"port":listener.port,"scheme":scheme,"status":"skipped","reason":"无法确认监听地址属于本机，不发起连接"}));
                     }
@@ -402,7 +412,24 @@ fn local_addresses(proc: &Path) -> HashSet<IpAddr> {
     }
     addresses
 }
+#[cfg(all(test, unix))]
 async fn probe(listener: &Listener, pid: &str, scheme: &str, options: &CollectOptions) -> Value {
+    probe_with_library(
+        listener,
+        pid,
+        scheme,
+        options,
+        &crate::fingerprints::builtin(),
+    )
+    .await
+}
+async fn probe_with_library(
+    listener: &Listener,
+    pid: &str,
+    scheme: &str,
+    options: &CollectOptions,
+    library: &crate::fingerprints::Library,
+) -> Value {
     let address: IpAddr = match listener.address.parse() {
         Ok(a) => a,
         Err(_) => return json!({"status":"unknown","reason":"无效监听地址"}),
@@ -453,8 +480,11 @@ async fn probe(listener: &Listener, pid: &str, scheme: &str, options: &CollectOp
             )
             .build()?;
         let mut response = client
-            .get(url)
-            .header("User-Agent", "PHP-SelfCheck-Local/0.2")
+            .get(url.clone())
+            .header(
+                "User-Agent",
+                format!("PHP-SelfCheck-Local/{}", env!("CARGO_PKG_VERSION")),
+            )
             .header("Accept-Encoding", "identity")
             .send()
             .await?;
@@ -477,7 +507,12 @@ async fn probe(listener: &Listener, pid: &str, scheme: &str, options: &CollectOp
                 break;
             }
         }
-        let findings = crate::scanner::inspect(&headers, &body[..body.len().min(16384)]);
+        let findings = crate::scanner::inspect_with_library(
+            &headers,
+            &body[..body.len().min(16384)],
+            Some(&url),
+            library,
+        );
         Ok(json!({"http_status":status,"findings":findings,"body_truncated":body.len()>16384}))
     }
     .await;
@@ -587,9 +622,12 @@ mod tests {
             assert!(request.starts_with("get / "));
             assert!(request.contains(&format!("host: app.internal:{port}")));
             assert!(!request.contains("authorization:"));
-            socket.write_all(b"HTTP/1.1 200 OK\r\nX-Powered-By: PHP/8.2.35\r\nSet-Cookie: PHPSESSID=PRIVATECOOKIE\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+            socket.write_all(b"HTTP/1.1 200 OK\r\nX-Powered-By: PHP/8.2.35\r\nX-Owned-App: yes\r\nSet-Cookie: PHPSESSID=PRIVATECOOKIE\r\nContent-Length: 0\r\n\r\n").await.unwrap();
         });
+        let rules = dir.path().join("fingerprints.json");
+        fs::write(&rules,r#"{"schema":"php-selfcheck-fingerprints/v1","version":"custom-web-1","mode":"replace","rules":[{"id":"custom-web","name":"Local app","category":"framework","any":[{"source":"header","header":"x-owned-app","pattern":"^yes$"}]}]}"#).unwrap();
         let options = CollectOptions {
+            fingerprint_file: Some(rules),
             middleware: true,
             php_modules: true,
             ports: true,
@@ -608,6 +646,10 @@ mod tests {
         );
         assert_eq!(report["web_probes"][0]["response"]["http_status"], 200);
         assert!(!report.to_string().contains("PRIVATECOOKIE"));
+        assert_eq!(
+            report["web_probes"][0]["response"]["findings"]["fingerprints"]["matches"][0]["id"],
+            "custom-web"
+        );
     }
     #[tokio::test]
     async fn switches_namespaces_and_fastcgi_prevent_requests() {

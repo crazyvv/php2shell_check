@@ -1,0 +1,7 @@
+php2shell-check
+Copyright (c) 2026 Space-O Technologies. MIT licence (see LICENSE).
+
+Derived from Skald's public site check (github.com/spcaeo/skald), relicensed MIT by its authors.
+
+Skald itself is source-available under its own licence; only the parts copied into this
+repository are relicensed MIT. "Skald" is a trademark of Space-O Technologies.

@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use php_selfcheck::{
     collector,
     config::{self, Config},
-    portal, scanner,
+    fingerprints, portal, scanner,
 };
 use std::{collections::BTreeMap, net::IpAddr, path::PathBuf};
 #[derive(Parser)]
@@ -14,6 +14,11 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// 导出或校验可配置的网站特征库
+    Fingerprints {
+        #[command(subcommand)]
+        action: FingerprintCommand,
+    },
     /// 生成配置和随机个人账号密码，扫描范围默认为空
     Init {
         #[arg(long, default_value = "config.json")]
@@ -49,6 +54,8 @@ enum Command {
         bind: IpAddr,
         #[arg(long, default_value_t = 8080)]
         port: u16,
+        #[arg(long)]
+        fingerprints: Option<PathBuf>,
     },
     /// 检测单个 URL，退出码 0=达到上游基线，1=疑似受影响，2=参数/配置错误，3=未知
     Check {
@@ -58,11 +65,33 @@ enum Command {
         config: PathBuf,
         #[arg(long)]
         headers_only: bool,
+        /// 覆盖 config.json 中的特征库文件（相对当前目录）
+        #[arg(long)]
+        fingerprints: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
     /// 在当前 Linux 主机执行只读采集，JSON 输出至 stdout
     Collect(collector::CollectArgs),
+}
+#[derive(Subcommand)]
+enum FingerprintCommand {
+    /// 将内置完整特征库导出为可编辑 JSON，不覆盖已有文件
+    Export {
+        #[arg(long, default_value = "fingerprints.json")]
+        output: PathBuf,
+    },
+    /// 校验 JSON、规则 ID、正则和资源上限，输出有效库信息
+    Validate {
+        #[arg(long)]
+        file: PathBuf,
+    },
+}
+fn fingerprint_override(cfg: &mut Config, file: Option<PathBuf>) -> Result<()> {
+    if let Some(file) = file {
+        cfg.fingerprint_file = Some(std::fs::canonicalize(file)?.to_string_lossy().into_owned());
+    }
+    Ok(())
 }
 fn check_target(value: &str) -> std::result::Result<String, String> {
     scanner::normalize(value)
@@ -72,6 +101,21 @@ fn check_target(value: &str) -> std::result::Result<String, String> {
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::Fingerprints { action } => match action {
+            FingerprintCommand::Export { output } => {
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&output)?;
+                file.write_all(fingerprints::BUILTIN.as_bytes())?;
+                println!("内置特征库已导出：{}", output.display());
+            }
+            FingerprintCommand::Validate { file } => {
+                let library = fingerprints::Library::load(&file)?;
+                println!("{}", serde_json::to_string_pretty(library.metadata())?);
+            }
+        },
         Command::Init {
             config: path,
             user,
@@ -89,6 +133,8 @@ async fn main() -> Result<()> {
                 allow_anonymous,
                 probe_multipart: false,
                 headers_only: false,
+                fingerprint_file: None,
+                fingerprint_library: None,
                 allow_without_whitelist,
                 allowed_networks: vec![],
                 allowed_domains: vec![],
@@ -144,9 +190,11 @@ async fn main() -> Result<()> {
             config: path,
             bind,
             port,
+            fingerprints,
         } => {
             let path = std::fs::canonicalize(path)?;
             let mut cfg = config::load(&path)?;
+            fingerprint_override(&mut cfg, fingerprints)?;
             cfg.validate(&path, bind)?;
             portal::serve(cfg, std::net::SocketAddr::new(bind, port)).await?;
         }
@@ -155,9 +203,11 @@ async fn main() -> Result<()> {
             config: path,
             headers_only,
             json: as_json,
+            fingerprints,
         } => {
             let loaded: Result<config::Config> = (|| {
                 let mut cfg = config::load(&path)?;
+                fingerprint_override(&mut cfg, fingerprints)?;
                 cfg.validate(&path, "127.0.0.1".parse()?)?;
                 cfg.headers_only |= headers_only;
                 Ok(cfg)

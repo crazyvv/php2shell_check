@@ -1,0 +1,989 @@
+{
+  "schema": "php-selfcheck-fingerprints/v1",
+  "version": "2026-10-26.1",
+  "mode": "replace",
+  "rules": [
+    {
+      "id": "wordpress",
+      "name": "WordPress",
+      "category": "cms",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)\\bWordPress\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?"
+        },
+        {
+          "source": "header",
+          "pattern": "(?i)api\\.w\\.org",
+          "header": "link"
+        },
+        {
+          "source": "resource_path",
+          "pattern": "(?i)(?:^|/)wp-(?:content|includes)/",
+          "same_origin": false
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "woocommerce",
+      "name": "WooCommerce",
+      "category": "cms",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)\\bWooCommerce\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?"
+        },
+        {
+          "source": "resource_path",
+          "pattern": "(?i)(?:^|/)wp-content/plugins/woocommerce/",
+          "same_origin": false
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "drupal",
+      "name": "Drupal",
+      "category": "cms",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)\\bDrupal\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?"
+        },
+        {
+          "source": "header",
+          "pattern": "(?i)\\bDrupal\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?",
+          "header": "x-generator"
+        },
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-drupal-cache"
+        },
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-drupal-dynamic-cache"
+        },
+        {
+          "source": "resource_path",
+          "pattern": "(?:^|/)sites/default/files/",
+          "same_origin": false
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "joomla",
+      "name": "Joomla",
+      "category": "cms",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)\\bJoomla\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?"
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "magento",
+      "name": "Magento",
+      "category": "cms",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-magento-cache-debug"
+        },
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-magento-tags"
+        },
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-magento-vary"
+        },
+        {
+          "source": "resource_path",
+          "pattern": "(?:^|/)static/version[0-9]+/",
+          "same_origin": false
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "prestashop",
+      "name": "PrestaShop",
+      "category": "cms",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)\\bPrestaShop\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?"
+        },
+        {
+          "source": "cookie_name",
+          "pattern": "(?i)^PrestaShop-"
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "opencart",
+      "name": "OpenCart",
+      "category": "cms",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "cookie_name",
+          "pattern": "^OCSESSID$"
+        },
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)\\bOpenCart\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?"
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "craft",
+      "name": "Craft CMS",
+      "category": "cms",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "cookie_name",
+          "pattern": "^CraftSessionId$"
+        },
+        {
+          "source": "header",
+          "pattern": "(?i)\\bCraft CMS\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?",
+          "header": "x-powered-by"
+        },
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)\\bCraft CMS\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?"
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "typo3",
+      "name": "TYPO3",
+      "category": "cms",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)\\bTYPO3\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?"
+        },
+        {
+          "source": "resource_path",
+          "pattern": "(?:^|/)typo3(?:conf|temp)/",
+          "same_origin": false
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "statamic",
+      "name": "Statamic",
+      "category": "cms",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)\\bStatamic\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?",
+          "header": "x-powered-by"
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "discuz",
+      "name": "Discuz!",
+      "category": "cms",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)\\bDiscuz!?(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?"
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "laravel",
+      "name": "Laravel",
+      "category": "framework",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "cookie_name",
+          "pattern": "(?i)^laravel_session$"
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "symfony",
+      "name": "Symfony",
+      "category": "framework",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "cookie_name",
+          "pattern": "^sf_redirect$"
+        },
+        {
+          "source": "header",
+          "pattern": "(?i)\\bSymfony\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?",
+          "header": "x-powered-by"
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "codeigniter",
+      "name": "CodeIgniter",
+      "category": "framework",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "cookie_name",
+          "pattern": "^ci_session$"
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "thinkphp",
+      "name": "ThinkPHP",
+      "category": "framework",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)\\bThinkPHP\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?",
+          "header": "x-powered-by"
+        },
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)\\bThinkPHP\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?"
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "php",
+      "name": "PHP",
+      "category": "runtime",
+      "runtime": "php",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)\\bPHP[/\\s]+(?P<version>[^\\s,;)]+)",
+          "header": "x-powered-by"
+        },
+        {
+          "source": "header",
+          "pattern": "(?i)\\bPHP[/\\s]+(?P<version>[^\\s,;)]+)",
+          "header": "server"
+        },
+        {
+          "source": "cookie_name",
+          "pattern": "(?i)^PHPSESSID$"
+        }
+      ],
+      "all": [],
+      "advice": "可能使用 PHP；需核实实际 Web/FPM 版本和厂商回补。CMS/框架版本不是 PHP 版本。"
+    },
+    {
+      "id": "nextjs",
+      "name": "Next.js",
+      "category": "framework",
+      "runtime": "nodejs",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)^Next\\.js$",
+          "header": "x-powered-by"
+        },
+        {
+          "source": "resource_path",
+          "pattern": "(?:^|/)_next/",
+          "same_origin": false
+        },
+        {
+          "source": "body",
+          "pattern": "(?i)<script\\b[^>]*\\bid\\s*=\\s*[\"']__NEXT_DATA__[\"']"
+        }
+      ],
+      "all": [],
+      "advice": "Node.js 相关技术线索，也可能来自静态导出或边缘部署；不证明 Node.js 实例或版本，更不能排除其他 PHP 后端。"
+    },
+    {
+      "id": "nuxt",
+      "name": "Nuxt",
+      "category": "framework",
+      "runtime": "nodejs",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)\\bNuxt\\b",
+          "header": "x-powered-by"
+        },
+        {
+          "source": "resource_path",
+          "pattern": "(?:^|/)_nuxt/",
+          "same_origin": false
+        }
+      ],
+      "all": [],
+      "advice": "Node.js 相关技术线索，也可能来自静态导出或边缘部署；不证明 Node.js 实例或版本，更不能排除其他 PHP 后端。"
+    },
+    {
+      "id": "remix",
+      "name": "Remix",
+      "category": "framework",
+      "runtime": "nodejs",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "body",
+          "pattern": "\\bwindow\\.__remixContext\\s*="
+        }
+      ],
+      "all": [],
+      "advice": "Node.js 相关技术线索，也可能来自静态导出或边缘部署；不证明 Node.js 实例或版本，更不能排除其他 PHP 后端。"
+    },
+    {
+      "id": "sveltekit",
+      "name": "SvelteKit",
+      "category": "framework",
+      "runtime": "nodejs",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "resource_path",
+          "pattern": "(?:^|/)_app/immutable/",
+          "same_origin": false
+        }
+      ],
+      "all": [],
+      "advice": "Node.js 相关技术线索，也可能来自静态导出或边缘部署；不证明 Node.js 实例或版本，更不能排除其他 PHP 后端。"
+    },
+    {
+      "id": "angular-universal",
+      "name": "Angular Universal",
+      "category": "framework",
+      "runtime": "nodejs",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "body",
+          "pattern": "(?i)<[a-z][^>]*\\bng-server-context\\s*="
+        }
+      ],
+      "all": [],
+      "advice": "Node.js 相关技术线索，也可能来自静态导出或边缘部署；不证明 Node.js 实例或版本，更不能排除其他 PHP 后端。"
+    },
+    {
+      "id": "express",
+      "name": "Express",
+      "category": "framework",
+      "runtime": "nodejs",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)^Express$",
+          "header": "x-powered-by"
+        }
+      ],
+      "all": [],
+      "advice": "Node.js 相关技术线索，也可能来自静态导出或边缘部署；不证明 Node.js 实例或版本，更不能排除其他 PHP 后端。"
+    },
+    {
+      "id": "ghost",
+      "name": "Ghost",
+      "category": "cms",
+      "runtime": "nodejs",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)\\bGhost\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?"
+        },
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-ghost-cache-status"
+        }
+      ],
+      "all": [],
+      "advice": "Node.js 相关技术线索，也可能来自静态导出或边缘部署；不证明 Node.js 实例或版本，更不能排除其他 PHP 后端。"
+    },
+    {
+      "id": "gatsby",
+      "name": "Gatsby",
+      "category": "static_generator",
+      "runtime": "static",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)\\bGatsby\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?"
+        },
+        {
+          "source": "body",
+          "pattern": "(?i)<[a-z][^>]*\\bid\\s*=\\s*[\"']___gatsby[\"']"
+        }
+      ],
+      "all": [],
+      "advice": "静态生成器线索仅说明构建产物，不能确定服务器运行时或排除 PHP 后端。"
+    },
+    {
+      "id": "astro",
+      "name": "Astro",
+      "category": "static_generator",
+      "runtime": "static",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)\\bAstro\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?"
+        },
+        {
+          "source": "resource_path",
+          "pattern": "(?:^|/)_astro/",
+          "same_origin": false
+        }
+      ],
+      "all": [],
+      "advice": "静态生成器线索仅说明构建产物，不能确定服务器运行时或排除 PHP 后端。"
+    },
+    {
+      "id": "hugo",
+      "name": "Hugo",
+      "category": "static_generator",
+      "runtime": "static",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)\\bHugo\\b(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?"
+        }
+      ],
+      "all": [],
+      "advice": "静态生成器线索仅说明构建产物，不能确定服务器运行时或排除 PHP 后端。"
+    },
+    {
+      "id": "shopify",
+      "name": "Shopify",
+      "category": "hosted_platform",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-shopid"
+        },
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-shopify-stage"
+        },
+        {
+          "source": "header",
+          "pattern": "(?i)shopify",
+          "header": "powered-by"
+        }
+      ],
+      "all": [],
+      "advice": "托管平台线索；需核实服务责任范围、实际后端和补丁公告，不能据此认定已修复。"
+    },
+    {
+      "id": "wix",
+      "name": "Wix",
+      "category": "hosted_platform",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-wix-request-id"
+        },
+        {
+          "source": "header",
+          "pattern": "(?i)^pepyaka",
+          "header": "server"
+        }
+      ],
+      "all": [],
+      "advice": "托管平台线索；需核实服务责任范围、实际后端和补丁公告，不能据此认定已修复。"
+    },
+    {
+      "id": "squarespace",
+      "name": "Squarespace",
+      "category": "hosted_platform",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)squarespace",
+          "header": "server"
+        }
+      ],
+      "all": [],
+      "advice": "托管平台线索；需核实服务责任范围、实际后端和补丁公告，不能据此认定已修复。"
+    },
+    {
+      "id": "webflow",
+      "name": "Webflow",
+      "category": "hosted_platform",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "body",
+          "pattern": "(?i)<[a-z][^>]*\\bdata-wf-site\\s*="
+        }
+      ],
+      "all": [],
+      "advice": "托管平台线索；需核实服务责任范围、实际后端和补丁公告，不能据此认定已修复。"
+    },
+    {
+      "id": "hubspot",
+      "name": "HubSpot CMS",
+      "category": "hosted_platform",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-hs-hub-id"
+        },
+        {
+          "source": "header",
+          "pattern": "(?i)hubspot",
+          "header": "x-powered-by"
+        }
+      ],
+      "all": [],
+      "advice": "托管平台线索；需核实服务责任范围、实际后端和补丁公告，不能据此认定已修复。"
+    },
+    {
+      "id": "wordpresscom",
+      "name": "WordPress.com",
+      "category": "hosted_platform",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "meta_generator",
+          "pattern": "(?i)WordPress\\.com"
+        },
+        {
+          "source": "header",
+          "pattern": "(?i)wordpress\\.com",
+          "header": "host-header"
+        }
+      ],
+      "all": [],
+      "advice": "托管平台线索；需核实服务责任范围、实际后端和补丁公告，不能据此认定已修复。"
+    },
+    {
+      "id": "wpvip",
+      "name": "WordPress VIP",
+      "category": "hosted_platform",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)wordpress vip",
+          "header": "x-powered-by"
+        }
+      ],
+      "all": [],
+      "advice": "托管平台线索；需核实服务责任范围、实际后端和补丁公告，不能据此认定已修复。"
+    },
+    {
+      "id": "vercel",
+      "name": "Vercel",
+      "category": "hosting",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-vercel-id"
+        },
+        {
+          "source": "header",
+          "pattern": "(?i)^Vercel$",
+          "header": "server"
+        }
+      ],
+      "all": [],
+      "advice": "托管平台线索；需核实服务责任范围、实际后端和补丁公告，不能据此认定已修复。"
+    },
+    {
+      "id": "netlify",
+      "name": "Netlify",
+      "category": "hosting",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-nf-request-id"
+        },
+        {
+          "source": "header",
+          "pattern": "(?i)^Netlify$",
+          "header": "server"
+        }
+      ],
+      "all": [],
+      "advice": "托管平台线索；需核实服务责任范围、实际后端和补丁公告，不能据此认定已修复。"
+    },
+    {
+      "id": "nginx",
+      "name": "Nginx",
+      "category": "web_server",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)^\\s*nginx(?:/(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?\\b",
+          "header": "server"
+        }
+      ],
+      "all": [],
+      "advice": "Web 服务器声明不是 PHP SAPI、PHP 版本或补丁状态的证明。"
+    },
+    {
+      "id": "apache",
+      "name": "Apache",
+      "category": "web_server",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)^\\s*Apache(?:/(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?\\b",
+          "header": "server"
+        }
+      ],
+      "all": [],
+      "advice": "Web 服务器声明不是 PHP SAPI、PHP 版本或补丁状态的证明。"
+    },
+    {
+      "id": "litespeed",
+      "name": "LiteSpeed",
+      "category": "web_server",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)^\\s*LiteSpeed(?:/(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?\\b",
+          "header": "server"
+        }
+      ],
+      "all": [],
+      "advice": "Web 服务器声明不是 PHP SAPI、PHP 版本或补丁状态的证明。"
+    },
+    {
+      "id": "openresty",
+      "name": "OpenResty",
+      "category": "web_server",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)^\\s*openresty(?:/(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?\\b",
+          "header": "server"
+        }
+      ],
+      "all": [],
+      "advice": "Web 服务器声明不是 PHP SAPI、PHP 版本或补丁状态的证明。"
+    },
+    {
+      "id": "tengine",
+      "name": "Tengine",
+      "category": "web_server",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)^\\s*Tengine(?:/(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?\\b",
+          "header": "server"
+        }
+      ],
+      "all": [],
+      "advice": "Web 服务器声明不是 PHP SAPI、PHP 版本或补丁状态的证明。"
+    },
+    {
+      "id": "iis",
+      "name": "Microsoft IIS",
+      "category": "web_server",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)^\\s*Microsoft-IIS(?:/(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?\\b",
+          "header": "server"
+        }
+      ],
+      "all": [],
+      "advice": "Web 服务器声明不是 PHP SAPI、PHP 版本或补丁状态的证明。"
+    },
+    {
+      "id": "caddy",
+      "name": "Caddy",
+      "category": "web_server",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)^\\s*Caddy(?:/(?P<version>[0-9][0-9A-Za-z.+~_-]{0,79}))?\\b",
+          "header": "server"
+        }
+      ],
+      "all": [],
+      "advice": "Web 服务器声明不是 PHP SAPI、PHP 版本或补丁状态的证明。"
+    },
+    {
+      "id": "cloudflare",
+      "name": "Cloudflare",
+      "category": "cdn",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)^cloudflare$",
+          "header": "server"
+        },
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "cf-ray"
+        }
+      ],
+      "all": [],
+      "advice": "CDN/WAF 响应可能遮蔽源站；有防护不等于 PHP 已修复，需核实实际后端。"
+    },
+    {
+      "id": "fastly",
+      "name": "Fastly",
+      "category": "cdn",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-fastly-request-id"
+        },
+        {
+          "source": "header",
+          "pattern": "(?i)cache-",
+          "header": "x-served-by"
+        }
+      ],
+      "all": [],
+      "advice": "CDN/WAF 响应可能遮蔽源站；有防护不等于 PHP 已修复，需核实实际后端。"
+    },
+    {
+      "id": "akamai",
+      "name": "Akamai",
+      "category": "cdn",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)akamaighost",
+          "header": "server"
+        },
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "akamai-grn"
+        }
+      ],
+      "all": [],
+      "advice": "CDN/WAF 响应可能遮蔽源站；有防护不等于 PHP 已修复，需核实实际后端。"
+    },
+    {
+      "id": "cloudfront",
+      "name": "CloudFront",
+      "category": "cdn",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-amz-cf-id"
+        },
+        {
+          "source": "header",
+          "pattern": "(?i)cloudfront",
+          "header": "via"
+        }
+      ],
+      "all": [],
+      "advice": "CDN/WAF 响应可能遮蔽源站；有防护不等于 PHP 已修复，需核实实际后端。"
+    },
+    {
+      "id": "sucuri",
+      "name": "Sucuri",
+      "category": "cdn",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "x-sucuri-id"
+        },
+        {
+          "source": "header",
+          "pattern": "(?i)sucuri",
+          "header": "server"
+        }
+      ],
+      "all": [],
+      "advice": "CDN/WAF 响应可能遮蔽源站；有防护不等于 PHP 已修复，需核实实际后端。"
+    },
+    {
+      "id": "aws-waf",
+      "name": "AWS WAF",
+      "category": "waf",
+      "runtime": "unknown",
+      "confidence": "low",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)^(?:challenge|captcha|block)$",
+          "header": "x-amzn-waf-action"
+        }
+      ],
+      "all": [],
+      "advice": "CDN/WAF 响应可能遮蔽源站；有防护不等于 PHP 已修复，需核实实际后端。"
+    },
+    {
+      "id": "cloudflare-challenge",
+      "name": "Cloudflare challenge",
+      "category": "challenge",
+      "runtime": "unknown",
+      "confidence": "medium",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)^challenge$",
+          "header": "cf-mitigated"
+        }
+      ],
+      "all": [],
+      "advice": "响应命中挑战页线索，无法据此判断业务实例；请由管理员在允许访问的环境复核，不进行自动绕过。"
+    },
+    {
+      "id": "cloudflare-challenge-page",
+      "name": "Cloudflare challenge page",
+      "category": "challenge",
+      "runtime": "unknown",
+      "confidence": "medium",
+      "any": [],
+      "all": [
+        {
+          "source": "header",
+          "pattern": ".+",
+          "header": "cf-ray"
+        },
+        {
+          "source": "title",
+          "pattern": "(?i)^\\s*Just a moment"
+        },
+        {
+          "source": "body",
+          "pattern": "/cdn-cgi/challenge-platform/"
+        }
+      ],
+      "advice": "响应命中挑战页线索，无法据此判断业务实例；请由管理员在允许访问的环境复核，不进行自动绕过。"
+    },
+    {
+      "id": "aws-waf-challenge",
+      "name": "AWS WAF challenge",
+      "category": "challenge",
+      "runtime": "unknown",
+      "confidence": "medium",
+      "any": [
+        {
+          "source": "header",
+          "pattern": "(?i)^(?:challenge|captcha)$",
+          "header": "x-amzn-waf-action"
+        }
+      ],
+      "all": [],
+      "advice": "响应命中挑战页线索，无法据此判断业务实例；请由管理员在允许访问的环境复核，不进行自动绕过。"
+    }
+  ]
+}

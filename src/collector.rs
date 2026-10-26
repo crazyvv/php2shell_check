@@ -234,6 +234,7 @@ const PHP_RUNTIME: &str = r#"$settings=[]; foreach(['session.upload_progress.ena
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CollectOptions {
+    pub fingerprint_file: Option<PathBuf>,
     pub php_command: bool,
     pub php_binary: Option<PathBuf>,
     pub package_audit: bool,
@@ -249,6 +250,7 @@ pub struct CollectOptions {
 impl Default for CollectOptions {
     fn default() -> Self {
         Self {
+            fingerprint_file: None,
             php_command: false,
             php_binary: None,
             package_audit: false,
@@ -265,6 +267,9 @@ impl Default for CollectOptions {
 }
 impl CollectOptions {
     pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(file) = &self.fingerprint_file {
+            crate::fingerprints::Library::load(file)?;
+        }
         anyhow::ensure!(
             self.php_binary.is_none() || self.php_command,
             "--php-binary 需要启用 --php-command"
@@ -315,6 +320,9 @@ impl CollectOptions {
 }
 #[derive(clap::Args, Debug)]
 pub struct CollectArgs {
+    /// 本机 Web 探测使用的被动特征库 JSON
+    #[arg(long)]
+    pub fingerprints: Option<PathBuf>,
     /// 显式运行 PHP 获取版本和选定 CLI 配置；默认关闭
     #[arg(long,num_args=0..=1,default_missing_value="true",require_equals=true)]
     pub php_command: Option<bool>,
@@ -348,10 +356,24 @@ pub struct CollectArgs {
 }
 impl CollectArgs {
     pub fn resolve(self) -> anyhow::Result<CollectOptions> {
-        let mut options = match self.options {
+        let options_dir = self
+            .options
+            .as_ref()
+            .and_then(|p| p.parent())
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+        let mut options: CollectOptions = match self.options {
             Some(path) => serde_json::from_slice(&std::fs::read(path)?)?,
             None => CollectOptions::default(),
         };
+        if let Some(path) = options.fingerprint_file.as_mut()
+            && !path.is_absolute()
+        {
+            *path = options_dir.join(&*path);
+        }
+        if let Some(path) = self.fingerprints {
+            options.fingerprint_file = Some(std::fs::canonicalize(path)?);
+        }
         if let Some(value) = self.php_command {
             options.php_command = value;
         }

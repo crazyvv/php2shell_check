@@ -82,3 +82,15 @@ test('PHP command and package audit are independent explicit collection switches
   get('collectPhpCommand').checked=false;get('collectPhpCommand').onchange();
   assert.equal(get('collectCommand').textContent,'php-selfcheck collect --package-audit > host-report.json');
 });
+
+test('fingerprint rendering shows evidence as plain text and handles older records',async()=>{
+  const app=setup();await flush();
+  function flatten(e){return [e,...(e.children||[]).flatMap(flatten)];}
+  const f={library:{version:'company-1',rule_count:1,source:'custom_extend'},matches:[{id:'own',name:'<script>unsafe</script>',category:'framework',relation:'external_reference',versions:['2.0'],confidence:'low',advice:'仅线索',evidence:[{source:'resource_path',pattern:'/wp-content/',detail:'资源路径命中',url:'https://app.example/',resource_origin:'https://other.example'}]}]};
+  app.context.fingerprintFixture=f;
+  const view=vm.runInContext('fingerprintsView(fingerprintFixture)',app.context);
+  const content=flatten(view).map(n=>n.textContent).join('\n');
+  assert(content.includes('<script>unsafe</script>'));assert(content.includes('仅外部资源引用'));assert(content.includes('https://other.example'));assert(content.includes('company-1'));
+  assert(!flatten(view).some(n=>n.innerHTML));
+  assert.equal(vm.runInContext('fingerprintsView(undefined).children.length',app.context),0);
+});

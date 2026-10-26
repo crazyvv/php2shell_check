@@ -15,7 +15,7 @@ TARGETS = {
     "x86_64-pc-windows-msvc": ("windows-x86_64", "php-selfcheck.exe", ".zip"),
 }
 FILES = ["README.md", "THIRD_PARTY_NOTICES.md", "config.open.example.json",
-         "collector.options.example.json", "nginx.conf.example"]
+         "collector.options.example.json", "fingerprints.example.json", "nginx.conf.example"]
 
 
 def version():

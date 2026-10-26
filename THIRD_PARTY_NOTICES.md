@@ -13,3 +13,14 @@ The reference table is not independent verification of the linked vendor
 advisories. Results explicitly preserve this distinction, as well as the
 unverified status of uploaded host reports. HTTP header classification and
 local evidence handling are implemented in Rust in this project.
+
+Passive technology signature coverage in `rules/fingerprints.json` is adapted
+from the detector ideas and published signatures in
+[spcaeo/php2shell-check](https://github.com/spcaeo/php2shell-check), commit
+`78afcd9b8d88e76549f5d2fc9d61e9f077fe081e`. The matching engine, configurable
+schema, bounded evidence handling and conservative verdict integration are
+implemented in Rust in this project. The upstream license and notice are
+preserved in [licenses/spcaeo-php2shell-check-MIT.txt](licenses/spcaeo-php2shell-check-MIT.txt)
+and [licenses/spcaeo-php2shell-check-NOTICE.txt](licenses/spcaeo-php2shell-check-NOTICE.txt).
+Technology hints do not establish a runtime, ownership or patch status. This
+integration does not imply affiliation or endorsement.

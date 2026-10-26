@@ -377,7 +377,7 @@ fn get(state: &State, user: &str, path: &str, query: &str) -> Result<Response> {
         "/api/me" => {
             return Ok(json_response(
                 200,
-                json!({"headers_only":state.config.headers_only,"user":user,"rule_date":scanner::RULE_DATE,"allowed_ports":state.config.allowed_ports,"scope_configured":state.config.allow_without_whitelist || !state.config.allowed_networks.is_empty(),"allow_anonymous":state.config.allow_anonymous,"allow_without_whitelist":state.config.allow_without_whitelist}),
+                json!({"fingerprint_library":state.config.fingerprint_library.clone().unwrap_or_else(crate::fingerprints::builtin).metadata(),"headers_only":state.config.headers_only,"user":user,"rule_date":scanner::RULE_DATE,"allowed_ports":state.config.allowed_ports,"scope_configured":state.config.allow_without_whitelist || !state.config.allowed_networks.is_empty(),"allow_anonymous":state.config.allow_anonymous,"allow_without_whitelist":state.config.allow_without_whitelist}),
             ));
         }
         _ => {}
@@ -442,6 +442,7 @@ pub(crate) fn job_response(
             "checked_at",
             "assessment",
             "host_evidence",
+            "fingerprints",
         ];
         writer.write_record(keys)?;
         for result in record["results"].as_array().context("记录损坏")? {
@@ -616,6 +617,8 @@ mod tests {
             allow_anonymous: false,
             probe_multipart: false,
             headers_only: false,
+            fingerprint_file: None,
+            fingerprint_library: None,
             allow_without_whitelist: false,
             allowed_networks: vec![],
             allowed_domains: vec![],

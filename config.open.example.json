@@ -9,5 +9,6 @@
   "users": {},
   "probe_multipart": false,
   "headers_only": false,
+  "fingerprint_file": null,
   "admins": {}
 }

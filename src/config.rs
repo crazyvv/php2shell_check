@@ -12,6 +12,11 @@ use subtle::ConstantTimeEq;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     pub public_origin: String,
+    /// Optional JSON rules, resolved relative to the configuration directory.
+    #[serde(default)]
+    pub fingerprint_file: Option<String>,
+    #[serde(skip)]
+    pub fingerprint_library: Option<std::sync::Arc<crate::fingerprints::Library>>,
     #[serde(default)]
     pub allow_anonymous: bool,
     #[serde(default)]
@@ -142,6 +147,17 @@ impl Config {
                 .trim_end_matches('.')
                 .to_lowercase();
         }
+        self.fingerprint_library = if let Some(file) = &self.fingerprint_file {
+            let file = Path::new(file);
+            let resolved = if file.is_absolute() {
+                file.to_path_buf()
+            } else {
+                path.parent().unwrap_or(Path::new(".")).join(file)
+            };
+            Some(crate::fingerprints::Library::load(&resolved)?)
+        } else {
+            Some(crate::fingerprints::builtin())
+        };
         let db = Path::new(&self.database);
         if !db.is_absolute() {
             self.database = path

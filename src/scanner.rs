@@ -200,7 +200,10 @@ async fn request_method(u: &Url, ip: IpAddr, kind: RequestKind) -> Result<Reply>
         client.get(u.clone())
     };
     let mut response = request
-        .header("User-Agent", "Company-PHP-SelfCheck/0.2")
+        .header(
+            "User-Agent",
+            format!("Company-PHP-SelfCheck/{}", env!("CARGO_PKG_VERSION")),
+        )
         .header("Accept", "text/html,application/json")
         .header("Accept-Encoding", "identity")
         .header("Connection", "close")
@@ -299,6 +302,15 @@ pub fn version_risk(v: &str) -> (&'static str, &'static str) {
     ("无法判断", "规则未覆盖此版本，不推断安全状态")
 }
 pub fn inspect(headers: &[(String, String)], body: &[u8]) -> Value {
+    inspect_with_library(headers, body, None, &crate::fingerprints::builtin())
+}
+pub fn inspect_with_library(
+    headers: &[(String, String)],
+    body: &[u8],
+    url: Option<&Url>,
+    library: &crate::fingerprints::Library,
+) -> Value {
+    let fingerprints = library.detect(url, headers, body);
     let mut evidence = vec![];
     let mut versions = BTreeSet::new();
     let mut strong = false;
@@ -328,7 +340,7 @@ pub fn inspect(headers: &[(String, String)], body: &[u8]) -> Value {
         evidence.push(json!({"kind":"page_reference","detail":"页面引用 .php 路径，仅为弱线索"}));
     }
     let versions: Vec<_> = versions.into_iter().collect();
-    let (verdict, reason) = if versions.len() > 1 {
+    let (mut verdict, mut reason) = if versions.len() > 1 {
         ("无法判断", "检测到多个版本声明，请核查代理头与后端实例")
     } else if let Some(v) = versions.first() {
         version_risk(v)
@@ -337,8 +349,11 @@ pub fn inspect(headers: &[(String, String)], body: &[u8]) -> Value {
             "已识别 PHP 特征，版本未知",
             "需主机侧核验；特征可被隐藏或伪造",
         )
-    } else if weak {
-        ("疑似使用 PHP", "页面路径不足以确认运行 PHP")
+    } else if weak || fingerprints["php_hint"] == true {
+        (
+            "疑似使用 PHP",
+            "页面路径或 CMS/框架特征仅为线索；PHP 版本及实际实例仍需核实",
+        )
     } else {
         ("未发现 PHP 特征", "不代表未使用 PHP，也不代表无漏洞")
     };
@@ -352,7 +367,17 @@ pub fn inspect(headers: &[(String, String)], body: &[u8]) -> Value {
         assessment["review_priority"] = json!("high");
     }
 
-    json!({"version_warnings":warnings,"assessment":assessment,"verdict":verdict,"reason":reason,"versions":versions,"evidence":evidence,"cves":["CVE-2026-109618","CVE-2026-109619"],"rule_date":RULE_DATE,"source":SOURCE,"rule_provenance":"2026-10-23 已核对 PHP 官方 GHSA 与 php-src NEWS","exploitation_verified":false})
+    if fingerprints["blocked_hint"] == true {
+        verdict = "无法完成检测";
+        reason = "命中挑战页特征，响应可能来自防护层；不能据此判断业务实例，不自动绕过";
+        assessment["patch"] = crate::assessment::observation(
+            "unknown",
+            "intermediary_response",
+            "none",
+            "挑战页响应不能确认业务实例的补丁状态；版本声明仅作为原始线索保留",
+        );
+    }
+    json!({"fingerprints":fingerprints,"version_warnings":warnings,"assessment":assessment,"verdict":verdict,"reason":reason,"versions":versions,"evidence":evidence,"cves":["CVE-2026-109618","CVE-2026-109619"],"rule_date":RULE_DATE,"source":SOURCE,"rule_provenance":"2026-10-23 已核对 PHP 官方 GHSA 与 php-src NEWS","exploitation_verified":false})
 }
 async fn headers_using<F, Fut>(mut fetch: F) -> Result<(Reply, IpAddr, Vec<Value>)>
 where
@@ -373,10 +398,14 @@ where
     Ok((reply, ip, trace))
 }
 pub async fn scan(target: &str, cfg: &Config) -> Value {
+    let library = cfg
+        .fingerprint_library
+        .clone()
+        .unwrap_or_else(crate::fingerprints::builtin);
     let trace = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
     let mut result = if cfg.headers_only {
         let trace = trace.clone();
-        scan_using_mode(
+        scan_using_library(
             target,
             move |u: Url| {
                 let trace = trace.clone();
@@ -394,13 +423,19 @@ pub async fn scan(target: &str, cfg: &Config) -> Value {
                 }
             },
             false,
+            library,
         )
         .await
     } else {
-        scan_using(target, |u: Url| async move {
-            let ips = resolve(&u, cfg).await?;
-            Ok((request_pinned(&u, ips[0]).await?, ips[0]))
-        })
+        scan_using_library(
+            target,
+            |u: Url| async move {
+                let ips = resolve(&u, cfg).await?;
+                Ok((request_pinned(&u, ips[0]).await?, ips[0]))
+            },
+            true,
+            library,
+        )
         .await
     };
     if cfg.headers_only {
@@ -471,6 +506,7 @@ pub async fn scan(target: &str, cfg: &Config) -> Value {
     }
     result
 }
+#[cfg(test)]
 async fn scan_using<F, Fut>(target: &str, fetch: F) -> Value
 where
     F: FnMut(Url) -> Fut,
@@ -478,17 +514,36 @@ where
 {
     scan_using_mode(target, fetch, true).await
 }
-async fn scan_using_mode<F, Fut>(target: &str, mut fetch: F, follow_redirects: bool) -> Value
+#[cfg(test)]
+async fn scan_using_mode<F, Fut>(target: &str, fetch: F, follow_redirects: bool) -> Value
 where
     F: FnMut(Url) -> Fut,
     Fut: std::future::Future<Output = Result<(Reply, IpAddr)>>,
 {
-    let mut result = json!({"target":target,"checked_at":chrono::Utc::now().to_rfc3339(),"hops":[],"assessment":crate::assessment::remote(&[],&[],&[])});
+    scan_using_library(
+        target,
+        fetch,
+        follow_redirects,
+        crate::fingerprints::builtin(),
+    )
+    .await
+}
+async fn scan_using_library<F, Fut>(
+    target: &str,
+    mut fetch: F,
+    follow_redirects: bool,
+    library: std::sync::Arc<crate::fingerprints::Library>,
+) -> Value
+where
+    F: FnMut(Url) -> Fut,
+    Fut: std::future::Future<Output = Result<(Reply, IpAddr)>>,
+{
+    let mut result = json!({"target":target,"checked_at":chrono::Utc::now().to_rfc3339(),"hops":[],"fingerprints":library.detect(None,&[],&[]),"assessment":crate::assessment::remote(&[],&[],&[])});
     let outcome: Result<()> = async {
         let mut u = normalize(target)?;
         for hop in 0..4 {
             let (r, ip) = fetch(u.clone()).await?;
-            let findings = inspect(&r.headers, &r.body);
+            let findings = inspect_with_library(&r.headers, &r.body, Some(&u), &library);
             result["hops"].as_array_mut().unwrap().push(
                 json!({"url":u.as_str(),"ip":ip.to_string(),"status":r.status,"findings":findings}),
             );
@@ -499,6 +554,18 @@ where
             result["connected_ip"] = json!(ip.to_string());
             result["http_status"] = json!(r.status);
             result["body_truncated"] = json!(r.truncated);
+            if result["fingerprints"]["blocked_hint"] == true {
+                result["verdict"] = json!("无法完成检测");
+                result["reason"] =
+                    json!("命中挑战页特征，响应可能来自防护层；不能据此判断业务实例，不自动绕过");
+                result["assessment"]["patch"] = crate::assessment::observation(
+                    "unknown",
+                    "intermediary_response",
+                    "none",
+                    "挑战页响应不能确认业务实例的补丁状态；版本声明仅作为原始线索保留",
+                );
+                break;
+            }
             let location = r
                 .headers
                 .iter()
@@ -533,6 +600,64 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn configured_fingerprints_use_only_fetched_responses_and_stop_at_challenges() {
+        let library=crate::fingerprints::Library::from_json(r#"{"schema":"php-selfcheck-fingerprints/v1","version":"custom","mode":"extend","rules":[{"id":"own","name":"Our PHP app","category":"framework","runtime":"php","any":[{"source":"header","header":"x-app","pattern":"^our-app$"}]}]}"#).unwrap();
+        let mut calls = 0;
+        let r = scan_using_library(
+            "https://example.com",
+            |_| {
+                calls += 1;
+                async {
+                    Ok((
+                        Reply {
+                            status: 200,
+                            headers: vec![("x-app".into(), "our-app".into())],
+                            body: vec![],
+                            truncated: false,
+                        },
+                        "10.0.0.1".parse().unwrap(),
+                    ))
+                }
+            },
+            true,
+            library,
+        )
+        .await;
+        assert_eq!(calls, 1);
+        assert_eq!(r["verdict"], "疑似使用 PHP");
+        assert_eq!(r["fingerprints"]["library"]["version"], "custom");
+        assert_eq!(
+            r["hops"][0]["findings"]["fingerprints"]["matches"][0]["evidence"][0]["url"],
+            "https://example.com/"
+        );
+        let mut calls = 0;
+        let r = scan_using_library(
+            "https://example.com",
+            |_| {
+                calls += 1;
+                async {
+                    Ok((
+                        Reply {
+                            status: 302,
+                            headers: vec![
+                                ("cf-mitigated".into(), "challenge".into()),
+                                ("location".into(), "https://elsewhere.invalid/".into()),
+                            ],
+                            body: vec![],
+                            truncated: false,
+                        },
+                        "10.0.0.1".parse().unwrap(),
+                    ))
+                }
+            },
+            true,
+            crate::fingerprints::builtin(),
+        )
+        .await;
+        assert_eq!(calls, 1);
+        assert_eq!(r["verdict"], "无法完成检测");
+    }
     #[tokio::test]
     async fn headers_mode_falls_back_only_on_405_501_and_never_reads_body() {
         use tokio::{
@@ -639,6 +764,8 @@ mod tests {
             allow_anonymous: false,
             probe_multipart: false,
             headers_only: false,
+            fingerprint_file: None,
+            fingerprint_library: None,
             allow_without_whitelist: false,
             allowed_networks: vec!["10.0.0.0/8".into()],
             allowed_domains: vec![],

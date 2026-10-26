@@ -97,3 +97,45 @@ fn php_command_collection_is_explicit_and_json_override_can_disable_it() {
     assert!(disabled.status.success());
     assert!(!marker.exists());
 }
+
+#[test]
+fn fingerprint_export_validate_and_check_override_work_without_exposing_file_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("fingerprints.json");
+    let export = bin()
+        .args(["fingerprints", "export", "--output", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(export.status.success());
+    let repeated = bin()
+        .args(["fingerprints", "export", "--output", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!repeated.status.success());
+    let checked = bin()
+        .args(["fingerprints", "validate", "--file", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(checked.status.success());
+    let metadata: Value = serde_json::from_slice(&checked.stdout).unwrap();
+    assert_eq!(metadata["rule_count"], 51);
+    let cfg = dir.path().join("config.json");
+    std::fs::write(&cfg, include_str!("../config.open.example.json")).unwrap();
+    std::fs::write(&file, include_str!("../fingerprints.example.json")).unwrap();
+    let result = bin()
+        .args([
+            "check",
+            "http://127.0.0.1",
+            "--json",
+            "--config",
+            cfg.to_str().unwrap(),
+            "--fingerprints",
+            file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(3));
+    let r: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(r["fingerprints"]["library"]["version"], "company-1");
+    assert!(!String::from_utf8_lossy(&result.stdout).contains(dir.path().to_str().unwrap()));
+}

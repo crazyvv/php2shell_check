@@ -93,3 +93,25 @@ fn invalid_host_path_protocol_and_limits_are_rejected() {
         .is_err()
     );
 }
+
+#[test]
+fn custom_web_fingerprints_resolve_relative_to_options_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let rules = dir.path().join("fingerprints.json");
+    std::fs::write(&rules, include_str!("../fingerprints.example.json")).unwrap();
+    let options = dir.path().join("options.json");
+    std::fs::write(&options, r#"{"fingerprint_file":"fingerprints.json"}"#).unwrap();
+    let cfg = Cli::parse_from(["collect", "--options", options.to_str().unwrap()])
+        .collect
+        .resolve()
+        .unwrap();
+    assert_eq!(cfg.fingerprint_file.as_ref(), Some(&rules));
+    assert!(!cfg.web_probe);
+    std::fs::write(&rules, "invalid JSON").unwrap();
+    assert!(
+        Cli::parse_from(["collect", "--options", options.to_str().unwrap()])
+            .collect
+            .resolve()
+            .is_err()
+    );
+}

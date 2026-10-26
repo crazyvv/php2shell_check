@@ -11,6 +11,8 @@ fn cfg() -> Config {
         allow_anonymous: false,
         probe_multipart: false,
         headers_only: false,
+        fingerprint_file: None,
+        fingerprint_library: None,
         allow_without_whitelist: false,
         allowed_networks: vec!["10.0.0.0/8".into()],
         allowed_domains: vec![],
@@ -365,7 +367,12 @@ async fn portal_auth_isolation_exports_and_imports() {
         .await
         .unwrap();
     assert_eq!(csv.status(), 200);
-    assert!(csv.text().await.unwrap().contains("https://example.com/"));
+    let csv_text = csv.text().await.unwrap();
+    assert!(
+        csv_text.contains("https://example.com/")
+            && csv_text.contains("fingerprints")
+            && csv_text.contains("builtin_version")
+    );
     let report = json!({"target":"example.com","report":{"schema":"php-selfcheck-host/v1","verdict":"已确认修复","runtime_observations":[{"sapi":"cli","scope":"web_runtime","version":"8.2.34","settings":{"session.upload_progress.enabled":"1"}}]},"review":{"sapi":"fpm-fcgi","upload_progress":"disabled","patch_status":"fixed_claimed","patch_vendor":"Test LTS","package_revision":"8.2.34-vendor1","advisory_url":"https://vendor.example/security"}});
     assert_eq!(
         p.post("/api/reports", report)
