@@ -105,4 +105,13 @@
 - 页面与管理员共用特征展示，按文本渲染规则/名称，不执行 HTML；JSON/CSV 保留特征；历史缺少新字段仍可展示。
 - 发布版在本机通过启动及本机 API 检查；内置完整 JSON 和扩展示例分别校验为 51 / 52 条有效规则。未扫描公网或公司实际业务。规则只提供证据线索，不能证明运行环境、后端归属或补丁状态。
 
-GitHub Actions 将为 v0.3.0 执行 Windows MSVC 与 Linux musl 的原生测试、构建及附件回验，最终状态以 release-manifests 分支回执为准。
+GitHub Actions 已完成 Windows MSVC 与 Linux musl 的原生测试、构建、启动检查；上传后下载附件回验 SHA-256，再发布 v0.3.0。已取得 release-manifests 成功回执并核对源提交与标签一致。
+
+发布地址：https://github.com/crazyvv/php2shell_check/releases/tag/v0.3.0
+
+云端记录：https://github.com/crazyvv/php2shell_check/actions/runs/40266325395
+
+本地另外验证 Linux musl 包包含自定义示例、完整库和 MIT 许可：解压后使用相对路径加载 company-1 库，实际启动服务后 API 显示 52 条规则，不暴露服务器文件路径。
+
+- `php-selfcheck-v0.3.0-linux-x86_64.tar.gz`：`db23dfec40f9dfe611bef7d076412ce4f6deeff0b7275466f6d82b3703c7c514`
+- `php-selfcheck-v0.3.0-windows-x86_64.zip`：`0f195e1e7f06719cf4952ecd4cae3362b3182139feebc09afdb45d1181539b49`
