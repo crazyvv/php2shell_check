@@ -1,0 +1,10 @@
+{
+  "state": "failed",
+  "tag": "v0.5.1",
+  "repository": "crazyvv/php2shell_check",
+  "build_result": "failure",
+  "publish_result": "success",
+  "source_commit": "dbdc58acd8cdf780e8f568fcab8e8c6998b04d1d",
+  "workflow_run": "https://github.com/crazyvv/php2shell_check/actions/runs/40801955149",
+  "recorded_at": "2026-10-29T01:42:33.555741+00:00"
+}
