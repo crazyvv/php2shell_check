@@ -1,0 +1,39 @@
+{
+  "state": "published",
+  "tag": "v0.6.1",
+  "repository": "crazyvv/php2shell_check",
+  "source_commit": "06935eade2d473cc0f2ef2a92b7860ccc06d6123",
+  "release_url": "https://github.com/crazyvv/php2shell_check/releases/tag/v0.6.1",
+  "published_at": "2026-10-29T02:33:23Z",
+  "checksums": {
+    "php-selfcheck-v0.6.1-linux-x86_64.tar.gz": "06f39c86cb9cf7f1bf50bf166ca82932d7525cea4e37c1f45d6029a5013ccbfc",
+    "php-selfcheck-v0.6.1-windows-x86_64.zip": "4484fd6cfe0a9f61f25d4be047a4c727300e4ba35c3ddc2007078c9fd58f9e51"
+  },
+  "verified_by_download": true,
+  "workflow_run": "https://github.com/crazyvv/php2shell_check/actions/runs/40806465474",
+  "browser_check": {
+    "state": "passed",
+    "checks": [
+      "evidence-fonts-colors",
+      "text-only-rendering",
+      "knowledge-page-attribution",
+      "knowledge-page-responsive-content",
+      "rule-edit-validation-save",
+      "live-activation",
+      "conflict-preserves-draft",
+      "logout-cleanup",
+      "passive-surface-clues",
+      "settings-import-validation-save",
+      "settings-live-policy",
+      "settings-conflict-preserves-draft",
+      "progress-permissions-and-defaults"
+    ],
+    "evidence_style": {
+      "family": "ui-monospace, \"Cascadia Code\", Consolas, monospace",
+      "weight": "700",
+      "color": "rgb(143, 28, 23)",
+      "background": "rgb(249, 220, 213)"
+    }
+  },
+  "recorded_at": "2026-10-29T02:33:23.928277+00:00"
+}
