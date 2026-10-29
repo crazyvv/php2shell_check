@@ -1,0 +1,14 @@
+{
+  "state": "failed",
+  "tag": "v0.5.0",
+  "repository": "crazyvv/php2shell_check",
+  "build_result": "failure",
+  "publish_result": "success",
+  "source_commit": "022d6c736ad013d3675a7d06f367d7ad9e388282",
+  "workflow_run": "https://github.com/crazyvv/php2shell_check/actions/runs/40800940486",
+  "browser_check": {
+    "state": "failed",
+    "error": "page.waitForFunction: Timeout 30000ms exceeded.\n    at main (/home/runner/work/php2shell_check/php2shell_check/scripts/browser-smoke.cjs:65:133)"
+  },
+  "recorded_at": "2026-10-29T01:36:57.933415+00:00"
+}
