@@ -148,3 +148,8 @@ GitHub Actions 已完成 Windows MSVC 与 Linux musl 的原生测试、构建、
 - 可选本地 PHP 和受保护 Web 报告增加序列化、会话存储处理器及进度清理设置，导入材料仍为未经独立核验。
 - Rust 1.91.1：69 项测试通过；前端 Node：9 项通过。fmt、clippy -D warnings、发布工作流 actionlint 通过。
 - Windows/Linux 发布与真实 Chrome 结果以后续发布回执为准。
+
+
+### v0.5.0 发布门禁与 v0.5.1 复核
+
+v0.5.0 未发布：Actions 40800940486 的真实浏览器测试等待配置校验提示超时，门禁已阻止公开附件。本地 Chromium 154 对同一服务完成两次全流程验证，均通过；尚未确定首次 CI 超时根因。v0.5.1 增加配置校验 HTTP 响应断言及 UI 错误诊断，并为配置面板的状态提示和 JSON 字体补充样式。发布仍要求 Windows/Linux 和真实 Chrome 全部通过。

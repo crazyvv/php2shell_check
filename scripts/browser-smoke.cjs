@@ -62,7 +62,13 @@ async function main(){
     await page.waitForFunction(()=>document.getElementById('settingsNotice').textContent.includes('已导入'));
     assert(!(await page.locator('#settingsDocument').inputValue()).includes('SECRET_HASH'));
     const policy=JSON.parse(await page.locator('#settingsDocument').inputValue());policy.headers_only=true;policy.collection_defaults.php_command=true;
-    await page.locator('#settingsDocument').fill(JSON.stringify(policy));await page.locator('#settingsValidate').click();await page.waitForFunction(()=>document.getElementById('settingsNotice').textContent.includes('校验通过'));
+    await page.locator('#settingsDocument').fill(JSON.stringify(policy));
+    const validationResponsePromise=page.waitForResponse(r=>r.url().endsWith('/api/admin/settings/validate') && r.request().method()==='POST');
+    await page.locator('#settingsValidate').click();
+    const validationResponse=await validationResponsePromise,validation=await validationResponse.json();
+    assert.equal(validationResponse.status(),200,`Configuration validation HTTP failure: ${validation.error || 'unknown'}`);assert.equal(validation.valid,true);
+    try{await page.waitForFunction(()=>document.getElementById('settingsNotice').textContent.includes('校验通过'));}
+    catch(e){throw Error(`Configuration validation returned HTTP 200 but UI did not settle: ${await page.locator('#settingsNotice').textContent()}; page errors: ${errors.join('; ')}`,{cause:e});}
     publicMeta=await(await page.request.get(base+'/api/me')).json();assert.equal(publicMeta.probe_multipart_allowed,false);
     await page.locator('#settingsSave').click();await page.waitForFunction(()=>document.getElementById('settingsMeta').textContent.includes('修订 1'));
     publicMeta=await(await page.request.get(base+'/api/me')).json();assert.equal(publicMeta.probe_multipart_allowed,true);assert.equal(publicMeta.headers_only,true);assert.equal(publicMeta.collection_defaults.php_command,true);
