@@ -1649,3 +1649,30 @@ async fn administrator_settings_are_authorized_atomic_hot_and_persistent() {
         .unwrap();
     assert_eq!(logincheck["revision"], 1);
 }
+
+#[tokio::test]
+async fn knowledge_page_is_public_attributed_and_non_operational() {
+    let p = Portal::new().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for path in ["/knowledge", "/knowledge/"] {
+        let response = client
+            .get(format!("{}{}", p.base, path))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/html; charset=utf-8"
+        );
+        let body = response.text().await.unwrap();
+        assert!(body.contains("五类利用链：前置条件、传播路径与防守点"));
+        assert!(body.contains("caffb96b0a165eb3796828a9a1dc7445ec7ff77d"));
+        assert!(body.contains("docs/ANALYSIS.md"));
+        assert!(body.contains("docs/EXPLOITATION.md"));
+        assert!(body.contains("docs/PATCH_ANALYSIS.md"));
+        assert!(body.contains("不提供可执行载荷"));
+        assert!(!body.contains("PHPSESSID=huge_session"));
+        assert!(!body.contains("system()"));
+    }
+}

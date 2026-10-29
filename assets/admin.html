@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>管理员 · PHP 安全自查台</title><link rel="stylesheet" href="/admin.css"><script src="/admin-shared.js" defer></script><script src="/admin.js" defer></script></head>
-<body><header><div class="brand"><span class="mark">P</span><div>PHP 安全自查台<small>管理员 · 扫描汇总与特征维护</small></div></div><a href="/">返回扫描页</a></header>
+<body><header><div class="brand"><span class="mark">P</span><div>PHP 安全自查台<small>管理员 · 扫描汇总与特征维护</small></div></div><nav class="topnav"><a href="/knowledge">漏洞知识库</a><a href="/">返回扫描页</a></nav></header>
 <main><div id="notice" role="status" aria-live="polite"></div>
 <section class="card" id="loginPanel"><h1>管理员登录</h1><p>输入独立管理员账号和密码后查看全站历史扫描并维护特征库。普通扫描页无需管理员密码。</p>
 <form id="loginForm"><div class="importrow"><div><label for="adminUser">管理员账号</label><input id="adminUser" value="admin" autocomplete="username" maxlength="64" required></div><div><label for="adminPassword">密码</label><input id="adminPassword" type="password" autocomplete="current-password" maxlength="4096" required></div><button id="loginButton" class="primary" type="submit">登录</button></div></form>

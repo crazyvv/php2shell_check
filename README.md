@@ -417,6 +417,12 @@ docker run -d --name php-selfcheck --restart unless-stopped \
 
 主机/PHP/Web 报告同时采集 strict_mode、use_only_cookies、进度字段名、更新频率及最小间隔，供核对实际 Web 配置；不采集会话路径和会话内容。参见 [检测与复核流程](docs/ikow-detection-review.md)，其中说明社区判据的误报边界及已实现流程。
 
+## 漏洞知识库
+
+访问 `/knowledge` 可查看面向开发、安全和运维的独立知识页面。页面整理五类利用链的前置条件、传播阶段、防守观测点、补丁覆盖范围、证据升级顺序和在野 IOC 的使用方法，并链接 PHP 官方 GHSA 与 ikow/php2shell-poc 的 ANALYSIS、EXPLOITATION、PATCH_ANALYSIS 原文。
+
+知识页无需登录，方便团队成员查看；不读取数据库或展示扫描结果。每节区分官方基线、社区研究结论和本项目判据，标注来源仓库快照。页面省略可执行载荷、内存地址推导、命令执行与故障注入步骤。版本化的详细复核说明仍保存在 [ikow 检测逻辑复核](docs/ikow-detection-review.md)。
+
 ## 管理员在线配置
 
 登录 `/admin` 后可在“扫描权限与程序配置”面板修改开关，或直接编辑配置 JSON。可在线维护 `allow_anonymous`、`allow_without_whitelist`、网段/域名/端口白名单、`probe_multipart`、`probe_upload_progress`、`headers_only` 和 `collection_defaults`。支持只校验、保存生效、修订冲突保护和变更审计；失败时保留原配置。后台保存到 SQLite 的 `runtime_settings`，重启恢复并优先于启动文件中的对应字段，原 JSON 不被改写。恢复启动文件管理时，请停服务并备份数据库后删除该表中 `id=1` 的覆盖记录。

@@ -187,6 +187,10 @@ async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response> {
     }
     if req.method() == axum::http::Method::GET {
         let asset = match req.uri().path() {
+            "/knowledge" | "/knowledge/" => Some((
+                include_str!("../assets/knowledge.html"),
+                "text/html; charset=utf-8",
+            )),
             "/shared.js" => Some((
                 include_str!("../assets/shared.js"),
                 "text/javascript; charset=utf-8",
