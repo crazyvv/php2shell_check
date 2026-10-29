@@ -1,0 +1,14 @@
+{
+  "state": "failed",
+  "tag": "v0.5.2",
+  "repository": "crazyvv/php2shell_check",
+  "build_result": "failure",
+  "publish_result": "success",
+  "source_commit": "b6b7d71bbcc6ed172986848ec89f33b63f2bcc14",
+  "workflow_run": "https://github.com/crazyvv/php2shell_check/actions/runs/40802279758",
+  "browser_check": {
+    "state": "failed",
+    "error": "AssertionError [ERR_ASSERTION]: Configuration validation HTTP failure: \u914d\u7f6e\u6821\u9a8c\u5931\u8d25\uff1adisk I/O error\n\n400 !== 200\n\n    at main (/home/runner/work/php2shell_check/php2shell_check/scripts/browser-smoke.cjs:69:12)"
+  },
+  "recorded_at": "2026-10-29T01:49:03.124279+00:00"
+}
