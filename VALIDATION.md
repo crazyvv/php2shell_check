@@ -184,3 +184,11 @@ Linux musl 静态程序通过本机启动和真实 Chromium 全流程：管理�
 新增无需登录的 `/knowledge` 静态知识页，整理 ikow/php2shell-poc 三份文档中的五类利用链、补丁边界、证据升级和 IOC 使用方式。页面标注作者、原始链接、快照提交及“社区结论未逐条独立核验”，并省略可执行载荷、地址推导、命令执行和故障注入步骤。集成测试验证匿名可访问、三份来源和快照均存在，且不会嵌入选取的操作性字符串；真实 Chrome 验证五个链路卡片、来源链接和完整页面截图。
 
 本地结果：Rust 1.91.1 locked/offline 73 项通过，Node 前端 10 项通过，fmt、clippy `-D warnings`、actionlint、Linux musl 静态构建及启动检查通过。真实 Chromium 验证知识页、来源链接、桌面布局，并继续通过证据样式、规则编辑和管理员配置流程。Windows/Linux 正式状态以发布回执为准。
+
+## v0.7.0 — 证据矩阵、运行时对比与离线 PoC
+
+固定阅读 ikow/php2shell-poc `caffb96b0a165eb3796828a9a1dc7445ec7ff77d`、murrez/php2shell `7de30d56887d20e4bfc1b3f90b47f067917742c7`、spcaeo/php2shell-check `78afcd9b8d88e76549f5d2fc9d61e9f077fe081e`。新增纯 Rust `evidence_lab`：五类链路分别输出前置条件、传播、防守点和缺失证据，所有链保持 incomplete / exploitation_verified=false。
+
+`offline-poc` 使用内置合成数据验证 E1–E6 六项证据规则，不读取配置、不连接目标、不执行 PHP、不构造漏洞载荷；实际命令输出网络请求、目标连接、PHP 命令、漏洞载荷和漏洞触发均为 0。`compare-reports` 离线比较两份主机报告，按 SAPI 强制区分 CLI 与 Web。页面对同一目标最近两份导入材料自动生成 `host_comparison`，只保留受限布尔修复声明，结论不升级为独立验证。
+
+知识页增加五链缺失证据矩阵、Web/CLI 表、修复前后示例、六规则说明及三个社区来源快照。本地复核：Rust locked/offline 78 项通过，Node 前端 11 项通过，fmt、clippy `-D warnings`、actionlint 和发布标签一致性校验通过；真实 Chromium 已验证五链矩阵、六规则、来源、运行时对比和现有管理员流程。多后端回归测试要求全部已观测 Web 实例达到基线，避免只取第一条报告。跨平台构建及发布回执在标签发布后补录。

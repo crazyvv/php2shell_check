@@ -24,3 +24,12 @@ preserved in [licenses/spcaeo-php2shell-check-MIT.txt](licenses/spcaeo-php2shell
 and [licenses/spcaeo-php2shell-check-NOTICE.txt](licenses/spcaeo-php2shell-check-NOTICE.txt).
 Technology hints do not establish a runtime, ownership or patch status. This
 integration does not imply affiliation or endorsement.
+
+The defensive chain descriptions and evidence-lab design also reference the
+published research in [ikow/php2shell-poc](https://github.com/ikow/php2shell-poc),
+commit `caffb96b0a165eb3796828a9a1dc7445ec7ff77d`, and the SAPI/event
+classification concepts described by [murrez/php2shell](https://github.com/murrez/php2shell),
+commit `7de30d56887d20e4bfc1b3f90b47f067917742c7`. Both repositories are MIT
+licensed. No exploit payload, target interaction code or executable source was
+copied into this project; the evidence engine and synthetic fixtures are an
+independent Rust implementation.

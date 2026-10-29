@@ -19,3 +19,5 @@ pub mod rulebook;
 pub mod surfaces;
 
 pub mod settings;
+
+pub mod evidence_lab;

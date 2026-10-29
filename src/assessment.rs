@@ -205,5 +205,13 @@ pub fn host(payload: &Value) -> Value {
         })
         .unwrap_or_default();
     let audit = json!({"status":audit["status"].as_str().unwrap_or("not_collected"),"os":audit["os"],"instances":instances,"reference_source":audit["reference_source"],"reference_date":audit["reference_date"],"rules_independently_verified":false,"confidence":"unverified","detail":"提交材料中的参考匹配，不提升远程结论或确认修复"});
-    json!({"report_limits":payload["report"]["report_limits"],"php_command":payload["report"]["php_command"],"package_audit":audit,"middleware":middleware,"trust":"开发者提交，未经独立核验","association":"用户指定关联目标，未验证实例归属","runtime_observations":observations,"review":payload["review"],"patch_status":"unverified","confidence":"unverified","verdict_promoted":false})
+    let patch = &payload["report"]["patch_evidence"];
+    let patch_evidence = json!({
+        "running_image_matches_claimed":patch["running_image_matches"].as_bool().unwrap_or(false),
+        "workers_restarted_claimed":patch["workers_restarted"].as_bool().unwrap_or(false),
+        "all_backends_sampled_claimed":patch["all_backends_sampled"].as_bool().unwrap_or(false),
+        "source":"developer_supplied_host_report",
+        "independently_verified":false
+    });
+    json!({"report_limits":payload["report"]["report_limits"],"php_command":payload["report"]["php_command"],"package_audit":audit,"middleware":middleware,"trust":"开发者提交，未经独立核验","association":"用户指定关联目标，未验证实例归属","runtime_observations":observations,"review":payload["review"],"patch_evidence":patch_evidence,"patch_status":"unverified","confidence":"unverified","verdict_promoted":false})
 }

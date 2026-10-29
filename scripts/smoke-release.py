@@ -24,6 +24,10 @@ def run(binary, *args, expected=0):
 def smoke(binary):
     run(binary, "--version")
     run(binary, "--help")
+    evidence = json.loads(run(binary, "offline-poc", "--json").stdout)
+    assert evidence["summary"] == {"all_passed": True, "passed": 6, "total": 6}
+    assert all(value == 0 for value in evidence["guarantees"].values())
+    assert [row["id"] for row in evidence["chain_matrix"]["chains"]] == list("ABCDE")
     with tempfile.TemporaryDirectory() as temp:
         directory = Path(temp)
         with socket.socket() as sock:

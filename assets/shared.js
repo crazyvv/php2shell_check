@@ -127,6 +127,24 @@ function hostEvidenceView(e) {
   }
   return wrap;
 }
+function hostComparisonView(c) {
+  const wrap=node('div',undefined,'runtime-comparison');
+  wrap.append(node('strong','最近两份主机材料：修复前后对比（未经独立核验）'));
+  const before=c?.before_imported_at ? new Date(c.before_imported_at*1000).toLocaleString() : '较早材料';
+  const after=c?.after_imported_at ? new Date(c.after_imported_at*1000).toLocaleString() : '最新材料';
+  wrap.append(node('p',`${before} → ${after}。Web 与 CLI 分列；CLI 版本不会替代 Web/FPM 结论。`,'fine'));
+  const labels={'web.version':'Web PHP 版本','web.version_status':'Web 版本基线','web.sapi':'Web SAPI','web.upload_progress':'Web upload_progress','web.serialize_handler':'Web serialize_handler','cli.version':'CLI PHP 版本','patch_evidence.complete_claimed':'修复材料完整声明'};
+  for(const item of (Array.isArray(c?.changes)?c.changes:[])){
+    const value=v=>v===null || v===undefined || v===''?'未知':Array.isArray(v)?(v.length?v.join('、'):'未知'):typeof v==='object'?JSON.stringify(v):String(v);
+    const row=node('p',undefined,item.changed?'comparison-change':'fine');
+    row.append(node('strong',(labels[item.field] || item.field)+'：'),node('code',value(item.before),'technology-version'),node('span',' → '),node('code',value(item.after),'technology-version'));
+    if(item.changed)row.append(node('span',' · 已变化'));
+    wrap.append(row);
+  }
+  wrap.append(node('p',c?.conclusion==='remediation_evidence_improved'?'材料显示修复证据有所改善；仍需独立核对实际运行 worker。':'现有材料仍不足以形成完整修复证据。','comparison-conclusion'));
+  wrap.append(node('p','该对比不确认漏洞利用，也不把提交声明升级为已验证修复。','fine'));
+  return wrap;
+}
 function renderJobs(jobs, endpoint='/api/jobs', showOwners=false, options={}) {
   $('jobs').replaceChildren();
   if (!jobs.length) { $('jobs').append(node('p','当前没有扫描结果。提交业务地址开始自查。','empty')); return; }
@@ -151,6 +169,7 @@ function renderJobs(jobs, endpoint='/api/jobs', showOwners=false, options={}) {
         verdict.append(badge(r.verdict)); evidence.append(evidenceSummary(r));
         evidence.append(assessmentView(r.assessment),fingerprintsView(r.fingerprints));
         if(r.version_warnings?.length) evidence.append(node('p',`需优先复核的版本声明：${r.version_warnings.join('、')}。多版本冲突时仍需确认实际后端。`,'fine'));
+        if(r.host_comparison) evidence.append(hostComparisonView(r.host_comparison));
         for(const h of r.host_evidence || []) evidence.append(hostEvidenceView(h.assessment));
         evidence.append(nextStep(r),details('查看完整检测依据',r));
         row.append(target,verdict,evidence); tbody.append(row);

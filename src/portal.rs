@@ -158,6 +158,18 @@ pub(crate) fn enrich(db: &Connection, user: &str, record: &mut Value) -> Result<
                 let payload:Value=serde_json::from_str(&payload).unwrap_or(Value::Null);
                 Ok(json!({"id":row.get::<_,String>(0)?,"imported_at":row.get::<_,f64>(1)?,"assessment":crate::assessment::host(&payload)}))
             })?.collect::<std::result::Result<Vec<_>,_>>()?;
+            if evidence.len() >= 2
+                && let Ok(mut comparison) = crate::evidence_lab::compare_reports(
+                    &evidence[1]["assessment"],
+                    &evidence[0]["assessment"],
+                )
+            {
+                comparison["before_imported_at"] = evidence[1]["imported_at"].clone();
+                comparison["after_imported_at"] = evidence[0]["imported_at"].clone();
+                comparison["before_report_id"] = evidence[1]["id"].clone();
+                comparison["after_report_id"] = evidence[0]["id"].clone();
+                result["host_comparison"] = comparison;
+            }
             result["host_evidence"] = json!(evidence);
         }
     }
@@ -466,6 +478,7 @@ pub(crate) fn job_response(
             "checked_at",
             "assessment",
             "host_evidence",
+            "host_comparison",
             "fingerprints",
         ];
         writer.write_record(keys)?;

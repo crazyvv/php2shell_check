@@ -35,7 +35,7 @@ fn runtime_scope_and_untrusted_claims_are_preserved() {
         {"sapi":"cli","scope":"web_runtime","binary":"/opt/php/bin/php","loaded_ini":"/etc/php/cli/php.ini","settings":{"session.upload_progress.enabled":"1"}},
         {"sapi":"fpm-fcgi","settings":{"session.upload_progress.enabled":"0"}},
         {"sapi":"apache2handler","settings":{"session.upload_progress.enabled":null}}
-    ]},"review":{"patch_status":"fixed_claimed"}}));
+    ],"patch_evidence":{"running_image_matches":true,"workers_restarted":true,"all_backends_sampled":true,"ignored_text":"must not pass"}},"review":{"patch_status":"fixed_claimed"}}));
     assert_eq!(a["runtime_observations"][0]["scope"], "cli_only");
     assert_eq!(a["runtime_observations"][0]["binary"], "/opt/php/bin/php");
     assert_eq!(
@@ -46,6 +46,11 @@ fn runtime_scope_and_untrusted_claims_are_preserved() {
     assert_eq!(a["runtime_observations"][1]["upload_progress"], "disabled");
     assert_eq!(a["runtime_observations"][2]["upload_progress"], "unknown");
     assert_eq!(a["patch_status"], "unverified");
+    assert_eq!(a["patch_evidence"]["running_image_matches_claimed"], true);
+    assert_eq!(a["patch_evidence"]["workers_restarted_claimed"], true);
+    assert_eq!(a["patch_evidence"]["all_backends_sampled_claimed"], true);
+    assert_eq!(a["patch_evidence"]["independently_verified"], false);
+    assert!(a["patch_evidence"].get("ignored_text").is_none());
     assert_eq!(a["verdict_promoted"], false);
     assert!(assessment::review(&json!({"advisory_url":"javascript:alert(1)"})).is_err());
     assert!(assessment::review(&json!({"upload_progress":"confirmed_exploitable"})).is_err());

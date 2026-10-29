@@ -145,6 +145,18 @@ test('passive upload and error clues render as text with explicit review limitat
   assert(text.includes('外部表单引用'));assert(text.includes('/<img onerror=unsafe>'));assert(text.includes('会话解码错误不是 CVE 证明'));assert(text.includes('不提交表单'));assert(text.includes('达到分析上限'));assert(!nodes.some(n=>n.innerHTML));
 });
 
+test('runtime comparison separates Web and CLI changes and preserves uncertainty',()=>{
+  const {context}=setup();context.comparison={before_imported_at:1,after_imported_at:2,conclusion:'remediation_evidence_improved',changes:[
+    {field:'web.version',before:['8.4.26'],after:['8.4.27'],changed:true},
+    {field:'cli.version',before:['8.5.12'],after:['8.5.12'],changed:false},
+    {field:'patch_evidence.complete_claimed',before:false,after:true,changed:true}
+  ]};
+  const element=vm.runInContext('hostComparisonView(comparison)',context);
+  const flat=e=>[e,...(e.children||[]).flatMap(flat)],nodes=flat(element),text=nodes.map(n=>n.textContent).join(' ');
+  assert(text.includes('Web PHP 版本'));assert(text.includes('CLI PHP 版本'));assert(text.includes('材料显示修复证据有所改善'));
+  assert(text.includes('不确认漏洞利用'));assert(text.includes('未经独立核验'));assert(!nodes.some(n=>n.innerHTML));
+});
+
 test('administrator settings import only online fields, validate, save and preserve conflicts',async()=>{
   const elements=new Map(),get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
   let revision=0,policy={allow_anonymous:true,allow_without_whitelist:true,allowed_networks:[],allowed_domains:[],allowed_ports:[],probe_multipart:false,headers_only:false,collection_defaults:{php_command:false,package_audit:false,middleware:false,php_modules:false,ports:false,web_probe:false}};

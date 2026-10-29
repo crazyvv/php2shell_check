@@ -434,6 +434,34 @@ async fn portal_auth_isolation_exports_and_imports() {
         linked["results"][0]["host_evidence"][0]["assessment"]["verdict_promoted"],
         false
     );
+    let before = json!({"target":"example.com","report":{"schema":"php-selfcheck-host/v1","runtime_observations":[{"sapi":"fpm-fcgi","version":"8.4.26","settings":{"session.upload_progress.enabled":"On","session.serialize_handler":"php"}}]},"review":{"patch_status":"missing_claimed"}});
+    assert_eq!(
+        p.post("/api/reports", before)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        201
+    );
+    let after = json!({"target":"example.com","report":{"schema":"php-selfcheck-host/v1","runtime_observations":[{"sapi":"fpm-fcgi","version":"8.4.27","settings":{"session.upload_progress.enabled":"Off","session.serialize_handler":"php_serialize"}}],"patch_evidence":{"vendor_advisory":"https://vendor.example/advisory","package_revision":"8.4.27-vendor1","running_image_matches":true,"workers_restarted":true,"all_backends_sampled":true}},"review":{"patch_status":"fixed_claimed","patch_vendor":"Test LTS","package_revision":"8.4.27-vendor1","advisory_url":"https://vendor.example/advisory"}});
+    assert_eq!(
+        p.post("/api/reports", after).send().await.unwrap().status(),
+        201
+    );
+    let compared = p
+        .request(&format!("/api/jobs/{id}"), "alice")
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let comparison = &compared["results"][0]["host_comparison"];
+    assert_eq!(comparison["before"]["web"][0]["version"], "8.4.26");
+    assert_eq!(comparison["after"]["web"][0]["version"], "8.4.27");
+    assert_eq!(comparison["conclusion"], "remediation_evidence_improved");
+    assert_eq!(comparison["patch_independently_verified"], false);
+    assert_eq!(comparison["exploitability_confirmed"], false);
     assert!(
         p.request(&format!("/api/jobs/{id}?format=csv"), "alice")
             .send()
@@ -1671,6 +1699,11 @@ async fn knowledge_page_is_public_attributed_and_non_operational() {
         assert!(body.contains("docs/ANALYSIS.md"));
         assert!(body.contains("docs/EXPLOITATION.md"));
         assert!(body.contains("docs/PATCH_ANALYSIS.md"));
+        assert!(body.contains("五类链路的缺失证据矩阵"));
+        assert!(body.contains("offline-poc --json"));
+        assert!(body.contains("compare-reports --before"));
+        assert!(body.contains("7de30d56887d20e4bfc1b3f90b47f067917742c7"));
+        assert!(body.contains("78afcd9b8d88e76549f5d2fc9d61e9f077fe081e"));
         assert!(body.contains("不提供可执行载荷"));
         assert!(!body.contains("PHPSESSID=huge_session"));
         assert!(!body.contains("system()"));

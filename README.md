@@ -2,7 +2,7 @@
 
 面向开发团队的 PHP 安全自查工具，使用 Rust 实现 Web 服务、远程检测器和 Linux 主机采集器。中文 Web 界面内嵌于程序，扫描结果保存在 SQLite，无需外部数据库服务。运行服务不需要 Node.js。
 
-开发者页面只展示当前扫描，管理员通过独立账号访问历史记录与汇总。支持免密码扫描、可选资产白名单、检测证据展示、主机材料导入和 JSON/CSV 导出。
+开发者页面只展示当前扫描，管理员通过独立账号访问历史记录与汇总。支持免密码扫描、可选资产白名单、检测证据展示、主机材料导入和 JSON/CSV 导出；同一目标的最近两份主机材料可按 Web／CLI 范围进行修复前后对比。
 
 ## 下载与运行
 
@@ -377,6 +377,8 @@ Web 界面可导入 collect 报告，或不选文件直接填写手工复核：W
 
 导入材料通过**同一账号、相同标准化目标 URL**关联，最新 5 份以 `host_evidence` 附在记录和导出中，包含导入时间；这是展示时关联，不会改写历史扫描结论。不同路径、不同账号和重定向后的其他目标不会自动拼接。
 
+同一目标至少有两份包含运行时条目的材料时，结果增加 `host_comparison`：比较最近两份材料的 Web 版本及基线、Web SAPI、Web upload_progress、Web serialize_handler、CLI 版本和修复材料完整声明。SAPI 决定证据范围，报告中手写的 `scope` 不能把 `cli` 或 `phpdbg` 冒充成 Web 证据。对比结论只表示材料是否改善，`patch_independently_verified` 与 `exploitability_confirmed` 始终为 false。
+
 官方说明：关闭 upload_progress 只阻断部分 session 路径，完整修复仍需包含两个漏洞完整补丁的 PHP 版本或已核实回补包。
 
 - https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w
@@ -419,9 +421,29 @@ docker run -d --name php-selfcheck --restart unless-stopped \
 
 ## 漏洞知识库
 
-访问 `/knowledge` 可查看面向开发、安全和运维的独立知识页面。页面整理五类利用链的前置条件、传播阶段、防守观测点、补丁覆盖范围、证据升级顺序和在野 IOC 的使用方法，并链接 PHP 官方 GHSA 与 ikow/php2shell-poc 的 ANALYSIS、EXPLOITATION、PATCH_ANALYSIS 原文。
+访问 `/knowledge` 可查看面向开发、安全和运维的独立知识页面。页面整理五类利用链的前置条件、传播阶段、防守观测点与缺失证据矩阵，也说明 Web／CLI 范围、修复前后报告、补丁覆盖、证据升级和在野 IOC。来源链接包括 PHP 官方 GHSA，以及固定提交的 ikow/php2shell-poc、murrez/php2shell、spcaeo/php2shell-check。
 
 知识页无需登录，方便团队成员查看；不读取数据库或展示扫描结果。每节区分官方基线、社区研究结论和本项目判据，标注来源仓库快照。页面省略可执行载荷、内存地址推导、命令执行与故障注入步骤。版本化的详细复核说明仍保存在 [ikow 检测逻辑复核](docs/ikow-detection-review.md)。
+
+## 离线证据 PoC 与报告对比
+
+`offline-poc` 用内置合成 JSON 验证六项证据规则。该命令不读取配置，不解析目标地址，不打开网络连接，不执行 PHP，也不构造 multipart、会话、LFI、OOM 或命令载荷：
+
+```bash
+php-selfcheck offline-poc
+php-selfcheck offline-poc --json
+```
+
+六项规则覆盖 CLI/Web 隔离、版本线索边界、配置范围、SAPI 适用面、五链缺失证据和修复前后对比。JSON 的 `guarantees` 明确记录网络请求、目标连接、PHP 命令、漏洞载荷和漏洞触发均为 0；`chain_matrix` 为 A–E 五条链逐项列出前置、传播、防守点与缺失证据。
+
+可离线比较两份 `php-selfcheck-host/v1` 报告，单份文件限制为 1 MiB：
+
+```bash
+php-selfcheck compare-reports --before before.json --after after.json
+php-selfcheck compare-reports --before before.json --after after.json --json
+```
+
+命令只读取本地文件。达到上游版本基线、关闭 upload_progress 或提交完整修复字段都不会变成独立验证。字段和合成样本说明见 [离线证据实验](docs/evidence-lab.md)。
 
 ## 管理员在线配置
 
@@ -457,7 +479,7 @@ cargo clippy --locked --all-targets -- -D warnings
 
 功能测试串行执行，避免受限 CPU 环境中 PBKDF2 认证与并行测试争用而触发应用 15 秒期限；应用期限不作放宽。
 
-测试覆盖基线边界、特征误报与 Cookie 脱敏、危险 URL、混合 DNS、特殊地址、逐跳范围校验、重定向上限、HTTP 阻断状态、固定 IP 的真实模拟 HTTP 传输、响应体截断、TLS 协议拒绝、PBKDF2 密码校验、配置权限、HTTP 认证、Host/Origin、任务隔离、报告导入、CSV 导出与重启中断。网络测试只访问进程内本地测试服务，不扫描真实资产。生产扫描规则没有本地地址放行开关。
+测试覆盖基线边界、特征误报与 Cookie 脱敏、危险 URL、混合 DNS、特殊地址、逐跳范围校验、重定向上限、HTTP 阻断状态、固定 IP 的真实模拟 HTTP 传输、响应体截断、TLS 协议拒绝、PBKDF2 密码校验、配置权限、HTTP 认证、Host/Origin、任务隔离、报告导入、Web/CLI 隔离、修复前后对比、离线六规则 PoC、CSV 导出与重启中断。网络测试只访问进程内本地测试服务，不扫描真实资产。生产扫描规则没有本地地址放行开关。
 
 `node --test tests/ui-state.cjs` 可选验证前端任务状态（需 Node.js，运行服务不需要）。
 

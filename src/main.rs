@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use php_selfcheck::{
     collector,
     config::{self, Config},
-    fingerprints, portal, scanner,
+    evidence_lab, fingerprints, portal, scanner,
 };
 use std::{collections::BTreeMap, net::IpAddr, path::PathBuf};
 #[derive(Parser)]
@@ -73,6 +73,24 @@ enum Command {
     },
     /// 在当前 Linux 主机执行只读采集，JSON 输出至 stdout
     Collect(collector::CollectArgs),
+    /// 使用内置合成数据离线验证六项证据规则；不连接目标、不执行 PHP
+    OfflinePoc {
+        /// 输出完整 JSON，而不是人类可读摘要
+        #[arg(long)]
+        json: bool,
+    },
+    /// 离线比较两份主机运行时报告，严格区分 Web 与 CLI
+    CompareReports {
+        /// 修复前的 php-selfcheck-host/v1 JSON
+        #[arg(long)]
+        before: PathBuf,
+        /// 修复后的 php-selfcheck-host/v1 JSON
+        #[arg(long)]
+        after: PathBuf,
+        /// 输出完整 JSON，而不是人类可读摘要
+        #[arg(long)]
+        json: bool,
+    },
 }
 #[derive(Subcommand)]
 enum FingerprintCommand {
@@ -251,6 +269,32 @@ async fn main() -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&collector::collect_with_options(&options).await)?
             );
+        }
+        Command::OfflinePoc { json: as_json } => {
+            let result = evidence_lab::offline_poc()?;
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{}", evidence_lab::human_poc(&result));
+            }
+            ensure!(
+                result["summary"]["all_passed"] == true,
+                "离线证据规则验证失败"
+            );
+        }
+        Command::CompareReports {
+            before,
+            after,
+            json: as_json,
+        } => {
+            let before = evidence_lab::read_report(&before)?;
+            let after = evidence_lab::read_report(&after)?;
+            let result = evidence_lab::compare_reports(&before, &after)?;
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{}", evidence_lab::human_comparison(&result));
+            }
         }
     }
     Ok(())

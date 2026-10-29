@@ -30,6 +30,26 @@
     <article><span class="chain-id">E</span><h3>FPM 跨请求陈旧反序列化状态</h3><p><b>前置：</b>同一 FPM worker 被复用，前一请求在会话解码期间异常中止，后一请求较早进入上传解析。</p><p><b>传播：</b>后一请求在正常初始化前接触前一请求残留的反序列化状态。</p><p><b>防守：</b>更新并重启 FPM 池；关联 worker PID、两次请求和错误日志。单次响应无法证明命中同一 worker。</p></article>
   </div><p class="fine">链名称和根因模型来自下方 ikow 技术分析。页面省略载荷布局、内存地址推导、命令执行及故障注入步骤。</p></section>
 
+  <section class="card"><h2>五类链路的缺失证据矩阵</h2><p>矩阵用于阻止“单一线索升级成漏洞结论”。程序的结构化版本由 <code>evidence_lab::chain_matrix</code> 生成；任何一行仍有缺失证据时，状态保持 <b>incomplete</b>。</p><div class="knowledge-table chain-matrix"><table><thead><tr><th>链</th><th>必须同时具备</th><th>常见缺失证据</th><th>主要防守点</th></tr></thead><tbody>
+    <tr><td><b>A</b></td><td>Web 上传进度写入、应用 LFI、会话存储可被包含</td><td>实际 Web 配置；LFI 代码审计；会话目录与包含路径关系</td><td>修复 LFI，隔离会话存储与可包含路径</td></tr>
+    <tr><td><b>B</b></td><td>相关运行构建、受控反序列化输入、对象生命周期路径</td><td>不可信调用点审计；受控环境的崩溃栈或内存检测报告</td><td>升级 PHP，消除不可信反序列化</td></tr>
+    <tr><td><b>C</b></td><td>处理器配置不一致、共享会话存储、对象生命周期证据</td><td>跨目录/池/虚拟主机配置对照；共享范围证据</td><td>统一 handler，隔离存储，重启全部 worker</td></tr>
+    <tr><td><b>D</b></td><td>实际 apache2handler、相关运行映像、解析/关闭路径崩溃栈</td><td>Web SAPI 实证；运行映像；服务端栈与请求关联</td><td>完整补丁，重启 Apache worker，保留崩溃遥测</td></tr>
+    <tr><td><b>E</b></td><td>复用 FPM worker、前后请求同一 PID、异常中止与残留状态</td><td>worker PID 关联；连续请求日志；服务端异常状态证据</td><td>完整补丁，重启 FPM 池，逐后端复核</td></tr>
+  </tbody></table></div><div class="knowledge-callout warning"><strong>判据</strong><p>响应头、Cookie、500/502、响应时间、错误关键词、单次上传响应或达到版本基线，都不能单独补齐任何一条链。</p></div></section>
+
+  <section class="card"><h2>Web／CLI 运行时与修复前后报告</h2><div class="knowledge-table"><table><thead><tr><th>材料</th><th>能说明什么</th><th>不能替代什么</th></tr></thead><tbody>
+    <tr><td>CLI：<code>php -r</code> / 本机采集器</td><td>该命令二进制的版本、CLI SAPI 和 CLI INI</td><td>不能代表 Web/FPM 使用的二进制、池配置、容器或 worker</td></tr>
+    <tr><td>Web：受鉴权辅助脚本</td><td>本次请求命中的 Web SAPI、版本和选定 INI</td><td>不能代表全部负载均衡后端或所有 worker</td></tr>
+    <tr><td>软件包与进程材料</td><td>安装修订、运行映像是否一致、是否需要重启</td><td>厂商回补范围仍须对照公告；提交材料仍未经独立核验</td></tr>
+  </tbody></table></div>
+  <div class="before-after"><article><span>修复前示例</span><b>Web FPM · PHP 8.4.26</b><p>低于上游基线；CLI 即使为 8.5.12，也不能覆盖 Web 风险线索。</p></article><i>→</i><article><span>修复后示例</span><b>Web FPM · PHP 8.4.27</b><p>同时检查厂商公告、包修订、运行映像、worker 重启和全部后端；结论仍标为提交材料。</p></article></div>
+  <p>同一目标导入至少两份主机材料后，扫描结果会自动展示最近两份报告的 Web 版本、SAPI、upload_progress、serialize_handler、CLI 版本和修复材料变化。也可离线运行 <code>php-selfcheck compare-reports --before before.json --after after.json --json</code>。</p></section>
+
+  <section class="card"><h2>离线无害 PoC：六项证据规则</h2><p>运行 <code>php-selfcheck offline-poc --json</code>。它只读取程序内置的两份合成 JSON，不解析目标地址，不打开套接字，不执行 PHP，也不生成 multipart、会话、LFI、OOM 或命令载荷。</p><div class="evidence-rules">
+    <div><b>E1</b><span>CLI 与 Web 运行时严格分离</span></div><div><b>E2</b><span>版本只产生基线线索</span></div><div><b>E3</b><span>配置证据绑定运行时范围</span></div><div><b>E4</b><span>SAPI 只约束链路适用面</span></div><div><b>E5</b><span>五类链路必须列出缺失证据</span></div><div><b>E6</b><span>前后对比不升级为独立验证</span></div>
+  </div><p class="fine">JSON 输出包含 <code>network_requests: 0</code>（网络请求为 0）、<code>target_connections: 0</code>、<code>exploit_payloads: 0</code>、六项规则逐项依据、前后报告对比和五链矩阵。该 PoC 验证的是本项目的证据判定器，不验证 PHP 漏洞。</p></section>
+
   <section class="card"><h2>补丁覆盖什么，仍要核对什么</h2><div class="knowledge-table"><table><thead><tr><th>层面</th><th>补丁或控制目的</th><th>复核要点</th></tr></thead><tbody>
     <tr><td>OOM 处理</td><td>避免内存失败后继续使用不完整的执行状态</td><td>确认实际实例达到官方基线、包修订已安装、全部 worker 已重启</td></tr>
     <tr><td>早期全局重置</td><td>在 multipart 处理前清理序列化相关状态</td><td>逐个核对 FPM 池、容器和后端，避免仍有旧 worker</td></tr>
@@ -49,10 +69,13 @@
   <section class="card"><h2>在野情报与 IOC 的使用方式</h2><p>EXPLOITATION.md 汇总时间线、公开研究、攻击模式、恶意软件活动、网络基础设施、文件哈希和请求特征。这些内容变化快，不能作为永久黑名单。应保留来源和观测时间，在 SIEM 中把异常 multipart、PHP/worker 错误、子进程、会话文件和出站连接关联起来；单个 IP、User-Agent 或默认字段名都可能被复用或修改。</p>
     <div class="knowledge-callout"><strong>本项目的处理</strong><p>不把社区 IOC 内置为漏洞判定，也不自动拦截。管理员可将已验证的规则部署到现有 WAF/IDS/SIEM；上线前应做语法校验、TLS 可见性检查、请求体截断测试和合法上传误报基线。</p></div></section>
 
-  <section class="card sources"><h2>来源与版本</h2><p>主要社区来源为 Qi Deng 的 <a href="https://github.com/ikow/php2shell-poc" target="_blank" rel="noreferrer">ikow/php2shell-poc</a>，本页阅读快照提交 <code>caffb96b0a165eb3796828a9a1dc7445ec7ff77d</code>（2026-10-29）。研究仓库采用 MIT License。本页为独立整理，没有复制 PoC 载荷。</p><ul>
+  <section class="card sources"><h2>来源与版本</h2><p>本页在 2026-10-29 固定阅读三个 MIT 项目快照，并以 PHP 官方 GHSA 为版本基线。项目独立实现证据模型，没有复制可执行载荷。</p><ul>
+    <li><a href="https://github.com/ikow/php2shell-poc" target="_blank" rel="noreferrer">ikow/php2shell-poc</a> · <code>caffb96b0a165eb3796828a9a1dc7445ec7ff77d</code>：五类链路、根因与补丁边界。</li>
     <li><a href="https://github.com/ikow/php2shell-poc/blob/main/docs/ANALYSIS.md" target="_blank" rel="noreferrer">ANALYSIS.md</a>：漏洞根因、五类利用链、版本矩阵、检测和缓解。</li>
     <li><a href="https://github.com/ikow/php2shell-poc/blob/main/docs/EXPLOITATION.md" target="_blank" rel="noreferrer">EXPLOITATION.md</a>：在野利用时间线、攻击模式、IOC 与公开研究跟踪。</li>
     <li><a href="https://github.com/ikow/php2shell-poc/blob/main/docs/PATCH_ANALYSIS.md" target="_blank" rel="noreferrer">PATCH_ANALYSIS.md</a>：补丁机制、独立加固改动和缓解边界。</li>
+    <li><a href="https://github.com/murrez/php2shell" target="_blank" rel="noreferrer">murrez/php2shell</a> · <code>7de30d56887d20e4bfc1b3f90b47f067917742c7</code>：借鉴 SAPI 分流、事件分类和链路条件展示；未整合主动故障、LFI 或执行能力。</li>
+    <li><a href="https://github.com/spcaeo/php2shell-check" target="_blank" rel="noreferrer">spcaeo/php2shell-check</a> · <code>78afcd9b8d88e76549f5d2fc9d61e9f077fe081e</code>：借鉴每项结论附证据、受阻即未知、版本隐藏不猜测和来源 URL 记录。</li>
     <li><a href="https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w" target="_blank" rel="noreferrer">PHP 官方 GHSA：CVE-2026-109618</a></li>
     <li><a href="https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp" target="_blank" rel="noreferrer">PHP 官方 GHSA：CVE-2026-109619</a></li>
   </ul><p class="fine">社区文档中的在野事件、补丁缺口和相关 CVE 属于来源作者的跟踪结论，本项目没有逐条独立验证。官方公告和发行版厂商通告应优先于本页。页面随程序版本发布，不会追溯重写历史扫描结果。</p></section>
