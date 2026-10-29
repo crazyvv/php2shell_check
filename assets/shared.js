@@ -10,8 +10,8 @@ async function api(path, body) {
 const states = {queued:'排队中',running:'检测中',done:'已完成',failed:'任务异常',interrupted:'服务重启中断，请复测'};
 function badge(verdict) { return node('span', verdict, 'badge ' + (verdict === '疑似受影响' ? 'risk' : /待核验|未知|疑似使用/.test(verdict) ? 'pending' : '')); }
 function details(label, data) { const d = node('details'); d.append(node('summary',label),node('pre',JSON.stringify(data,null,2))); return d; }
-const statusNames = {unknown:'未知',header_claim:'响应头声明',form_hint:'页面表单线索',field_hint:'页面字段线索',responded:'收到响应，未确认 PHP 解析',rejected:'当前请求被拒绝',below_upstream_fix:'低于上游修复基线',meets_upstream_fix:'达到上游基线，待核验',eol:'停止上游维护，补丁未知',supported_branch:'上游支持分支',enabled:'开启（提交材料声明）',disabled:'关闭（提交材料声明）',fixed_claimed:'已修复（提交材料声明）',missing_claimed:'未修复（提交材料声明）'};
-const sourceNames={response_header:'HTTP 响应头',page_reference:'页面线索',not_observed:'未观测到',not_tested:'未进行主动检查',minimal_multipart_control:'小型表单请求'};
+const statusNames = {session_cookie_hint:'观测到会话 Cookie，配置仍未知',unknown:'未知',header_claim:'响应头声明',form_hint:'页面表单线索',field_hint:'页面字段线索',responded:'收到响应，未确认 PHP 解析',rejected:'当前请求被拒绝',below_upstream_fix:'低于上游修复基线',meets_upstream_fix:'达到上游基线，待核验',eol:'停止上游维护，补丁未知',supported_branch:'上游支持分支',enabled:'开启（提交材料声明）',disabled:'关闭（提交材料声明）',fixed_claimed:'已修复（提交材料声明）',missing_claimed:'未修复（提交材料声明）'};
+const sourceNames={minimal_upload_progress_observation:'普通文本文件 POST',response_header:'HTTP 响应头',page_reference:'页面线索',not_observed:'未观测到',not_tested:'未进行主动检查',minimal_multipart_control:'小型表单请求'};
 const confidenceNames={none:'未知',low:'低可信线索',unverified:'提交材料，未独立核验'};
 function emphasizedText(text,terms,tone='info') {
   text=typeof text==='string'?text:'';terms=Array.isArray(terms)?terms:[];
@@ -36,9 +36,9 @@ function nextStep(r){
 }
 function assessmentView(a) {
   const wrap=node('div');
-  for (const [key,label] of [['web_server','Web 服务器'],['sapi','SAPI'],['multipart','multipart'],['upload_progress','upload_progress'],['patch','补丁状态'],['lifecycle','版本维护状态']]) {
+  for (const [key,label] of [['web_server','Web 服务器'],['sapi','SAPI'],['multipart','multipart'],['upload_progress','upload_progress'],['upload_progress_probe','上传进度基础观察'],['patch','补丁状态'],['lifecycle','版本维护状态']]) {
     const o=a?.[key]; if(!o) continue;
-    const tone=['below_upstream_fix','eol'].includes(o.status)?'risk':['meets_upstream_fix','form_hint','field_hint','responded'].includes(o.status)?'warning':'';
+    const tone=['below_upstream_fix','eol'].includes(o.status)?'risk':['meets_upstream_fix','form_hint','field_hint','responded','session_cookie_hint'].includes(o.status)?'warning':'';
     const row=node('p',undefined,'assessment-fact '+tone);row.append(node('strong',label+'：'),node('span',statusNames[o.status] || o.status,'fact-status'));row.append(node('span',` · ${o.detail || ''}〔${sourceNames[o.source] || o.source || '未知来源'} / ${confidenceNames[o.confidence] || o.confidence || '未知可信度'}〕`));wrap.append(row);
   }
   const surface=a?.surfaces;
@@ -87,6 +87,7 @@ function hostEvidenceView(e) {
     const settings=r.settings || {},row=node('p',undefined,'fine');
     row.append(node('strong','会话配置（当前采集实例）：'));
     row.append(node('code',`serialize_handler=${settings['session.serialize_handler'] ?? '未知'} · save_handler=${settings['session.save_handler'] ?? '未知'} · upload_progress.cleanup=${settings['session.upload_progress.cleanup'] ?? '未知'}`,'technology-version'));wrap.append(row);
+    const controls=node('p',undefined,'fine');controls.append(node('strong','会话控制与进度配置：'),node('code',`strict_mode=${settings['session.use_strict_mode'] ?? '未知'} · only_cookies=${settings['session.use_only_cookies'] ?? '未知'} · progress.name=${settings['session.upload_progress.name'] ?? '未知'} · freq=${settings['session.upload_progress.freq'] ?? '未知'} · min_freq=${settings['session.upload_progress.min_freq'] ?? '未知'}`,'technology-version'));wrap.append(controls);
   }
   if(e.middleware && !['not_collected','disabled'].includes(e.middleware.status)) {
     wrap.append(node('b','Web 中间件与监听端口（提交材料，未经独立核验）'));

@@ -163,3 +163,18 @@ v0.5.1 更新版本号时误改了 heck 的锁定版本，已在 v0.5.2 恢复 h
 Actions 40802279758 的新增诊断将 v0.5.2 的失败定位为在线校验调用完整 Config.validate 时重新读取活动数据库返回 `disk I/O error`。v0.5.3 拆分纯字段校验，在线更新只检查白名单/开关/账号可用性/采集依赖，不读取部署数据库或特征文件。增加以无效数据库文件和不存在规则路径为条件的回归测试，确保在线字段校验不依赖这些文件。启动校验仍保留完整路径和规则加载。
 
 v0.5.3 本地复核：Rust 1.91.1 locked/offline 共 70 项测试通过；Node 前端 9 项通过；fmt、clippy -D warnings、actionlint、版本标签一致性校验通过。
+
+
+### v0.5.3 发布确认
+
+已公开发布 https://github.com/crazyvv/php2shell_check/releases/tag/v0.5.3 。Actions 40803315989 Windows/Linux 构建、真实 Chrome、下载 SHA-256 回验均通过，回执来源提交 015c1e9a8fb583d217cc9cfbcd70504bd581149a。
+
+## v0.6.0 — ikow 检测判据与最小基础观察
+
+仅阅读 ikow/php2shell-poc 提交 caffb96b0a165eb3796828a9a1dc7445ec7ff77d；不执行其 PoC/利用程序。新选项默认关闭，具备管理员权限与本次选择双重开关，独立 JSON 字段，向后兼容旧在线策略。单次有界普通 .txt 上传，不带 Cookie/Authorization/自选 SID，不回读或跟随跳转；Cookie 只保留布尔观察，不提升配置/CVE 结论。实际 Web 采集增加选定会话控制项，响应增加会话销毁错误类别。完整取舍、前提和误报说明见 docs/ikow-detection-review.md。
+
+本地首轮双测试线程出现既有认证用例 408 超时；新基础观察传输与判据测试已通过。改用串行功能测试复核并同步 CI，保持应用请求 15 秒期限不变，避免受限 CPU 的认证测试争用。
+
+v0.6.0 串行完整复核：Rust 1.91.1 locked/offline 72 项通过，Node 前端 10 项通过；包括实际回环传输验证请求体上限、纯文本文件、无认证/Cookie/SID、禁止跳转，Cookie/反射不升级结论、旧策略迁移默认关闭及管理员双开关。
+
+Linux musl 静态程序通过本机启动和真实 Chromium 全流程：管理员允许/强制响应头、开发者默认不选、取消强制后选项可用、配置冲突及退出清理均通过。发布包含两份能力复核文档，不含真实 config.json 或 SQLite 数据库。Windows/Linux 正式状态以发布回执为准。

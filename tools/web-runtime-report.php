@@ -10,7 +10,7 @@ if (!defined('PHP_SELFCHECK_AUTHORIZED') || PHP_SELFCHECK_AUTHORIZED !== true) {
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
 $settings = [];
-foreach (['session.upload_progress.enabled','session.upload_progress.cleanup','session.serialize_handler','session.save_handler', 'file_uploads', 'enable_post_data_reading',
+foreach (['session.upload_progress.enabled','session.upload_progress.cleanup','session.serialize_handler','session.save_handler','session.use_strict_mode','session.use_only_cookies','session.upload_progress.name','session.upload_progress.freq','session.upload_progress.min_freq', 'file_uploads', 'enable_post_data_reading',
           'memory_limit', 'post_max_size', 'upload_max_filesize', 'max_file_uploads',
           'max_multipart_body_parts', 'fatal_error_backtraces'] as $key) {
     $value = ini_get($key);

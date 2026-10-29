@@ -11,6 +11,7 @@ fn cfg() -> Config {
         admins: BTreeMap::new(),
         allow_anonymous: false,
         probe_multipart: false,
+        probe_upload_progress: false,
         headers_only: false,
         fingerprint_file: None,
         fingerprint_library: None,
@@ -1450,6 +1451,7 @@ async fn administrator_settings_are_authorized_atomic_hot_and_persistent() {
     );
     let mut doc: Value = serde_json::from_str(initial["document"].as_str().unwrap()).unwrap();
     doc["probe_multipart"] = json!(true);
+    doc["probe_upload_progress"] = json!(true);
     doc["headers_only"] = json!(true);
     let before = client
         .get(format!("{}/api/me", p.base))
@@ -1460,6 +1462,29 @@ async fn administrator_settings_are_authorized_atomic_hot_and_persistent() {
         .await
         .unwrap();
     assert_eq!(before["probe_multipart_allowed"], false);
+    assert_eq!(before["probe_upload_progress_allowed"], false);
+    assert_eq!(
+        admin_post(
+            &client,
+            &p,
+            "/api/scan",
+            json!({"targets":["127.0.0.1"],"probe_upload_progress":true})
+        )
+        .await
+        .status(),
+        403
+    );
+    assert_eq!(
+        admin_post(
+            &client,
+            &p,
+            "/api/scan",
+            json!({"targets":["127.0.0.1"],"probe_upload_progress":"true"})
+        )
+        .await
+        .status(),
+        400
+    );
     let denied = admin_post(
         &client,
         &p,
@@ -1543,6 +1568,7 @@ async fn administrator_settings_are_authorized_atomic_hot_and_persistent() {
         .await
         .unwrap();
     assert_eq!(active["probe_multipart_allowed"], true);
+    assert_eq!(active["probe_upload_progress_allowed"], true);
     assert_eq!(active["headers_only"], true);
     assert!(active.get("allowed_networks").is_none());
     assert!(active.get("deployment").is_none());

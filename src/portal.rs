@@ -397,7 +397,7 @@ fn get(state: &State, user: &str, path: &str, query: &str) -> Result<Response> {
         "/api/me" => {
             return Ok(json_response(
                 200,
-                json!({"probe_multipart_allowed":config.probe_multipart,"collection_defaults":state.settings.read().unwrap().policy.collection_defaults,"fingerprint_library":state.rulebook.read().unwrap().library.metadata(),"headers_only":config.headers_only,"user":user,"rule_date":scanner::RULE_DATE,"allowed_ports":config.allowed_ports,"scope_configured":config.allow_without_whitelist || !config.allowed_networks.is_empty(),"allow_anonymous":config.allow_anonymous,"allow_without_whitelist":config.allow_without_whitelist}),
+                json!({"probe_multipart_allowed":config.probe_multipart,"probe_upload_progress_allowed":config.probe_upload_progress,"collection_defaults":state.settings.read().unwrap().policy.collection_defaults,"fingerprint_library":state.rulebook.read().unwrap().library.metadata(),"headers_only":config.headers_only,"user":user,"rule_date":scanner::RULE_DATE,"allowed_ports":config.allowed_ports,"scope_configured":config.allow_without_whitelist || !config.allowed_networks.is_empty(),"allow_anonymous":config.allow_anonymous,"allow_without_whitelist":config.allow_without_whitelist}),
             ));
         }
         _ => {}
@@ -525,6 +525,18 @@ fn post(state: Arc<State>, user: &str, path: &str, body: Value) -> Result<Respon
                 return Ok(error(403, "管理员未允许 multipart 检查"));
             }
             scan_config.probe_multipart = requested_multipart;
+            if body
+                .get("probe_upload_progress")
+                .is_some_and(|v| !v.is_boolean())
+            {
+                return Ok(error(400, "probe_upload_progress 必须为布尔值"));
+            }
+            let requested_progress = body["probe_upload_progress"].as_bool().unwrap_or(false);
+            if requested_progress && !scan_config.probe_upload_progress {
+                return Ok(error(403, "管理员未允许上传进度基础观察"));
+            }
+            scan_config.probe_upload_progress = requested_progress;
+
             scan_config.fingerprint_library = Some(state.rulebook.read().unwrap().library.clone());
             scan_config.headers_only |= body["headers_only"].as_bool().unwrap_or(false);
             let mut targets = vec![];
@@ -564,7 +576,7 @@ fn post(state: Arc<State>, user: &str, path: &str, body: Value) -> Result<Respon
             state.audit(
                 user,
                 "scan_submit",
-                json!({"job":id,"targets":targets,"settings_revision":settings_revision,"probe_multipart":scan_config.probe_multipart,"headers_only":scan_config.headers_only,"fingerprint_library":scan_config.fingerprint_library.as_ref().map(|l|l.metadata())}),
+                json!({"job":id,"targets":targets,"settings_revision":settings_revision,"probe_multipart":scan_config.probe_multipart,"probe_upload_progress":scan_config.probe_upload_progress,"headers_only":scan_config.headers_only,"fingerprint_library":scan_config.fingerprint_library.as_ref().map(|l|l.metadata())}),
             )?;
             let job_id = id.clone();
             tokio::spawn(async move {
@@ -653,6 +665,7 @@ mod tests {
             admins: Default::default(),
             allow_anonymous: false,
             probe_multipart: false,
+            probe_upload_progress: false,
             headers_only: false,
             fingerprint_file: None,
             fingerprint_library: None,

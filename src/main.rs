@@ -133,6 +133,7 @@ async fn main() -> Result<()> {
                 admins: BTreeMap::from([(user.clone(), config::password_hash(&password, None)?)]),
                 allow_anonymous,
                 probe_multipart: false,
+                probe_upload_progress: false,
                 headers_only: false,
                 fingerprint_file: None,
                 fingerprint_library: None,

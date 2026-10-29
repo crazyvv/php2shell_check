@@ -407,9 +407,19 @@ docker run -d --name php-selfcheck --restart unless-stopped \
 
 默认检测只发起指定入口的常规 GET；可选小型 multipart POST 见“可选 multipart 可达性检查”。远程扫描不执行目标主机命令、不发送漏洞利用载荷，不自动发现目录、phpinfo、FastCGI 或额外端口。“疑似受影响”需要核实回补补丁；“达到修复基线”“版本未知”“未发现特征”和“检测受阻”均不能证明无漏洞或已修复。提交只读业务页面，URL 中不要包含令牌。主机采集器仅在启用 `--php-command` 后运行已有 PHP 获取版本与选定配置；启用中间件采集时，也会运行相应程序的版本或模块查询命令，不接受网络用户提供任意命令。
 
+## 可选上传进度基础观察
+
+`probe_upload_progress` 默认关闭，可在服务器 JSON 或管理员配置面板允许；Web 开发者还须为本次扫描勾选“上传进度基础观察”。它独立于普通 `probe_multipart` 控制；两项都选会各增加一次 POST。仅响应头模式会跳过两项。
+
+完整 GET 成功且未命中挑战/拦截后，只向最终 URL 发送一次小型 multipart：默认进度字段和固定 `.txt` 文件，内容为普通文本。没有 PHP 代码、序列化数据或自定义会话 ID，不带 GET 返回的 Cookie、不回读文件、不跟随 POST 跳转，也没有压力或故障请求。仍逐次检查范围/DNS、固定连接 IP 并验证 TLS。普通上传也可能保存文件或产生业务副作用，需选择允许这种测试的业务入口。
+
+结果位于 `assessment.upload_progress_probe`，记录状态、时间、IP、GET 是否已有会话 Cookie、POST 是否出现 `PHPSESSID` 名称，始终不保存 Cookie 值。`session_cookie_hint` 仅表示看到了 Cookie，配置仍未知：业务 `session_start()`、代理或普通处理逻辑都可能产生它。没有 Cookie 也不能判定关闭，默认字段名可能被修改。此观察不改变 CVE 判定，`exploitation_verified` 保持 false。
+
+主机/PHP/Web 报告同时采集 strict_mode、use_only_cookies、进度字段名、更新频率及最小间隔，供核对实际 Web 配置；不采集会话路径和会话内容。参见 [检测与复核流程](docs/ikow-detection-review.md)，其中说明社区判据的误报边界及已实现流程。
+
 ## 管理员在线配置
 
-登录 `/admin` 后可在“扫描权限与程序配置”面板修改开关，或直接编辑配置 JSON。可在线维护 `allow_anonymous`、`allow_without_whitelist`、网段/域名/端口白名单、`probe_multipart`、`headers_only` 和 `collection_defaults`。支持只校验、保存生效、修订冲突保护和变更审计；失败时保留原配置。后台保存到 SQLite 的 `runtime_settings`，重启恢复并优先于启动文件中的对应字段，原 JSON 不被改写。恢复启动文件管理时，请停服务并备份数据库后删除该表中 `id=1` 的覆盖记录。
+登录 `/admin` 后可在“扫描权限与程序配置”面板修改开关，或直接编辑配置 JSON。可在线维护 `allow_anonymous`、`allow_without_whitelist`、网段/域名/端口白名单、`probe_multipart`、`probe_upload_progress`、`headers_only` 和 `collection_defaults`。支持只校验、保存生效、修订冲突保护和变更审计；失败时保留原配置。后台保存到 SQLite 的 `runtime_settings`，重启恢复并优先于启动文件中的对应字段，原 JSON 不被改写。恢复启动文件管理时，请停服务并备份数据库后删除该表中 `id=1` 的覆盖记录。
 
 `probe_multipart` 在 Web 服务中表示管理员允许。开发者还须为本次扫描勾选“小型 multipart 可达性检查”，默认不选；未获允许的 API 请求会被拒绝。强制 `headers_only` 无法被开发者关闭，并跳过 multipart。独立 CLI `check` 继续使用命令配置文件的行为，不受运行中后台策略控制。
 
@@ -434,10 +444,12 @@ API：独立管理员登录后 `GET /api/admin/settings`，`POST /api/admin/sett
 ## 开发验证
 
 ```bash
-cargo test --locked -j 4 -- --test-threads=2
+cargo test --locked -j 4 -- --test-threads=1
 cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
 ```
+
+功能测试串行执行，避免受限 CPU 环境中 PBKDF2 认证与并行测试争用而触发应用 15 秒期限；应用期限不作放宽。
 
 测试覆盖基线边界、特征误报与 Cookie 脱敏、危险 URL、混合 DNS、特殊地址、逐跳范围校验、重定向上限、HTTP 阻断状态、固定 IP 的真实模拟 HTTP 传输、响应体截断、TLS 协议拒绝、PBKDF2 密码校验、配置权限、HTTP 认证、Host/Origin、任务隔离、报告导入、CSV 导出与重启中断。网络测试只访问进程内本地测试服务，不扫描真实资产。生产扫描规则没有本地地址放行开关。
 

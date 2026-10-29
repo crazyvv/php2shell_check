@@ -61,7 +61,7 @@ async function main(){
     await page.locator('#settingsFile').setInputFiles({name:'config.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({probe_multipart:true,users:{ignored:'SECRET_HASH'},database:'/ignored/path'}))});
     await page.waitForFunction(()=>document.getElementById('settingsNotice').textContent.includes('已导入'));
     assert(!(await page.locator('#settingsDocument').inputValue()).includes('SECRET_HASH'));
-    const policy=JSON.parse(await page.locator('#settingsDocument').inputValue());policy.headers_only=true;policy.collection_defaults.php_command=true;
+    const policy=JSON.parse(await page.locator('#settingsDocument').inputValue());policy.headers_only=true;policy.probe_upload_progress=true;policy.collection_defaults.php_command=true;
     await page.locator('#settingsDocument').fill(JSON.stringify(policy));
     const validationResponsePromise=page.waitForResponse(r=>r.url().endsWith('/api/admin/settings/validate') && r.request().method()==='POST');
     await page.locator('#settingsValidate').click();
@@ -71,13 +71,15 @@ async function main(){
     catch(e){throw Error(`Configuration validation returned HTTP 200 but UI did not settle: ${await page.locator('#settingsNotice').textContent()}; page errors: ${errors.join('; ')}`,{cause:e});}
     publicMeta=await(await page.request.get(base+'/api/me')).json();assert.equal(publicMeta.probe_multipart_allowed,false);
     await page.locator('#settingsSave').click();await page.waitForFunction(()=>document.getElementById('settingsMeta').textContent.includes('修订 1'));
-    publicMeta=await(await page.request.get(base+'/api/me')).json();assert.equal(publicMeta.probe_multipart_allowed,true);assert.equal(publicMeta.headers_only,true);assert.equal(publicMeta.collection_defaults.php_command,true);
+    publicMeta=await(await page.request.get(base+'/api/me')).json();assert.equal(publicMeta.probe_multipart_allowed,true);assert.equal(publicMeta.probe_upload_progress_allowed,true);assert.equal(publicMeta.headers_only,true);assert.equal(publicMeta.collection_defaults.php_command,true);
     await second.locator('#settingsDocument').fill(JSON.stringify(policy));await second.locator('#settingsSave').click();await second.waitForFunction(()=>document.getElementById('settingsNotice').textContent.includes('其他管理员'));
     assert.equal(JSON.parse(await second.locator('#settingsDocument').inputValue()).probe_multipart,true);
+    const forced=await context.newPage();await forced.goto(base);await forced.waitForFunction(()=>document.getElementById('headersOnly').disabled);assert(await forced.locator('#probeMultipart').isDisabled());assert(await forced.locator('#probeProgress').isDisabled());assert(!(await forced.locator('#probeProgress').isChecked()));await forced.close();
+    policy.headers_only=false;await page.locator('#settingsDocument').fill(JSON.stringify(policy));await page.locator('#settingsSave').click();await page.waitForFunction(()=>document.getElementById('settingsMeta').textContent.includes('修订 2'));
     await page.locator('#settingsPanel').screenshot({path:path.join(output,'administrator-settings.png')});
-    const developer=await context.newPage();await developer.goto(base);await developer.waitForFunction(()=>document.getElementById('headersOnly').disabled);assert(await developer.locator('#probeMultipart').isDisabled());assert(await developer.locator('#collectPhpCommand').isChecked());await developer.close();
+    const developer=await context.newPage();await developer.goto(base);await developer.waitForFunction(()=>!document.getElementById('probeProgress').disabled);assert(!(await developer.locator('#probeProgress').isChecked()));assert(!(await developer.locator('#probeMultipart').isDisabled()));assert(await developer.locator('#collectPhpCommand').isChecked());await developer.close();
     await page.locator('#logout').click();await page.locator('#loginPanel').waitFor();assert.equal(await page.locator('#rulesDocument').inputValue(),'');assert.equal(await page.locator('#settingsDocument').inputValue(),'');
-    assert.deepEqual(errors,[]);fs.writeFileSync(path.join(output,'browser-result.json'),JSON.stringify({state:'passed',checks:['evidence-fonts-colors','text-only-rendering','rule-edit-validation-save','live-activation','conflict-preserves-draft','logout-cleanup','passive-surface-clues','settings-import-validation-save','settings-live-policy','settings-conflict-preserves-draft'],evidence_style:style},null,2));console.log('Browser smoke passed: evidence fonts/colors, text-only rendering, rule editing/validation/save, live activation, conflicts, and logout cleanup.');
+    assert.deepEqual(errors,[]);fs.writeFileSync(path.join(output,'browser-result.json'),JSON.stringify({state:'passed',checks:['evidence-fonts-colors','text-only-rendering','rule-edit-validation-save','live-activation','conflict-preserves-draft','logout-cleanup','passive-surface-clues','settings-import-validation-save','settings-live-policy','settings-conflict-preserves-draft','progress-permissions-and-defaults'],evidence_style:style},null,2));console.log('Browser smoke passed: evidence fonts/colors, text-only rendering, rule editing/validation/save, live activation, conflicts, and logout cleanup.');
   }finally{
     if(browser)await browser.close();
     if(processHandle && processHandle.exitCode===null){processHandle.kill('SIGTERM');await Promise.race([new Promise(resolve=>processHandle.once('exit',resolve)),sleep(5000)]);if(processHandle.exitCode===null)processHandle.kill('SIGKILL');}

@@ -24,6 +24,8 @@ pub struct Policy {
     pub allowed_ports: Vec<u16>,
     /// Permission for a user-selected minimal multipart control, not an automatic POST.
     pub probe_multipart: bool,
+    #[serde(default)]
+    pub probe_upload_progress: bool,
     pub headers_only: bool,
     #[serde(default)]
     pub collection_defaults: CollectionDefaults,
@@ -57,6 +59,7 @@ impl Policy {
             allowed_domains: c.allowed_domains.clone(),
             allowed_ports: c.allowed_ports.clone(),
             probe_multipart: c.probe_multipart,
+            probe_upload_progress: c.probe_upload_progress,
             headers_only: c.headers_only,
             collection_defaults: c.collection_defaults.clone(),
         }
@@ -69,6 +72,7 @@ impl Policy {
         c.allowed_domains = self.allowed_domains.clone();
         c.allowed_ports = self.allowed_ports.clone();
         c.probe_multipart = self.probe_multipart;
+        c.probe_upload_progress = self.probe_upload_progress;
         c.headers_only = self.headers_only;
     }
     fn validate(&mut self, base: &Config) -> Result<()> {
@@ -206,6 +210,13 @@ mod tests {
         std::fs::write(&database, b"not a database").unwrap();
         let base:Config=serde_json::from_value(json!({"public_origin":"https://example.com","database":database,"fingerprint_file":dir.path().join("missing.json"),"allow_anonymous":true,"allow_without_whitelist":true})).unwrap();
         let mut policy = Policy::from_config(&base);
+        let mut legacy = serde_json::to_value(&policy).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("probe_upload_progress");
+        let migrated: Policy = serde_json::from_value(legacy).unwrap();
+        assert!(!migrated.probe_upload_progress);
         policy.collection_defaults.php_command = true;
         policy.allowed_domains = vec!["EXAMPLE.COM".into()];
         policy.validate(&base).unwrap();

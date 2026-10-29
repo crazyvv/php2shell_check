@@ -15,6 +15,7 @@ static ERRORS: LazyLock<Vec<(&str, &str, Regex)>> = LazyLock::new(|| {
     [
         ("memory_limit", "响应出现 PHP 内存耗尽文本；不能证明触发路径或漏洞", r"(?i)allowed memory size of [0-9]+ bytes exhausted"),
         ("session_decode", "响应出现会话解码失败文本；不能确认序列化处理器切换或特定 CVE", r"(?i)(?:failed to decode session object|session_start\(\)[^\r\n<]{0,100}(?:decod|serializ))"),
+        ("session_destruction", "响应出现会话对象销毁失败文本；需关联运行时日志，不单独确认 UAF 或 RCE", r"(?i)session object destruction failed"),
         ("session_handler", "响应出现会话序列化处理器错误文本；需核对实际配置与日志", r"(?i)(?:session\.serialize_handler|cannot find serialization handler|serialization handler[^\r\n<]{0,80}(?:failed|cannot|unknown))"),
         ("file_include", "响应出现文件包含错误文本；不是 LFI 或任意文件读取的证据", r"(?i)(?:include|require)(?:_once)?\([^\r\n<]{0,160}\)[^\r\n<]{0,160}(?:failed to open stream|failed opening)"),
     ].into_iter().map(|(id, detail, p)| (id, detail, Regex::new(p).unwrap())).collect()
@@ -145,6 +146,10 @@ mod tests {
     fn error_categories_are_not_cve_or_execution_verification() {
         let r=inspect(None,b"Allowed memory size of 999 bytes exhausted; Failed to decode session object; session.serialize_handler; include(foo): failed to open stream");
         assert_eq!(r["errors"].as_array().unwrap().len(), 4);
+        assert_eq!(
+            inspect(None, b"Session object destruction failed")["errors"][0]["kind"],
+            "session_destruction"
+        );
         assert!(!r.to_string().contains("foo"));
         assert!(inspect(None, b"")["errors"].as_array().unwrap().is_empty());
         assert!(inspect(None, &vec![b'x'; 200000])["limits_reached"] == true);

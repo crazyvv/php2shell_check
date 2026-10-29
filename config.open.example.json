@@ -18,5 +18,6 @@
     "php_modules": false,
     "ports": false,
     "web_probe": false
-  }
+  },
+  "probe_upload_progress": false
 }

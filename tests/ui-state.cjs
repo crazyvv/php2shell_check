@@ -7,14 +7,14 @@ class Element {
   append(...children){this.children.push(...children);}
   replaceChildren(...children){this.children=children;}
 }
-function setup(initial=null){
-  const elements=new Map();const storage=new Map(initial?[['php-selfcheck-current-job',initial]]:[]);const calls=[];let sequence=0;
+function setup(initial=null,policy={}){
+  const elements=new Map();const storage=new Map(initial?[['php-selfcheck-current-job',initial]]:[]);const calls=[],bodies=[];let sequence=0;
   const document={getElementById:id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);},createElement:()=>new Element()};
   const context=vm.createContext({document,sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},setInterval:()=>{},console,
     fetch:async(path,options)=>{
       calls.push(path);let data;
-      if(path==='/api/me') data={allow_anonymous:true,scope_configured:true};
-      else if(path==='/api/scan'){sequence++;data={id:'job'+sequence};}
+      if(path==='/api/me') data={allow_anonymous:true,scope_configured:true,...policy};
+      else if(path==='/api/scan'){bodies.push(JSON.parse(options.body));sequence++;data={id:'job'+sequence};}
       else if(path.startsWith('/api/jobs/'))data={id:path.split('/').pop(),created:1,state:'done',results:[{target:path.split('/').pop(),verdict:'未发现 PHP 特征',reason:'test'}]};
       else throw new Error('Unexpected request: '+path);
       return {ok:true,status:200,json:async()=>data};
@@ -22,7 +22,7 @@ function setup(initial=null){
   });
   vm.runInContext(fs.readFileSync('assets/shared.js','utf8'),context);
   vm.runInContext(fs.readFileSync('assets/ui.js','utf8'),context);
-  return {context,document,storage,calls};
+  return {context,document,storage,calls,bodies};
 }
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 test('developer page fetches only the current tab job, never a history list',async()=>{
@@ -170,4 +170,13 @@ test('administrator settings import only online fields, validate, save and prese
   revision++;const draft=JSON.parse(get('settingsDocument').value);draft.headers_only=true;get('settingsDocument').value=JSON.stringify(draft);
   await get('settingsSave').onclick();assert(get('settingsNotice').textContent.includes('其他管理员'));assert.equal(JSON.parse(get('settingsDocument').value).headers_only,true);
   await get('logout').onclick();assert.equal(get('settingsDocument').value,'');assert.equal(get('settingsDeployment').textContent,'');
+});
+
+
+test('progress observation is opt-in and headers-only disables both POST choices',async()=>{
+  const app=setup(null,{probe_multipart_allowed:true,probe_upload_progress_allowed:true});await flush();const get=id=>app.document.getElementById(id);
+  assert.equal(get('probeProgress').disabled,false);assert.equal(Boolean(get('probeProgress').checked),false);
+  get('targets').value='example.com';get('probeProgress').checked=true;await get('scan').onclick();assert.equal(app.bodies[0].probe_upload_progress,true);
+  get('headersOnly').checked=true;get('headersOnly').onchange();assert.equal(get('probeProgress').disabled,true);assert.equal(get('probeProgress').checked,false);assert.equal(get('probeMultipart').disabled,true);
+  get('headersOnly').checked=false;get('headersOnly').onchange();assert.equal(get('probeProgress').disabled,false);assert.equal(get('probeProgress').checked,false);
 });

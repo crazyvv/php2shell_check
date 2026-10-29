@@ -229,7 +229,7 @@ mod tests {
 }
 
 // Selected configuration only, never phpinfo() or the process environment.
-const PHP_RUNTIME: &str = r#"$settings=[]; foreach(['session.upload_progress.enabled','session.upload_progress.cleanup','session.serialize_handler','session.save_handler','file_uploads','enable_post_data_reading','memory_limit','post_max_size','upload_max_filesize','max_file_uploads','max_multipart_body_parts','fatal_error_backtraces'] as $key){$value=ini_get($key);$settings[$key]=$value===false?null:$value;} echo json_encode(['sapi'=>PHP_SAPI,'version'=>PHP_VERSION,'binary'=>PHP_BINARY,'loaded_ini'=>php_ini_loaded_file(),'scanned_ini'=>php_ini_scanned_files(),'settings'=>$settings]);"#;
+const PHP_RUNTIME: &str = r#"$settings=[]; foreach(['session.upload_progress.enabled','session.upload_progress.cleanup','session.serialize_handler','session.save_handler','session.use_strict_mode','session.use_only_cookies','session.upload_progress.name','session.upload_progress.freq','session.upload_progress.min_freq','file_uploads','enable_post_data_reading','memory_limit','post_max_size','upload_max_filesize','max_file_uploads','max_multipart_body_parts','fatal_error_backtraces'] as $key){$value=ini_get($key);$settings[$key]=$value===false?null:$value;} echo json_encode(['sapi'=>PHP_SAPI,'version'=>PHP_VERSION,'binary'=>PHP_BINARY,'loaded_ini'=>php_ini_loaded_file(),'scanned_ini'=>php_ini_scanned_files(),'settings'=>$settings]);"#;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]

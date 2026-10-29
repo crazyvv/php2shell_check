@@ -23,6 +23,9 @@ pub struct Config {
     pub allow_anonymous: bool,
     #[serde(default)]
     pub probe_multipart: bool,
+    /// Optional ordinary text upload with the default progress field; never a CVE confirmation.
+    #[serde(default)]
+    pub probe_upload_progress: bool,
     /// HEAD first, GET only for 405/501, no redirects or response bodies.
     #[serde(default)]
     pub headers_only: bool,

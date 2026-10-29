@@ -1,4 +1,4 @@
-//! Read-only HTTP fingerprints. Every hop is scoped before connecting to a pinned IP.
+//! Bounded HTTP observations. Every request is scoped before connecting to a pinned IP.
 use crate::config::Config;
 use anyhow::{Result, bail, ensure};
 use regex::Regex;
@@ -178,6 +178,41 @@ enum RequestKind {
     Head,
     GetHeaders,
     Multipart,
+    Progress,
+}
+fn progress_control_body() -> String {
+    // Ordinary text only. No PHP bytes, serializer syntax, supplied SID, or stress fields.
+    format!(
+        "--PHPSELFCheckProgress\r\nContent-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\r\nselfcheck_{}\r\n--PHPSELFCheckProgress\r\nContent-Disposition: form-data; name=\"selfcheck_text\"; filename=\"php-selfcheck.txt\"\r\nContent-Type: text/plain\r\n\r\nselfcheck\r\n--PHPSELFCheckProgress--\r\n",
+        crate::config::token(8)
+    )
+}
+fn progress_observation(reply: &Reply, baseline_cookie: bool) -> Value {
+    let cookie = reply.headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("set-cookie")
+            && value
+                .split_once('=')
+                .is_some_and(|(name, _)| name.trim().eq_ignore_ascii_case("PHPSESSID"))
+    });
+    // This observation omits session fixation/readback, LFI and fault requests.
+    // See docs/ikow-detection-review.md for the defensive verification workflow.
+    // Application session_start(), proxies and normal business logic can all set this cookie.
+    // Neither a cookie nor a reflected marker proves parser reachability, a session write or CVE.
+    let mut out = crate::assessment::observation(
+        if cookie {
+            "session_cookie_hint"
+        } else {
+            "unknown"
+        },
+        "minimal_upload_progress_observation",
+        "low",
+        "小型普通文本文件 POST；Cookie、反射或 HTTP 状态均不能确认 upload_progress 配置、会话写入、漏洞或修复。未指定会话 ID、不回读文件、不跟随跳转。",
+    );
+    out["http_status"] = json!(reply.status);
+    out["session_cookie_observed"] = json!(cookie);
+    out["baseline_session_cookie_observed"] = json!(baseline_cookie);
+    out["exploitation_verified"] = json!(false);
+    out
 }
 async fn request_method(u: &Url, ip: IpAddr, kind: RequestKind) -> Result<Reply> {
     let host = u.host_str().unwrap();
@@ -194,6 +229,14 @@ async fn request_method(u: &Url, ip: IpAddr, kind: RequestKind) -> Result<Reply>
     let request = if matches!(kind, RequestKind::Multipart) {
         client.post(u.clone()).header("Content-Type","multipart/form-data; boundary=PHPSELFCheckControl")
             .body("--PHPSELFCheckControl\r\nContent-Disposition: form-data; name=\"selfcheck_control\"\r\n\r\n1\r\n--PHPSELFCheckControl--\r\n")
+    } else if matches!(kind, RequestKind::Progress) {
+        client
+            .post(u.clone())
+            .header(
+                "Content-Type",
+                "multipart/form-data; boundary=PHPSELFCheckProgress",
+            )
+            .body(progress_control_body())
     } else if matches!(kind, RequestKind::Head) {
         client.head(u.clone())
     } else {
@@ -505,6 +548,54 @@ pub async fn scan(target: &str, cfg: &Config) -> Value {
             ),
         };
     }
+    if cfg.probe_upload_progress {
+        let mut observation = crate::assessment::observation(
+            "unknown",
+            "not_tested",
+            "none",
+            "未执行：需要完整 GET 成功、无挑战/拦截且未强制仅响应头模式",
+        );
+        if !cfg.headers_only
+            && result["http_status"]
+                .as_u64()
+                .is_some_and(|s| (200..300).contains(&s))
+            && result["verdict"] != "无法完成检测"
+        {
+            let probe: Result<(Reply, IpAddr, Url)> = async {
+                let u = normalize(
+                    result["final_url"]
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("缺少目标"))?,
+                )?;
+                let ips = resolve(&u, cfg).await?;
+                Ok((
+                    request_method(&u, ips[0], RequestKind::Progress).await?,
+                    ips[0],
+                    u,
+                ))
+            }
+            .await;
+            observation = match probe {
+                Ok((reply, ip, u)) => {
+                    let baseline_cookie = result["evidence"]
+                        .as_array()
+                        .is_some_and(|v| v.iter().any(|e| e["kind"] == "cookie_name"));
+                    let mut o = progress_observation(&reply, baseline_cookie);
+                    o["connected_ip"] = json!(ip.to_string());
+                    o["url"] = json!(u.as_str());
+                    o["checked_at"] = json!(chrono::Utc::now().to_rfc3339());
+                    o
+                }
+                Err(_) => crate::assessment::observation(
+                    "unknown",
+                    "minimal_upload_progress_observation",
+                    "none",
+                    "范围、TLS、DNS 或传输失败；不能据此判断是否开启、存在漏洞或已修复",
+                ),
+            };
+        }
+        result["assessment"]["upload_progress_probe"] = observation;
+    }
     result
 }
 #[cfg(test)]
@@ -765,6 +856,7 @@ mod tests {
             admins: Default::default(),
             allow_anonymous: false,
             probe_multipart: false,
+            probe_upload_progress: false,
             headers_only: false,
             fingerprint_file: None,
             fingerprint_library: None,
@@ -852,6 +944,71 @@ mod tests {
             .await
             .is_err()
         );
+        server.await.unwrap();
+    }
+    #[test]
+    fn progress_cookie_and_reflection_never_confirm_configuration_or_cve() {
+        let reply = Reply {
+            status: 200,
+            headers: vec![("set-cookie".into(), "PHPSESSID=SECRET; HttpOnly".into())],
+            body: b"selfcheck marker reflected".to_vec(),
+            truncated: false,
+        };
+        let o = progress_observation(&reply, true);
+        assert_eq!(o["status"], "session_cookie_hint");
+        assert_eq!(o["confidence"], "low");
+        assert_eq!(o["baseline_session_cookie_observed"], true);
+        assert_eq!(o["exploitation_verified"], false);
+        assert!(!o.to_string().contains("SECRET"));
+        assert!(!o.to_string().contains("marker reflected"));
+        let empty = Reply {
+            headers: vec![],
+            ..reply
+        };
+        assert_eq!(progress_observation(&empty, false)["status"], "unknown");
+    }
+    #[tokio::test]
+    async fn progress_probe_is_bounded_plain_text_without_session_fixation_or_redirects() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut data = vec![];
+            loop {
+                let mut buf = [0; 2048];
+                let n = stream.read(&mut buf).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                data.extend_from_slice(&buf[..n]);
+                if data.ends_with(b"--PHPSELFCheckProgress--\r\n") {
+                    break;
+                }
+            }
+            let text = String::from_utf8(data).unwrap();
+            assert!(text.len() < 2048);
+            assert!(text.starts_with("POST /check "));
+            assert!(text.contains("PHP_SESSION_UPLOAD_PROGRESS"));
+            assert!(text.contains("filename=\"php-selfcheck.txt\""));
+            assert!(!text.contains("<?"));
+            assert!(!text.contains("PHPSESSID"));
+            assert!(!text.to_lowercase().contains("\r\ncookie:"));
+            assert!(!text.to_lowercase().contains("\r\nauthorization:"));
+            assert!(!text.contains("serialize_handler"));
+            stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+        });
+        let reply = request_method(
+            &Url::parse(&format!("http://progress.invalid:{port}/check")).unwrap(),
+            "127.0.0.1".parse().unwrap(),
+            RequestKind::Progress,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply.status, 302);
         server.await.unwrap();
     }
     #[tokio::test]

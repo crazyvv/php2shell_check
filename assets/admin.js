@@ -100,7 +100,7 @@ function settingsNotice(message,error=false){$('settingsNotice').textContent=mes
 function clearSettingsEditor(){settingsGeneration++;settingsRevision=null;settingsBase='';$('settingsDocument').value='';$('settingsFile').value='';$('settingsSwitches').replaceChildren();$('settingsMeta').textContent='';$('settingsDeployment').textContent='';settingsNotice('');}
 function settingsSwitches(){
   const doc=JSON.parse($('settingsDocument').value);$('settingsSwitches').replaceChildren();
-  for(const [key,label] of [['allow_anonymous','允许免密码访问'],['allow_without_whitelist','允许空白名单'],['probe_multipart','允许开发者选择小型 multipart 检查'],['headers_only','强制仅响应头检查']]){
+  for(const [key,label] of [['allow_anonymous','允许免密码访问'],['allow_without_whitelist','允许空白名单'],['probe_multipart','允许开发者选择小型 multipart 检查'],['probe_upload_progress','允许普通文本上传进度观察（可能产生业务写入）'],['headers_only','强制仅响应头检查']]){
     const input=node('input');input.type='checkbox';input.checked=doc[key]===true;input.disabled=settingsBusy;
     input.onchange=()=>{try{const current=JSON.parse($('settingsDocument').value);current[key]=input.checked;$('settingsDocument').value=JSON.stringify(current,null,2);settingsNotice('草稿已修改，保存后生效。');}catch(e){settingsNotice(e.message,true);}};
     const wrap=node('label');wrap.append(input,node('span',label));$('settingsSwitches').append(wrap);
@@ -126,7 +126,7 @@ async function submitSettings(save){
 $('settingsFile').onchange=async()=>{
   const file=$('settingsFile').files[0],generation=settingsGeneration;if(!file)return;
   try{if(file.size>262144)throw Error('请选择不超过 256 KiB 的配置 JSON');const raw=JSON.parse(await file.text());if(generation!==settingsGeneration)return;const doc=JSON.parse($('settingsDocument').value);
-    for(const key of ['allow_anonymous','allow_without_whitelist','allowed_networks','allowed_domains','allowed_ports','probe_multipart','headers_only','collection_defaults'])if(Object.hasOwn(raw,key))doc[key]=raw[key];
+    for(const key of ['allow_anonymous','allow_without_whitelist','allowed_networks','allowed_domains','allowed_ports','probe_multipart','probe_upload_progress','headers_only','collection_defaults'])if(Object.hasOwn(raw,key))doc[key]=raw[key];
     $('settingsDocument').value=JSON.stringify(doc,null,2);settingsSwitches();settingsNotice('已导入在线字段为草稿，校验并保存后生效；账号、部署路径及其他字段不会导入。');
   }catch(e){settingsNotice(e.message,true);}finally{$('settingsFile').value='';}
 };

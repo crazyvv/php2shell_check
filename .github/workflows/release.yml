@@ -8,7 +8,7 @@ on:
       tag:
         description: Existing version tag to publish (must match Cargo.toml)
         required: true
-        default: v0.5.3
+        default: v0.6.0
 
 permissions:
   contents: read
@@ -54,7 +54,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Test
-        run: cargo test --locked --target "${{ matrix.target }}" -j 4 -- --test-threads=2
+        run: cargo test --locked --target "${{ matrix.target }}" -j 4 -- --test-threads=1
       - name: Test frontend
         run: node --test tests/ui-state.cjs
       - name: Build
