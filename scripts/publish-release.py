@@ -49,6 +49,8 @@ def main(tag, directory):
 
 支持可配置的被动网站特征库：51 条内置规则，支持 CMS/框架、静态生成器、托管平台、中间件、CDN/WAF 与挑战页识别；JSON 扩展/覆盖/禁用、命中证据和规则版本追踪。规则不增加请求，CMS 版本不作为 PHP 版本，外部资源及托管平台线索不作为当前站点已修复证明。本版增加管理员后台逐条编辑、新增、禁用/启用、删除、完整 JSON 校验及保存，持久化到 SQLite 并立即用于新提交的扫描；包含修订冲突保护和审计。关键证据采用等宽粗体与风险色强调，单列下一步。也可使用 `fingerprints export` / `fingerprints validate`，参见 README 和 fingerprints.example.json。
 
+本版新增管理员在线配置面板（JSON、访问与扫描开关、白名单、采集默认选项、SQLite 持久化、校验、冲突保护、审计）。Web multipart 改为管理员允许后，由开发者为本次扫描选择启用。已有任务使用提交时配置快照。另新增已有响应的上传表单入口/文件字段提取、内存耗尽/会话解码/文件包含错误分类，以及可选 PHP/Web 报告的会话序列化配置采集。线索不提升漏洞结论，不新增探测请求、不上传文件或进行故障注入。详见 README 能力对照。
+
 Windows 支持 Web 服务及 URL 检查；`collect` 主机采集目前仅支持 Linux。Linux 的 HTTPS 检测仍需系统 CA 证书。Windows 如提示缺少运行库，请安装微软官方 Visual C++ 2015–2022 Redistributable x64。
 
 两个平台都须通过测试及本机启动检查后才能发布。发布包不含真实配置、管理员密码、数据库或扫描结果。免密码与无白名单通过 `init --allow-anonymous --allow-without-whitelist` 显式开启。

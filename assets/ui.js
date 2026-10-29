@@ -18,7 +18,7 @@ $('scan').onclick = async () => {
   try {
     const targets=$('targets').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
     if (!targets.length || targets.length>50) throw new Error('请输入 1–50 个目标，每行一个');
-    const submitted=await api('/api/scan',{targets,headers_only:Boolean($('headersOnly').checked)});currentJob=submitted.id;try{sessionStorage.setItem('php-selfcheck-current-job',currentJob);}catch(_){}renderJobs([]); notice('任务已提交，检测结果会自动更新。'); await refresh();
+    const submitted=await api('/api/scan',{targets,headers_only:Boolean($('headersOnly').checked),probe_multipart:Boolean($('probeMultipart').checked)});currentJob=submitted.id;try{sessionStorage.setItem('php-selfcheck-current-job',currentJob);}catch(_){}renderJobs([]); notice('任务已提交，检测结果会自动更新。'); await refresh();
   } catch(e) { notice(e.message,true); } finally { $('scan').disabled=false; }
 };
 $('refresh').onclick=()=>refresh().catch(e=>notice(e.message,true));
@@ -37,6 +37,11 @@ async function boot() {
     const me=await api('/api/me'); $('account').textContent=me.allow_anonymous ? '免密码访问 · 当前浏览器独立会话' : `${me.user} · 个人工作台`;
     if(me.headers_only) { $('account').textContent+=' · 仅响应头检测'; $('headersOnly').checked=true; $('headersOnly').disabled=true; }
     if(!me.scope_configured) notice('管理员尚未配置资产网段白名单，检测将被拒绝。请先按部署说明配置。',true);
+    $('probeMultipart').disabled=!me.probe_multipart_allowed || Boolean(me.headers_only);
+    if($('probeMultipart').disabled)$('probeMultipart').checked=false;
+    const defaults=me.collection_defaults || {};
+    for(const [id,key] of [['collectPhpCommand','php_command'],['collectPackageAudit','package_audit'],['collectMiddleware','middleware'],['collectModules','php_modules'],['collectPorts','ports'],['collectWeb','web_probe']])if(typeof defaults[key]==='boolean')$(id).checked=defaults[key];
+    updateCollectCommand();
     await refresh();
   } catch(e) { notice(e.message,true); }
 }

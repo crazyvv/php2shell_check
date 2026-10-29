@@ -6,7 +6,7 @@ function showLogin(){
   historyRequest++;
   $('dashboard').hidden=true;$('loginPanel').hidden=false;
   $('jobs').replaceChildren();$('summary').replaceChildren();$('adminAccount').textContent='';
-  clearRuleEditor();
+  clearRuleEditor();clearSettingsEditor();
 }
 async function loadHistory(){
   const requestId=++historyRequest;
@@ -29,7 +29,7 @@ async function loadHistory(){
   } catch(e){if(e.status===401)showLogin();throw e;}
 }
 async function enterDashboard(user){
-  $('adminAccount').textContent=`${user} · 管理员`;$('loginPanel').hidden=true;$('dashboard').hidden=false;await loadHistory();await loadRules();
+  $('adminAccount').textContent=`${user} · 管理员`;$('loginPanel').hidden=true;$('dashboard').hidden=false;await loadHistory();await loadRules();await loadSettings();
 }
 $('loginForm').onsubmit=async event=>{
   event.preventDefault();$('loginButton').disabled=true;
@@ -95,4 +95,41 @@ async function submitRuleDraft(save){
   finally{setRuleBusy(false);}
 }
 $('rulesValidate').onclick=()=>submitRuleDraft(false);$('rulesSave').onclick=()=>submitRuleDraft(true);
+let settingsRevision=null,settingsGeneration=0,settingsBase='';
+function settingsNotice(message,error=false){$('settingsNotice').textContent=message;$('settingsNotice').className=error?'rule-error':'rule-success';}
+function clearSettingsEditor(){settingsGeneration++;settingsRevision=null;settingsBase='';$('settingsDocument').value='';$('settingsFile').value='';$('settingsSwitches').replaceChildren();$('settingsMeta').textContent='';$('settingsDeployment').textContent='';settingsNotice('');}
+function settingsSwitches(){
+  const doc=JSON.parse($('settingsDocument').value);$('settingsSwitches').replaceChildren();
+  for(const [key,label] of [['allow_anonymous','允许免密码访问'],['allow_without_whitelist','允许空白名单'],['probe_multipart','允许开发者选择小型 multipart 检查'],['headers_only','强制仅响应头检查']]){
+    const input=node('input');input.type='checkbox';input.checked=doc[key]===true;input.disabled=settingsBusy;
+    input.onchange=()=>{try{const current=JSON.parse($('settingsDocument').value);current[key]=input.checked;$('settingsDocument').value=JSON.stringify(current,null,2);settingsNotice('草稿已修改，保存后生效。');}catch(e){settingsNotice(e.message,true);}};
+    const wrap=node('label');wrap.append(input,node('span',label));$('settingsSwitches').append(wrap);
+  }
+  for(const [key,label] of [['php_command','默认采集 PHP 命令配置'],['package_audit','默认采集软件包补丁'],['middleware','默认采集中间件'],['php_modules','默认采集 PHP 模块'],['ports','默认采集监听端口'],['web_probe','默认本机 Web 探测']]){
+    const input=node('input');input.type='checkbox';input.checked=doc.collection_defaults?.[key]===true;input.disabled=settingsBusy;
+    input.onchange=()=>{try{const current=JSON.parse($('settingsDocument').value);current.collection_defaults=current.collection_defaults || {};current.collection_defaults[key]=input.checked;$('settingsDocument').value=JSON.stringify(current,null,2);settingsNotice('采集默认选项草稿已修改，保存后生效。');}catch(e){settingsNotice(e.message,true);}};
+    const wrap=node('label');wrap.append(input,node('span',label));$('settingsSwitches').append(wrap);
+  }
+}
+function acceptSettings(data){settingsRevision=data.revision;settingsBase=data.document;$('settingsDocument').value=data.document;$('settingsMeta').textContent=`配置修订 ${data.revision} · ${data.origin==='database'?'数据库保存':'启动 JSON'}`;if(data.deployment)$('settingsDeployment').textContent=JSON.stringify(data.deployment,null,2);settingsSwitches();}
+async function loadSettings(){const generation=++settingsGeneration;const data=await api('/api/admin/settings');if(generation!==settingsGeneration)return;acceptSettings(data);settingsNotice('');}
+let settingsBusy=false;
+function setSettingsBusy(busy){settingsBusy=busy;for(const id of ['settingsDocument','settingsFile','settingsExport','settingsReload','settingsValidate','settingsSave'])$(id).disabled=busy;try{settingsSwitches();}catch(_){}}
+$('settingsDocument').oninput=()=>{try{settingsSwitches();settingsNotice('草稿已修改，校验并保存后生效。');}catch(e){$('settingsSwitches').replaceChildren();settingsNotice('JSON 尚未完整：'+e.message,true);}};
+$('settingsReload').onclick=()=>{if(settingsRevision!==null && $('settingsDocument').value!==settingsBase && !confirm('重新加载会丢弃未保存的配置草稿，是否继续？'))return;loadSettings().catch(e=>{if(e.status===401)showLogin();settingsNotice(e.message,true);});};
+async function submitSettings(save){
+  if(settingsRevision===null){settingsNotice('请先加载当前配置。',true);return;}
+  const generation=settingsGeneration,document=$('settingsDocument').value;setSettingsBusy(true);
+  try{const data=await api('/api/admin/settings/'+(save?'save':'validate'),{document,revision:settingsRevision});if(generation!==settingsGeneration)return;if(save){acceptSettings(data);settingsNotice('配置已保存并生效。新提交的扫描使用该修订，开发者页面刷新后更新可选项。');}else settingsNotice('配置校验通过，尚未保存。');}
+  catch(e){if(e.status===401)showLogin();settingsNotice(e.message,true);}finally{setSettingsBusy(false);}
+}
+$('settingsFile').onchange=async()=>{
+  const file=$('settingsFile').files[0],generation=settingsGeneration;if(!file)return;
+  try{if(file.size>262144)throw Error('请选择不超过 256 KiB 的配置 JSON');const raw=JSON.parse(await file.text());if(generation!==settingsGeneration)return;const doc=JSON.parse($('settingsDocument').value);
+    for(const key of ['allow_anonymous','allow_without_whitelist','allowed_networks','allowed_domains','allowed_ports','probe_multipart','headers_only','collection_defaults'])if(Object.hasOwn(raw,key))doc[key]=raw[key];
+    $('settingsDocument').value=JSON.stringify(doc,null,2);settingsSwitches();settingsNotice('已导入在线字段为草稿，校验并保存后生效；账号、部署路径及其他字段不会导入。');
+  }catch(e){settingsNotice(e.message,true);}finally{$('settingsFile').value='';}
+};
+$('settingsExport').onclick=()=>{try{const text=JSON.stringify(JSON.parse($('settingsDocument').value),null,2),url=URL.createObjectURL(new Blob([text],{type:'application/json'})),link=node('a');link.href=url;link.download='php-selfcheck-online-settings.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),0);settingsNotice('已导出当前草稿的在线字段，不含账号凭据；可合并到服务器配置 JSON。');}catch(e){settingsNotice(e.message,true);}};
+$('settingsValidate').onclick=()=>submitSettings(false);$('settingsSave').onclick=()=>submitSettings(true);
 (async()=>{try{const me=await api('/api/admin/me');await enterDashboard(me.user);}catch(e){showLogin();if(e.status!==401)notice(e.message,true);}})();

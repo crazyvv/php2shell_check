@@ -10,5 +10,13 @@
   "probe_multipart": false,
   "headers_only": false,
   "fingerprint_file": null,
-  "admins": {}
+  "admins": {},
+  "collection_defaults": {
+    "php_command": false,
+    "package_audit": false,
+    "middleware": false,
+    "php_modules": false,
+    "ports": false,
+    "web_probe": false
+  }
 }

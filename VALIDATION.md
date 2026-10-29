@@ -137,3 +137,14 @@ GitHub Actions 已完成 Windows MSVC 与 Linux musl 的原生测试、构建、
 
 - `php-selfcheck-v0.4.0-linux-x86_64.tar.gz`：`a82f684a3b1eb37ba482b393b62f38f981b2a2a400393e54d78a0042759ad86a`
 - `php-selfcheck-v0.4.0-windows-x86_64.zip`：`a3d2c9e437c3d873fc6932d6ade62a5d9418d6234ce62bce1336ce53b0ad6ffd`
+
+
+## v0.5.0 — 2026-10-29
+
+- 独立阅读 murrez/php2shell 提交 7de30d56887d20e4bfc1b3f90b47f067917742c7；未运行其利用程序。能力对照见 docs/capability-comparison.md。
+- 管理员在线设置：JSON/开关、在线字段文件导入导出、白名单、采集默认值、校验、SQLite 持久化、热更新、修订冲突及原子审计。未认证与缺少 Origin 拒绝；坏配置、陈旧修订及审计失败均保持原状态。
+- Web multipart 需要管理员允许及开发者逐次选择；强制响应头模式不能被请求覆盖。已提交任务保留策略快照及 settings_revision。
+- 被动表单和错误分类仅使用已有响应，预算/外部引用/敏感值省略均有测试；不新增请求、不提高漏洞结论、不加入未经官方核实的新 CVE 基线。
+- 可选本地 PHP 和受保护 Web 报告增加序列化、会话存储处理器及进度清理设置，导入材料仍为未经独立核验。
+- Rust 1.91.1：69 项测试通过；前端 Node：9 项通过。fmt、clippy -D warnings、发布工作流 actionlint 通过。
+- Windows/Linux 发布与真实 Chrome 结果以后续发布回执为准。

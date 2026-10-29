@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, net::IpAddr, sync::Arc};
 fn cfg() -> Config {
     Config {
+        collection_defaults: Default::default(),
         public_origin: "http://127.0.0.1:8080".into(),
         admins: BTreeMap::new(),
         allow_anonymous: false,
@@ -1410,4 +1411,215 @@ async fn administrator_fingerprint_editor_authorization_validation_conflicts_and
     let mut codes = [one.status().as_u16(), two.status().as_u16()];
     codes.sort();
     assert_eq!(codes, [200, 409]);
+}
+
+#[tokio::test]
+async fn administrator_settings_are_authorized_atomic_hot_and_persistent() {
+    let p = Portal::with_options(true).await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    assert_eq!(
+        client
+            .get(format!("{}/api/admin/settings", p.base))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    let login = admin_post(
+        &client,
+        &p,
+        "/api/admin/login",
+        json!({"user":"admin","password":"a"}),
+    )
+    .await;
+    let admin = cookie_client(login.headers()["set-cookie"].to_str().unwrap());
+    let initial = admin
+        .get(format!("{}/api/admin/settings", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(initial["revision"], 0);
+    assert!(
+        !initial
+            .to_string()
+            .contains(p.state.config.admins.get("admin").unwrap())
+    );
+    let mut doc: Value = serde_json::from_str(initial["document"].as_str().unwrap()).unwrap();
+    doc["probe_multipart"] = json!(true);
+    doc["headers_only"] = json!(true);
+    let before = client
+        .get(format!("{}/api/me", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(before["probe_multipart_allowed"], false);
+    let denied = admin_post(
+        &client,
+        &p,
+        "/api/scan",
+        json!({"targets":["127.0.0.1"],"probe_multipart":true}),
+    )
+    .await;
+    assert_eq!(denied.status(), 403);
+    let missing_origin = admin
+        .post(format!("{}/api/admin/settings/save", p.base))
+        .header("x-requested-with", "PHP-SelfCheck")
+        .json(&json!({"document":doc.to_string(),"revision":0}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing_origin.status(), 403);
+    assert_eq!(
+        admin_post(
+            &admin,
+            &p,
+            "/api/admin/settings/validate",
+            json!({"document":doc.to_string()})
+        )
+        .await
+        .status(),
+        200
+    );
+    let unmodified = client
+        .get(format!("{}/api/me", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(unmodified["probe_multipart_allowed"], false);
+    for invalid in [
+        json!({"database":"/tmp/changed"}),
+        {
+            let mut v = doc.clone();
+            v["allow_anonymous"] = json!(false);
+            v
+        },
+        {
+            let mut v = doc.clone();
+            v["allowed_ports"] = json!([0]);
+            v
+        },
+        {
+            let mut v = doc.clone();
+            v["collection_defaults"]["web_probe"] = json!(true);
+            v
+        },
+    ] {
+        assert_eq!(
+            admin_post(
+                &admin,
+                &p,
+                "/api/admin/settings/save",
+                json!({"document":invalid.to_string(),"revision":0})
+            )
+            .await
+            .status(),
+            400
+        );
+    }
+    let saved = admin_post(
+        &admin,
+        &p,
+        "/api/admin/settings/save",
+        json!({"document":doc.to_string(),"revision":0}),
+    )
+    .await;
+    assert_eq!(saved.status(), 200);
+    let active = client
+        .get(format!("{}/api/me", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(active["probe_multipart_allowed"], true);
+    assert_eq!(active["headers_only"], true);
+    assert!(active.get("allowed_networks").is_none());
+    assert!(active.get("deployment").is_none());
+    assert_eq!(
+        admin_post(
+            &admin,
+            &p,
+            "/api/admin/settings/save",
+            json!({"document":doc.to_string(),"revision":0})
+        )
+        .await
+        .status(),
+        409
+    );
+    let db = rusqlite::Connection::open(&p.state.config.database).unwrap();
+    assert_eq!(
+        db.query_row("SELECT revision FROM runtime_settings", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM audit WHERE action='settings_save'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    // An audit failure must roll back persistence and leave the active snapshot intact.
+    db.execute_batch("CREATE TRIGGER fail_settings_audit BEFORE INSERT ON audit WHEN NEW.action='settings_save' BEGIN SELECT RAISE(FAIL,'test'); END;").unwrap();
+    doc["headers_only"] = json!(false);
+    assert_eq!(
+        admin_post(
+            &admin,
+            &p,
+            "/api/admin/settings/save",
+            json!({"document":doc.to_string(),"revision":1})
+        )
+        .await
+        .status(),
+        500
+    );
+    let active = client
+        .get(format!("{}/api/me", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(active["headers_only"], true);
+    assert_eq!(
+        db.query_row("SELECT revision FROM runtime_settings", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    db.execute_batch("DROP TRIGGER fail_settings_audit;")
+        .unwrap();
+    let snapshot = php_selfcheck::settings::Snapshot::load(&db, &p.state.config).unwrap();
+    assert_eq!(snapshot.revision, 1);
+    assert!(snapshot.policy.headers_only);
+    assert!(snapshot.policy.probe_multipart);
+    let restored = portal::State::new(p.state.config.clone()).unwrap();
+    let router = portal::router(restored);
+    // Restoring a snapshot is also validated at startup, without changing the source config.
+    drop(router);
+    assert!(!p.state.config.headers_only);
+    let logincheck = admin
+        .get(format!("{}/api/admin/settings", p.base))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(logincheck["revision"], 1);
 }

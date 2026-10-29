@@ -45,6 +45,7 @@ test('administrator filters, filtered exports and deletion confirmation',async()
   const context=vm.createContext({document,console,confirm:message=>{confirmation=message;return confirmed;},fetch:async(path,options)=>{
     calls.push({path,options});let data;
     if(path==='/api/admin/me')data={user:'admin'};
+    else if(path==='/api/admin/settings')data={revision:0,origin:'file',document:'{}'};
     else if(path==='/api/admin/fingerprints')data={revision:0,origin:'builtin',document:JSON.stringify({schema:'php-selfcheck-fingerprints/v1',version:'test',mode:'replace',rules:[]}),builtin_document:JSON.stringify({rules:[]}),metadata:{version:'test',rule_count:0}};
     else if(path.endsWith('/delete')){deleted=true;data={ok:true};}
     else if(path.startsWith('/api/admin/jobs?'))data={jobs:deleted?[]:[{id:'mixed',owner:'visitor:test',created:1,state:'done',total_results:3,results:[{target:'risk.example',verdict:'疑似受影响'}]}],total:deleted?0:1,summary:{jobs:deleted?0:1,reports:1,states:{done:1},verdicts:{'疑似受影响':1}}};
@@ -108,6 +109,7 @@ test('administrator rule drafts validate, save, preserve conflicts and clear on 
     calls.push({path,body:options?.body?JSON.parse(options.body):null});let result,status=200;
     if(path==='/api/admin/me')result={user:'admin'};
     else if(path.startsWith('/api/admin/jobs?'))result={jobs:[],total:0,summary:{jobs:0,reports:0,states:{},verdicts:{}}};
+    else if(path==='/api/admin/settings')result={revision:0,origin:'file',document:'{}'};
     else if(path==='/api/admin/fingerprints')result=data();
     else if(path.endsWith('/validate'))result={valid:true,metadata:{rule_count:1}};
     else if(path.endsWith('/save')){const body=JSON.parse(options.body);if(body.revision!==revision){status=409;result={error:'其他管理员已更新，请合并草稿'};}else{stored=body.document;revision++;result=data();}}
@@ -134,4 +136,38 @@ test('important evidence has semantic emphasis without HTML injection or safe-st
   assert(nodes.some(n=>n.className?.includes('evidence-mark risk') && n.textContent==='8.4.26'));
   assert(nodes.some(n=>n.textContent.includes('<img onerror=unsafe>')));assert(!nodes.some(n=>n.innerHTML));
   const step=vm.runInContext('nextStep(fixture)',app.context);assert(flat(step).some(n=>n.textContent==='下一步'));assert(!flat(step).some(n=>n.textContent.includes('漏洞已确认')));
+});
+
+test('passive upload and error clues render as text with explicit review limitations',()=>{
+  const {context}=setup();
+  const element=vm.runInContext(`assessmentView({surfaces:{forms:[{endpoint:{origin:'https://external.example',path:'/<img onerror=unsafe>',relation:'external_reference'},method:'POST',multipart:true,file_fields:['<script>'],progress_field:true}],errors:[{detail:'会话解码错误不是 CVE 证明'}],limits_reached:true}})`,context);
+  const flat=e=>[e,...(e.children||[]).flatMap(flat)],nodes=flat(element),text=nodes.map(n=>n.textContent).join(' ');
+  assert(text.includes('外部表单引用'));assert(text.includes('/<img onerror=unsafe>'));assert(text.includes('会话解码错误不是 CVE 证明'));assert(text.includes('不提交表单'));assert(text.includes('达到分析上限'));assert(!nodes.some(n=>n.innerHTML));
+});
+
+test('administrator settings import only online fields, validate, save and preserve conflicts',async()=>{
+  const elements=new Map(),get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  let revision=0,policy={allow_anonymous:true,allow_without_whitelist:true,allowed_networks:[],allowed_domains:[],allowed_ports:[],probe_multipart:false,headers_only:false,collection_defaults:{php_command:false,package_audit:false,middleware:false,php_modules:false,ports:false,web_probe:false}};
+  const view=()=>({revision,origin:'database',document:JSON.stringify(policy),deployment:{users:[],admins:['admin']}});
+  const document={getElementById:get,createElement:()=>new Element()};
+  const context=vm.createContext({document,console,confirm:()=>true,fetch:async(path,options)=>{
+    let data,status=200;
+    if(path==='/api/admin/me')data={user:'admin'};
+    else if(path.startsWith('/api/admin/jobs?'))data={jobs:[],total:0,summary:{jobs:0,reports:0,states:{},verdicts:{}}};
+    else if(path==='/api/admin/fingerprints')data={revision:0,origin:'builtin',document:JSON.stringify({mode:'replace',rules:[]}),builtin_document:'{"rules":[]}',metadata:{version:'test',rule_count:0}};
+    else if(path==='/api/admin/settings')data=view();
+    else if(path==='/api/admin/settings/validate')data={valid:true};
+    else if(path==='/api/admin/settings/save'){const body=JSON.parse(options.body);if(body.revision!==revision){status=409;data={error:'其他管理员已更新配置'};}else{policy=JSON.parse(body.document);revision++;data=view();}}
+    else if(path==='/api/admin/logout')data={ok:true};else throw Error(path);
+    return {ok:status===200,status,json:async()=>data};
+  }});
+  vm.runInContext(fs.readFileSync('assets/shared.js','utf8'),context);vm.runInContext(fs.readFileSync('assets/admin.js','utf8'),context);await flush();
+  get('settingsFile').files=[{size:100,text:async()=>JSON.stringify({probe_multipart:true,users:{admin:'SECRET_HASH'},database:'/private'})}];
+  await get('settingsFile').onchange();
+  assert(!get('settingsDocument').value.includes('SECRET_HASH'));assert(!get('settingsDocument').value.includes('/private'));
+  await get('settingsValidate').onclick();assert.equal(policy.probe_multipart,false);assert.equal(revision,0);
+  await get('settingsSave').onclick();assert.equal(policy.probe_multipart,true);assert.equal(revision,1);
+  revision++;const draft=JSON.parse(get('settingsDocument').value);draft.headers_only=true;get('settingsDocument').value=JSON.stringify(draft);
+  await get('settingsSave').onclick();assert(get('settingsNotice').textContent.includes('其他管理员'));assert.equal(JSON.parse(get('settingsDocument').value).headers_only,true);
+  await get('logout').onclick();assert.equal(get('settingsDocument').value,'');assert.equal(get('settingsDeployment').textContent,'');
 });

@@ -27,7 +27,7 @@ async function main(){
     const context=await browser.newContext({viewport:{width:1440,height:1100}});const page=await context.newPage();
     const errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(base);
     const me=await(await page.request.get(base+'/api/me')).json();
-    const fixture=[{target:'https://app.example.com/',verdict:'疑似受影响',reason:'披露版本低于官方修复基线，回补状态待核实',versions:['8.4.26'],evidence:[{kind:'response_header',detail:'X-Powered-By: PHP/8.4.26 <img src=x onerror="window.__injected=1">'}],assessment:{patch:{status:'below_upstream_fix',source:'response_header',confidence:'low',detail:'低于修复基线，厂商回补状态未知'},review_priority:'high'},fingerprints:{library:{version:'ui-fixture',rule_count:1,source:'test'},matches:[{id:'wordpress',name:'WordPress',category:'cms',versions:['6.6.2'],relation:'response',confidence:'low',advice:'CMS 版本不是 PHP 版本，实际实例仍需核验',evidence:[{source:'meta_generator',pattern:'WordPress',detail:'generator 标签命中',url:'https://app.example.com/'}]}]}}];
+    const fixture=[{target:'https://app.example.com/',verdict:'疑似受影响',reason:'披露版本低于官方修复基线，回补状态待核实',versions:['8.4.26'],evidence:[{kind:'response_header',detail:'X-Powered-By: PHP/8.4.26 <img src=x onerror="window.__injected=1">'}],assessment:{patch:{status:'below_upstream_fix',source:'response_header',confidence:'low',detail:'低于修复基线，厂商回补状态未知'},review_priority:'high',surfaces:{forms:[{endpoint:{origin:'https://external.example',path:'/upload',relation:'external_reference'},method:'POST',multipart:true,file_fields:['document'],progress_field:true}],errors:[{kind:'session_decode',detail:'会话解码错误文本不能确认特定 CVE'}]}},fingerprints:{library:{version:'ui-fixture',rule_count:1,source:'test'},matches:[{id:'wordpress',name:'WordPress',category:'cms',versions:['6.6.2'],relation:'response',confidence:'low',advice:'CMS 版本不是 PHP 版本，实际实例仍需核验',evidence:[{source:'meta_generator',pattern:'WordPress',detail:'generator 标签命中',url:'https://app.example.com/'}]}]}}];
     const fixtureFile=path.join(temp,'fixture.json');fs.writeFileSync(fixtureFile,JSON.stringify(fixture));
     const seeded=spawnSync('python3',['-c',"import sqlite3,sys,time; db=sqlite3.connect(sys.argv[1]); db.execute('INSERT INTO jobs VALUES(?,?,?,?,?)',('ui-fixture',sys.argv[2],time.time(),'done',open(sys.argv[3]).read())); db.commit()",config.database,me.user,fixtureFile],{encoding:'utf8'});assert.equal(seeded.status,0,seeded.stderr);
     await page.evaluate(()=>sessionStorage.setItem('php-selfcheck-current-job','ui-fixture'));await page.reload();
@@ -35,7 +35,8 @@ async function main(){
     const style=await page.locator('#jobs .evidence-value').evaluate(e=>({family:getComputedStyle(e).fontFamily,weight:getComputedStyle(e).fontWeight,color:getComputedStyle(e).color,background:getComputedStyle(e).backgroundColor}));
     assert(Number(style.weight)>=700);assert(style.family.includes('monospace'));assert.notEqual(style.color,'rgb(99, 120, 122)');assert.notEqual(style.background,'rgba(0, 0, 0, 0)');
     assert.equal(await page.locator('#jobs .evidence-mark.risk').first().textContent(),'8.4.26');assert.equal(await page.evaluate(()=>window.__injected),undefined);
-    assert(await page.locator('#jobs .next-step').isVisible());assert(await page.locator('#jobs .technology-name').isVisible());
+    assert(await page.locator('#jobs .next-step').first().isVisible());assert(await page.locator('#jobs .technology-name').isVisible());
+    assert((await page.locator('#jobs').textContent()).includes('外部表单引用'));assert((await page.locator('#jobs').textContent()).includes('会话解码错误文本不能确认特定 CVE'));
     await page.locator('#jobs').screenshot({path:path.join(output,'evidence.png')});
     await page.goto(base+'/admin');await page.locator('#adminUser').fill('admin');await page.locator('#adminPassword').fill(password);await page.locator('#loginButton').click();
     await page.waitForFunction(()=>document.getElementById('rulesMeta').textContent.includes('修订 0'));
@@ -56,8 +57,21 @@ async function main(){
     await second.locator('#rulesVersion').fill('stale-draft');await second.locator('#rulesVersion').press('Tab');await second.locator('#rulesSave').click();await second.waitForFunction(()=>document.getElementById('rulesNotice').textContent.includes('其他管理员'));
     assert.equal(JSON.parse(await second.locator('#rulesDocument').inputValue()).version,'stale-draft');
     await page.locator('#fingerprintPanel details summary').click();await page.locator('#fingerprintPanel').screenshot({path:path.join(output,'administrator-rules.png')});
-    await page.locator('#logout').click();await page.locator('#loginPanel').waitFor();assert.equal(await page.locator('#rulesDocument').inputValue(),'');
-    assert.deepEqual(errors,[]);fs.writeFileSync(path.join(output,'browser-result.json'),JSON.stringify({state:'passed',checks:['evidence-fonts-colors','text-only-rendering','rule-edit-validation-save','live-activation','conflict-preserves-draft','logout-cleanup'],evidence_style:style},null,2));console.log('Browser smoke passed: evidence fonts/colors, text-only rendering, rule editing/validation/save, live activation, conflicts, and logout cleanup.');
+    await page.waitForFunction(()=>document.getElementById('settingsMeta').textContent.includes('修订 0'));
+    await page.locator('#settingsFile').setInputFiles({name:'config.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({probe_multipart:true,users:{ignored:'SECRET_HASH'},database:'/ignored/path'}))});
+    await page.waitForFunction(()=>document.getElementById('settingsNotice').textContent.includes('已导入'));
+    assert(!(await page.locator('#settingsDocument').inputValue()).includes('SECRET_HASH'));
+    const policy=JSON.parse(await page.locator('#settingsDocument').inputValue());policy.headers_only=true;policy.collection_defaults.php_command=true;
+    await page.locator('#settingsDocument').fill(JSON.stringify(policy));await page.locator('#settingsValidate').click();await page.waitForFunction(()=>document.getElementById('settingsNotice').textContent.includes('校验通过'));
+    publicMeta=await(await page.request.get(base+'/api/me')).json();assert.equal(publicMeta.probe_multipart_allowed,false);
+    await page.locator('#settingsSave').click();await page.waitForFunction(()=>document.getElementById('settingsMeta').textContent.includes('修订 1'));
+    publicMeta=await(await page.request.get(base+'/api/me')).json();assert.equal(publicMeta.probe_multipart_allowed,true);assert.equal(publicMeta.headers_only,true);assert.equal(publicMeta.collection_defaults.php_command,true);
+    await second.locator('#settingsDocument').fill(JSON.stringify(policy));await second.locator('#settingsSave').click();await second.waitForFunction(()=>document.getElementById('settingsNotice').textContent.includes('其他管理员'));
+    assert.equal(JSON.parse(await second.locator('#settingsDocument').inputValue()).probe_multipart,true);
+    await page.locator('#settingsPanel').screenshot({path:path.join(output,'administrator-settings.png')});
+    const developer=await context.newPage();await developer.goto(base);await developer.waitForFunction(()=>document.getElementById('headersOnly').disabled);assert(await developer.locator('#probeMultipart').isDisabled());assert(await developer.locator('#collectPhpCommand').isChecked());await developer.close();
+    await page.locator('#logout').click();await page.locator('#loginPanel').waitFor();assert.equal(await page.locator('#rulesDocument').inputValue(),'');assert.equal(await page.locator('#settingsDocument').inputValue(),'');
+    assert.deepEqual(errors,[]);fs.writeFileSync(path.join(output,'browser-result.json'),JSON.stringify({state:'passed',checks:['evidence-fonts-colors','text-only-rendering','rule-edit-validation-save','live-activation','conflict-preserves-draft','logout-cleanup','passive-surface-clues','settings-import-validation-save','settings-live-policy','settings-conflict-preserves-draft'],evidence_style:style},null,2));console.log('Browser smoke passed: evidence fonts/colors, text-only rendering, rule editing/validation/save, live activation, conflicts, and logout cleanup.');
   }finally{
     if(browser)await browser.close();
     if(processHandle && processHandle.exitCode===null){processHandle.kill('SIGTERM');await Promise.race([new Promise(resolve=>processHandle.once('exit',resolve)),sleep(5000)]);if(processHandle.exitCode===null)processHandle.kill('SIGKILL');}

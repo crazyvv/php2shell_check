@@ -91,3 +91,29 @@ fn vendor_reference_import_never_becomes_verified_or_promotes_verdict() {
         "meets_vendor_reference"
     );
 }
+
+#[test]
+fn passive_surfaces_do_not_promote_version_or_confirm_new_cve() {
+    let url = url::Url::parse("https://example.com/path").unwrap();
+    let r = php_selfcheck::scanner::inspect_with_library(
+        &[],
+        br#"<form action="/upload?secret=hidden" enctype="multipart/form-data"><input name="f" type="file"></form>Failed to decode session object; Allowed memory size of 123 bytes exhausted"#,
+        Some(&url),
+        &php_selfcheck::fingerprints::builtin(),
+    );
+    assert_eq!(r["verdict"], "未发现 PHP 特征");
+    assert_eq!(r["exploitation_verified"], false);
+    assert_eq!(
+        r["assessment"]["surfaces"]["forms"][0]["endpoint"]["path"],
+        "/upload"
+    );
+    assert_eq!(
+        r["assessment"]["surfaces"]["errors"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(!r["assessment"]["surfaces"].to_string().contains("hidden"));
+    assert!(!r["cves"].to_string().contains("115560"));
+}

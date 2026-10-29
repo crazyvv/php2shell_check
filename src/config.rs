@@ -12,6 +12,8 @@ use subtle::ConstantTimeEq;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     pub public_origin: String,
+    #[serde(default)]
+    pub collection_defaults: crate::settings::CollectionDefaults,
     /// Optional JSON rules, resolved relative to the configuration directory.
     #[serde(default)]
     pub fingerprint_file: Option<String>,
@@ -97,6 +99,7 @@ pub fn load(path: &Path) -> Result<Config> {
 }
 impl Config {
     pub fn validate(&mut self, path: &Path, bind: std::net::IpAddr) -> Result<()> {
+        self.collection_defaults.validate()?;
         let origin = url::Url::parse(&self.public_origin)?;
         if !matches!(origin.scheme(), "http" | "https")
             || origin.host_str().is_none()

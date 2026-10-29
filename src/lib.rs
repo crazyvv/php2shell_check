@@ -15,3 +15,7 @@ pub mod hostaudit;
 pub mod fingerprints;
 
 pub mod rulebook;
+
+pub mod surfaces;
+
+pub mod settings;

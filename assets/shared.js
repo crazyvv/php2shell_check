@@ -41,6 +41,20 @@ function assessmentView(a) {
     const tone=['below_upstream_fix','eol'].includes(o.status)?'risk':['meets_upstream_fix','form_hint','field_hint','responded'].includes(o.status)?'warning':'';
     const row=node('p',undefined,'assessment-fact '+tone);row.append(node('strong',label+'：'),node('span',statusNames[o.status] || o.status,'fact-status'));row.append(node('span',` · ${o.detail || ''}〔${sourceNames[o.source] || o.source || '未知来源'} / ${confidenceNames[o.confidence] || o.confidence || '未知可信度'}〕`));wrap.append(row);
   }
+  const surface=a?.surfaces;
+  if(surface){
+    const box=node('div',undefined,'next-step');box.append(node('strong','上传入口与运行异常（被动线索）'));
+    for(const form of (Array.isArray(surface.forms)?surface.forms:[]).slice(0,16)){
+      const ep=form.endpoint || {},row=node('p');row.append(node('strong',ep.relation==='external_reference'?'外部表单引用：':'表单入口：'),node('code',(ep.origin || '')+(ep.path || '地址未知'),'technology-version'));
+      row.append(node('span',` · ${form.method || '未知方法'} · multipart ${form.multipart?'是':'未声明'} · 文件字段 ${(Array.isArray(form.file_fields)?form.file_fields:[]).join(', ') || '未发现'}${form.progress_field?' · 含上传进度字段':''}`));box.append(row);
+    }
+    for(const error of (Array.isArray(surface.errors)?surface.errors:[]).slice(0,8)){const row=node('p',undefined,'assessment-fact warning');row.append(node('strong','错误文本线索：'),node('span',error.detail || '需要人工复核'));box.append(row);}
+    if(surface.errors?.length)box.append(node('p','复核：对照同一请求的服务端日志、实际 Web SAPI 和会话配置；不以错误文本或响应时间确认 CVE。','fine'));
+    if(surface.forms?.length)box.append(node('p','复核：由开发团队检查上传入口的鉴权、类型校验、存储隔离与执行权限。表单存在不等于可上传或可执行。','fine'));
+    if(!surface.forms?.length && !surface.errors?.length)box.append(node('p','当前响应未提取到上传表单或指定错误文本；不能排除相关功能或风险。','fine'));
+    if(surface.limits_reached)box.append(node('p','达到分析上限，线索可能不完整。','fine'));
+    box.append(node('p','仅分析已取得的响应，不提交表单、不验证执行；外部表单不会被访问。','fine'));wrap.append(box);
+  }
   if(a?.review_priority) wrap.append(node('p',`复核优先级：${a.review_priority === 'high' ? '高' : '需复核'}；不代表漏洞已确认。`,a.review_priority==='high'?'review-priority':'fine'));
   return wrap;
 }
@@ -68,6 +82,11 @@ function hostEvidenceView(e) {
   if(e.php_command?.status === 'disabled') wrap.append(node('p','本次未开启 PHP 命令采集。','fine'));
   for(const r of e.runtime_observations || []) {
     wrap.append(node('p',`${r.scope === 'cli_only' ? '仅 CLI，不能代表 Web' : r.scope === 'web_runtime_claimed' ? '提交人声明为 Web 实例' : '运行环境归属未知'} · SAPI ${r.sapi} · PHP ${r.version || '未知'} · upload_progress ${statusNames[r.upload_progress] || '未知'}`,'fine'));
+  }
+  for(const r of e.runtime_observations || []){
+    const settings=r.settings || {},row=node('p',undefined,'fine');
+    row.append(node('strong','会话配置（当前采集实例）：'));
+    row.append(node('code',`serialize_handler=${settings['session.serialize_handler'] ?? '未知'} · save_handler=${settings['session.save_handler'] ?? '未知'} · upload_progress.cleanup=${settings['session.upload_progress.cleanup'] ?? '未知'}`,'technology-version'));wrap.append(row);
   }
   if(e.middleware && !['not_collected','disabled'].includes(e.middleware.status)) {
     wrap.append(node('b','Web 中间件与监听端口（提交材料，未经独立核验）'));

@@ -128,6 +128,7 @@ async fn main() -> Result<()> {
             );
             let password = config::token(20);
             let cfg = Config {
+                collection_defaults: Default::default(),
                 public_origin: "http://127.0.0.1:8080".into(),
                 admins: BTreeMap::from([(user.clone(), config::password_hash(&password, None)?)]),
                 allow_anonymous,

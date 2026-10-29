@@ -349,7 +349,7 @@ php-selfcheck collect --options collector.options.example.json --web-probe=false
 
 ### 可选 multipart 可达性检查
 
-在 `config.json` 中设置 `"probe_multipart": true` 并重启，或保留默认 `false`。开启时，只在最终 GET 成功后对同一 URL 额外发送一次约百字节的普通表单 POST，重新校验 DNS/范围并固定连接 IP。不含文件、上传进度字段、嵌套数据或漏洞载荷，不跟随 POST 重定向；保留 TLS 验证且不传递自查台凭据。请只对允许普通表单 POST 的业务页面开启，常规 POST 也可能产生业务副作用。
+在后台允许 `probe_multipart`，或初次在 `config.json` 中设置 `"probe_multipart": true` 并重启；开发者还需为本次扫描勾选该选项。独立 CLI 按其配置启用。真正启用时，只在最终 GET 成功后对同一 URL 额外发送一次约百字节的普通表单 POST，重新校验 DNS/范围并固定连接 IP。不含文件、上传进度字段、嵌套数据或漏洞载荷，不跟随 POST 重定向；保留 TLS 验证且不传递自查台凭据。请只对允许普通表单 POST 的业务页面开启，常规 POST 也可能产生业务副作用。
 
 2xx 仅记为“收到响应，未确认 PHP 解析”，405/415 记为“当前请求被拒绝”，其他状态或错误保持未知；500、超时等不会提升为漏洞成立。POST 的 IP、URL、时间与状态单独记录。此检查不验证 upload_progress，也不执行内存压力或会话污染探测。
 
@@ -406,6 +406,30 @@ docker run -d --name php-selfcheck --restart unless-stopped \
 - CVE：CVE-2026-109618、CVE-2026-109619
 
 默认检测只发起指定入口的常规 GET；可选小型 multipart POST 见“可选 multipart 可达性检查”。远程扫描不执行目标主机命令、不发送漏洞利用载荷，不自动发现目录、phpinfo、FastCGI 或额外端口。“疑似受影响”需要核实回补补丁；“达到修复基线”“版本未知”“未发现特征”和“检测受阻”均不能证明无漏洞或已修复。提交只读业务页面，URL 中不要包含令牌。主机采集器仅在启用 `--php-command` 后运行已有 PHP 获取版本与选定配置；启用中间件采集时，也会运行相应程序的版本或模块查询命令，不接受网络用户提供任意命令。
+
+## 管理员在线配置
+
+登录 `/admin` 后可在“扫描权限与程序配置”面板修改开关，或直接编辑配置 JSON。可在线维护 `allow_anonymous`、`allow_without_whitelist`、网段/域名/端口白名单、`probe_multipart`、`headers_only` 和 `collection_defaults`。支持只校验、保存生效、修订冲突保护和变更审计；失败时保留原配置。后台保存到 SQLite 的 `runtime_settings`，重启恢复并优先于启动文件中的对应字段，原 JSON 不被改写。恢复启动文件管理时，请停服务并备份数据库后删除该表中 `id=1` 的覆盖记录。
+
+`probe_multipart` 在 Web 服务中表示管理员允许。开发者还须为本次扫描勾选“小型 multipart 可达性检查”，默认不选；未获允许的 API 请求会被拒绝。强制 `headers_only` 无法被开发者关闭，并跳过 multipart。独立 CLI `check` 继续使用命令配置文件的行为，不受运行中后台策略控制。
+
+权限和范围变更用于后续请求、新提交任务；已经提交的任务固定使用当时快照，结果及审计记录包含 `settings_revision`。管理员收紧范围不会中断已有任务，紧急撤销请停止服务。特殊地址、DNS 固定、TLS 校验和限流仍由程序校验。
+
+服务器配置 JSON 同样支持 `collection_defaults`；未设置时六项均默认关闭。`collection_defaults` 包含 `php_command`、`package_audit`、`middleware`、`php_modules`、`ports`、`web_probe` 六个布尔值，仅设置扫描页面所生成的本地采集命令默认选项；用户可修改本次采集选项。模块/端口/Web 需要中间件，Web 还需要端口采集。不远程运行采集命令，不能约束独立采集器。
+
+部署地址、数据库路径、账号和密码由服务器配置及账号命令维护；后台只显示部署信息和账号名称，不返回密码或密码散列。特征 JSON 使用专门的特征库面板维护。配置面板支持的 JSON 是在线字段子集，可用文件导入完整部署 JSON：浏览器只提取在线字段，忽略账号、密码散列、部署路径和其他字段；也可导出当前在线字段 JSON 用于合并回服务器配置。不要把含凭据的完整配置粘贴到在线 JSON 文本框。
+
+API：独立管理员登录后 `GET /api/admin/settings`，`POST /api/admin/settings/validate`（`document` 为 JSON 文本），`POST /api/admin/settings/save`（增加读取时的 `revision`）；POST 需要同源和 `X-Requested-With: PHP-SelfCheck`。并发修订返回 409，需保留草稿并重新加载合并。
+
+## 上传入口与运行异常线索
+
+扫描会在已有响应中被动提取最多 16 个上传表单：处理入口来源与路径、方法、multipart 声明、文件字段名和默认上传进度字段。外部入口只标为引用，不访问；不保存查询参数、片段和表单值。只处理最多 128 KiB 响应和 512 个标签，跳过注释、script/style；动态生成或复杂 HTML 可能遗漏。结果在“证据与下一步”展示，JSON 的 `assessment.surfaces` 保留结构化线索及分析上限信息，历史记录不重新判定。
+
+同时识别响应中已有的 PHP 内存耗尽、会话解码/序列化处理器、文件包含错误文本。只保存错误类别及解释，不保存可能含文件路径或敏感数据的错误原文。不主动制造错误；错误文本可能是文档或伪造，不提升版本结论或确认 CVE。
+
+可选 `collect --php-command` 和受鉴权保护的 Web 运行时辅助脚本还会采集 `session.serialize_handler`、`session.save_handler`、`session.upload_progress.cleanup`。CLI 与 Web 配置必须分别核验；导入报告仍标为未经独立核验。管理员和开发者都可在各自有权访问的结果中查看这些材料。
+
+与社区项目的能力对照和取舍见 [能力对照](docs/capability-comparison.md)。
 
 ## 开发验证
 

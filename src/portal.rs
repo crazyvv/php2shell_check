@@ -30,6 +30,7 @@ pub fn now() -> f64 {
 }
 pub struct State {
     pub config: Config,
+    pub(crate) settings: RwLock<crate::settings::Snapshot>,
     pub(crate) rulebook: RwLock<crate::rulebook::Snapshot>,
     pub(crate) db: Mutex<Connection>,
     rates: Mutex<HashMap<String, Vec<Instant>>>,
@@ -69,15 +70,18 @@ impl State {
             CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,owner TEXT,created REAL,state TEXT,results TEXT);
             CREATE TABLE IF NOT EXISTS reports(id TEXT PRIMARY KEY,owner TEXT,created REAL,target TEXT,payload TEXT);
             CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,created REAL,owner TEXT,action TEXT,detail TEXT);
+            CREATE TABLE IF NOT EXISTS runtime_settings(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,document TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS fingerprint_rules(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,document TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,owner TEXT,kind TEXT,expires REAL,credential TEXT);
             CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires);
             CREATE INDEX IF NOT EXISTS jobs_owner_created ON jobs(owner,created);
             CREATE INDEX IF NOT EXISTS reports_owner_target ON reports(owner,target);
             UPDATE jobs SET state='interrupted' WHERE state IN ('queued','running');")?;
+        let settings = crate::settings::Snapshot::load(&db, &config)?;
         let rulebook = crate::rulebook::Snapshot::load(&db, &config)?;
         Ok(Arc::new(Self {
             rulebook: RwLock::new(rulebook),
+            settings: RwLock::new(settings),
             config,
             db: Mutex::new(db),
             rates: Mutex::new(HashMap::new()),
@@ -85,6 +89,11 @@ impl State {
             workers: Arc::new(Semaphore::new(4)),
             connections: Arc::new(Semaphore::new(32)),
         }))
+    }
+    pub(crate) fn effective_config(&self) -> Config {
+        let mut config = self.config.clone();
+        self.settings.read().unwrap().policy.apply(&mut config);
+        config
     }
     pub(crate) fn audit(&self, user: &str, action: &str, detail: Value) -> Result<()> {
         self.db.lock().unwrap().execute(
@@ -170,6 +179,7 @@ pub fn router(state: Arc<State>) -> Router {
     })
 }
 async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response> {
+    let config = state.effective_config();
     let origin = url::Url::parse(&state.config.public_origin)?;
     let expected = &origin[url::Position::BeforeHost..url::Position::AfterPort];
     if !text(req.headers(), "host").eq_ignore_ascii_case(expected) {
@@ -236,9 +246,7 @@ async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response> {
         .get::<ConnectInfo<SocketAddr>>()
         .map(|p| p.0.ip().to_string())
         .unwrap_or_else(|| "unknown".into());
-    if !state.config.allow_anonymous
-        && window(&mut state.failures.lock().unwrap(), &peer).len() >= 12
-    {
+    if !config.allow_anonymous && window(&mut state.failures.lock().unwrap(), &peer).len() >= 12 {
         return Ok(error(429, "认证失败次数过多，请稍后再试"));
     }
     let auth = text(req.headers(), "authorization").to_owned();
@@ -249,7 +257,7 @@ async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response> {
         .and_then(|b| String::from_utf8(b).ok())
         .and_then(|s| s.split_once(':').map(|(u, p)| (u.to_owned(), p.to_owned())));
     let mut new_cookie = None;
-    let user = if state.config.allow_anonymous {
+    let user = if config.allow_anonymous {
         let db = state.db.lock().unwrap();
         if let Some(owner) = crate::session::lookup(&db, &state.config, req.headers(), "visitor")? {
             Some(owner)
@@ -356,6 +364,7 @@ pub(crate) async fn read_body_limit(
     Ok(body)
 }
 fn get(state: &State, user: &str, path: &str, query: &str) -> Result<Response> {
+    let config = state.effective_config();
     match path {
         "/" => {
             return Ok(response(
@@ -388,7 +397,7 @@ fn get(state: &State, user: &str, path: &str, query: &str) -> Result<Response> {
         "/api/me" => {
             return Ok(json_response(
                 200,
-                json!({"fingerprint_library":state.rulebook.read().unwrap().library.metadata(),"headers_only":state.config.headers_only,"user":user,"rule_date":scanner::RULE_DATE,"allowed_ports":state.config.allowed_ports,"scope_configured":state.config.allow_without_whitelist || !state.config.allowed_networks.is_empty(),"allow_anonymous":state.config.allow_anonymous,"allow_without_whitelist":state.config.allow_without_whitelist}),
+                json!({"probe_multipart_allowed":config.probe_multipart,"collection_defaults":state.settings.read().unwrap().policy.collection_defaults,"fingerprint_library":state.rulebook.read().unwrap().library.metadata(),"headers_only":config.headers_only,"user":user,"rule_date":scanner::RULE_DATE,"allowed_ports":config.allowed_ports,"scope_configured":config.allow_without_whitelist || !config.allowed_networks.is_empty(),"allow_anonymous":config.allow_anonymous,"allow_without_whitelist":config.allow_without_whitelist}),
             ));
         }
         _ => {}
@@ -502,7 +511,20 @@ fn post(state: Arc<State>, user: &str, path: &str, body: Value) -> Result<Respon
             if body.get("headers_only").is_some_and(|v| !v.is_boolean()) {
                 return Ok(error(400, "headers_only 必须为布尔值"));
             }
-            let mut scan_config = state.config.clone();
+            let (mut scan_config, settings_revision) = {
+                let active = state.settings.read().unwrap();
+                let mut config = state.config.clone();
+                active.policy.apply(&mut config);
+                (config, active.revision)
+            };
+            if body.get("probe_multipart").is_some_and(|v| !v.is_boolean()) {
+                return Ok(error(400, "probe_multipart 必须为布尔值"));
+            }
+            let requested_multipart = body["probe_multipart"].as_bool().unwrap_or(false);
+            if requested_multipart && !scan_config.probe_multipart {
+                return Ok(error(403, "管理员未允许 multipart 检查"));
+            }
+            scan_config.probe_multipart = requested_multipart;
             scan_config.fingerprint_library = Some(state.rulebook.read().unwrap().library.clone());
             scan_config.headers_only |= body["headers_only"].as_bool().unwrap_or(false);
             let mut targets = vec![];
@@ -542,7 +564,7 @@ fn post(state: Arc<State>, user: &str, path: &str, body: Value) -> Result<Respon
             state.audit(
                 user,
                 "scan_submit",
-                json!({"job":id,"targets":targets,"headers_only":scan_config.headers_only,"fingerprint_library":scan_config.fingerprint_library.as_ref().map(|l|l.metadata())}),
+                json!({"job":id,"targets":targets,"settings_revision":settings_revision,"probe_multipart":scan_config.probe_multipart,"headers_only":scan_config.headers_only,"fingerprint_library":scan_config.fingerprint_library.as_ref().map(|l|l.metadata())}),
             )?;
             let job_id = id.clone();
             tokio::spawn(async move {
@@ -555,7 +577,9 @@ fn post(state: Arc<State>, user: &str, path: &str, body: Value) -> Result<Respon
                         .execute("UPDATE jobs SET state='running' WHERE id=?", [&job_id])?;
                     let mut results = vec![];
                     for target in targets {
-                        results.push(scanner::scan(&target, &scan_config).await);
+                        let mut result = scanner::scan(&target, &scan_config).await;
+                        result["settings_revision"] = json!(settings_revision);
+                        results.push(result);
                         state.db.lock().unwrap().execute(
                             "UPDATE jobs SET results=? WHERE id=?",
                             params![serde_json::to_string(&results)?, job_id],
@@ -624,6 +648,7 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, Arc<State>) {
         let dir = tempfile::tempdir().unwrap();
         let cfg = Config {
+            collection_defaults: Default::default(),
             public_origin: "http://127.0.0.1:8080".into(),
             admins: Default::default(),
             allow_anonymous: false,

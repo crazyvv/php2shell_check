@@ -42,7 +42,7 @@ def package(target, tag, output):
         shutil.copy2(binary, directory / executable)
         for filename in FILES:
             shutil.copy2(ROOT / filename, directory / filename)
-        for subdir in ["licenses", "rules", "tools"]:
+        for subdir in ["licenses", "rules", "tools", "docs"]:
             shutil.copytree(ROOT / subdir, directory / subdir)
         prefix = ".\\php-selfcheck.exe" if "windows" in target else "./php-selfcheck"
         (directory / "START-HERE.txt").write_text(

@@ -358,6 +358,7 @@ pub fn inspect_with_library(
         ("未发现 PHP 特征", "不代表未使用 PHP，也不代表无漏洞")
     };
     let mut assessment = crate::assessment::remote(headers, body, &versions);
+    assessment["surfaces"] = crate::surfaces::inspect(url, body);
     let warnings: Vec<_> = versions
         .iter()
         .filter(|v| version_risk(v).0 == "疑似受影响")
@@ -759,6 +760,7 @@ mod tests {
     #[tokio::test]
     async fn redirect_revalidates_scope() {
         let cfg = Config {
+            collection_defaults: Default::default(),
             public_origin: "http://localhost".into(),
             admins: Default::default(),
             allow_anonymous: false,

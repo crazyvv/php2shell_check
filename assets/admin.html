@@ -6,6 +6,12 @@
 <form id="loginForm"><div class="importrow"><div><label for="adminUser">管理员账号</label><input id="adminUser" value="admin" autocomplete="username" maxlength="64" required></div><div><label for="adminPassword">密码</label><input id="adminPassword" type="password" autocomplete="current-password" maxlength="4096" required></div><button id="loginButton" class="primary" type="submit">登录</button></div></form>
 <p class="hint">已有配置首次启用后台时，在服务器运行 <code>php-selfcheck add-admin --user admin</code>，保存随机密码并重启服务。</p></section>
 <div id="dashboard" hidden><section class="card"><div class="sectionhead"><h1>全站扫描汇总</h1><div><span id="adminAccount"></span> <button id="logout" class="secondary">退出登录</button></div></div><div id="summary"></div></section>
+<section class="card" id="settingsPanel"><div class="sectionhead"><h2>扫描权限与程序配置</h2><button id="settingsReload" class="secondary">重新加载配置</button></div>
+<p class="hint">管理员控制检测权限，开发者选择本次启用。保存后立即用于新请求和新提交任务，正在执行/排队的任务保持提交时配置。配置持久化在数据库并优先于启动 JSON；不改写原文件。密码散列不在页面中返回。</p>
+<div id="settingsSwitches" class="importrow"></div><p id="settingsMeta" class="fine"></p><div id="settingsNotice" role="status"></div>
+<div class="importrow"><div><label for="settingsFile">导入配置 JSON 为草稿（只提取在线字段）</label><input id="settingsFile" type="file" accept=".json,application/json"></div><button id="settingsExport" class="secondary">导出在线配置 JSON</button></div>
+<label for="settingsDocument">在线配置 JSON（可直接编辑白名单、开关及采集命令默认选项）</label><textarea id="settingsDocument" rows="20" spellcheck="false"></textarea><div class="importrow"><button id="settingsValidate" class="secondary">校验配置</button><button id="settingsSave" class="primary">保存并生效</button></div>
+<p class="fine">collection_defaults 只控制页面生成的本地采集命令默认值，不会远程运行命令，也无法限制用户自行运行独立采集程序。仅响应头强制模式会跳过 multipart。部署地址、数据库和账号凭据由服务器配置维护。</p><details><summary>查看部署信息（只读，无密码散列）</summary><pre id="settingsDeployment"></pre></details></section>
 <section class="card" id="fingerprintPanel"><div class="sectionhead"><h2>网站特征库维护</h2><button id="rulesReload" class="secondary">重新加载当前规则</button></div>
 <p class="hint">可逐条编辑或修改完整 JSON。先应用到草稿，再校验和保存；保存后立即用于新提交的扫描，已提交任务和历史保留原规则。多个管理员同时修改时会提示版本冲突。后台保存的规则持久化在数据库中，并优先于启动文件。</p>
 <p id="rulesMeta" class="fine"></p><label for="rulesVersion">草稿特征库版本（保存后显示在新扫描结果中）</label><input id="rulesVersion" maxlength="100" placeholder="company-2026-10-26-1"><div id="rulesNotice" role="status" aria-live="polite"></div>
