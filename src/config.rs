@@ -98,23 +98,9 @@ pub fn load(path: &Path) -> Result<Config> {
     )?)
 }
 impl Config {
-    pub fn validate(&mut self, path: &Path, bind: std::net::IpAddr) -> Result<()> {
+    /// Pure validation for administrator-editable fields; no file or database access.
+    pub fn validate_online_fields(&mut self) -> Result<()> {
         self.collection_defaults.validate()?;
-        let origin = url::Url::parse(&self.public_origin)?;
-        if !matches!(origin.scheme(), "http" | "https")
-            || origin.host_str().is_none()
-            || !origin.username().is_empty()
-            || origin.password().is_some()
-            || origin.query().is_some()
-            || origin.fragment().is_some()
-            || origin.path() != "/"
-            || self.public_origin.ends_with('/')
-        {
-            bail!("public_origin 只能是 scheme://host[:port]，不能带路径或尾斜线");
-        }
-        if !bind.is_loopback() && origin.scheme() != "https" {
-            bail!("非回环监听须配置 HTTPS public_origin，并通过 HTTPS 反向代理访问");
-        }
         for n in &self.allowed_networks {
             let net: ipnet::IpNet = n.parse()?;
             anyhow::ensure!(net.addr() == net.network(), "CIDR 必须使用网络地址: {n}");
@@ -149,6 +135,25 @@ impl Config {
                 .context("域名为空")?
                 .trim_end_matches('.')
                 .to_lowercase();
+        }
+        Ok(())
+    }
+    pub fn validate(&mut self, path: &Path, bind: std::net::IpAddr) -> Result<()> {
+        self.validate_online_fields()?;
+        let origin = url::Url::parse(&self.public_origin)?;
+        if !matches!(origin.scheme(), "http" | "https")
+            || origin.host_str().is_none()
+            || !origin.username().is_empty()
+            || origin.password().is_some()
+            || origin.query().is_some()
+            || origin.fragment().is_some()
+            || origin.path() != "/"
+            || self.public_origin.ends_with('/')
+        {
+            bail!("public_origin 只能是 scheme://host[:port]，不能带路径或尾斜线");
+        }
+        if !bind.is_loopback() && origin.scheme() != "https" {
+            bail!("非回环监听须配置 HTTPS public_origin，并通过 HTTPS 反向代理访问");
         }
         let db = Path::new(&self.database);
         if !db.is_absolute() {

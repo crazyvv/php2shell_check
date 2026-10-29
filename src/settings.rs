@@ -12,7 +12,7 @@ use axum::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,8 +88,7 @@ impl Policy {
         self.collection_defaults.validate()?;
         let mut candidate = base.clone();
         self.apply(&mut candidate);
-        candidate.fingerprint_file = None;
-        candidate.validate(Path::new("/unused-settings.json"), "127.0.0.1".parse()?)?;
+        candidate.validate_online_fields()?;
         self.allowed_domains = candidate.allowed_domains;
         Ok(())
     }
@@ -195,4 +194,27 @@ pub async fn dispatch(state: Arc<State>, req: Request<Body>, actor: &str) -> Res
         origin: "database",
     };
     Ok(json_response(200, active.view()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn online_validation_never_opens_deployment_database_or_rule_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = dir.path().join("invalid.sqlite3");
+        std::fs::write(&database, b"not a database").unwrap();
+        let base:Config=serde_json::from_value(json!({"public_origin":"https://example.com","database":database,"fingerprint_file":dir.path().join("missing.json"),"allow_anonymous":true,"allow_without_whitelist":true})).unwrap();
+        let mut policy = Policy::from_config(&base);
+        policy.collection_defaults.php_command = true;
+        policy.allowed_domains = vec!["EXAMPLE.COM".into()];
+        policy.validate(&base).unwrap();
+        assert_eq!(policy.allowed_domains, ["example.com"]);
+        policy.allowed_networks = vec!["10.0.0.1/8".into()];
+        assert!(policy.validate(&base).is_err());
+        let partial: CollectionDefaults =
+            serde_json::from_value(json!({"php_command":true})).unwrap();
+        assert!(partial.php_command);
+        assert!(!partial.web_probe);
+    }
 }
