@@ -21,9 +21,9 @@ async function loadHistory(){
     const choices=new Set(Object.keys(data.summary.verdicts));if(selected)choices.add(selected);
     for(const label of [...choices].sort()){const option=node('option',`${label}（${data.summary.verdicts[label] || 0} 个目标）`);option.value=label;$('verdictFilter').append(option);}
     $('verdictFilter').value=selected;
-    $('summary').replaceChildren(node('p',`累计扫描 ${data.summary.jobs} 次 · 主机材料 ${data.summary.reports} 份`));
-    for(const [state,count] of Object.entries(data.summary.states)) $('summary').append(node('span',`${states[state] || state}：${count}　`));
-    const verdicts=node('div');for(const [verdict,count] of Object.entries(data.summary.verdicts)) verdicts.append(node('p',`${verdict}：${count}`));$('summary').append(verdicts);
+    $('summary').replaceChildren(node('p',`累计扫描 ${data.summary.jobs} 次 · 主机材料 ${data.summary.reports} 份`,'summary-overview'));
+    for(const [state,count] of Object.entries(data.summary.states)) $('summary').append(node('span',`${states[state] || state}：${count}`,'summary-state'));
+    const verdicts=node('div',undefined,'summary-verdicts');for(const [verdict,count] of Object.entries(data.summary.verdicts)) verdicts.append(node('span',`${verdict}：${count}`));$('summary').append(verdicts);
     $('pageInfo').textContent=`匹配 ${total} 条 · 第 ${Math.floor(offset/limit)+1} 页`;
     $('previous').disabled=offset===0;$('next').disabled=offset+limit>=total;
   } catch(e){if(e.status===401)showLogin();throw e;}
