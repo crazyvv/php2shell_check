@@ -314,6 +314,8 @@ for proc in /proc/[0-9]*; do
     continue
   fi
 
+  [[ $identity == matched ]] && active_ids[$expected]=1
+
   status=unknown reason=incomplete_evidence
   if [[ $identity == matched && ( $cpu == no || $build_state == not_affected ) ]]; then
     status=not_affected reason=excluded_by_cpu_or_build

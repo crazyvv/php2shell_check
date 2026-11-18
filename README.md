@@ -312,6 +312,15 @@ bash scripts/check-java4shell.sh --json --java-path /opt/jdk/bin/java > java4she
 
 脚本从 `/proc/cpuinfo` 检查所有可见逻辑 CPU。开启 `--jcmd` 后，使用当前 `PATH` 里的 `jcmd` 读取 JVM 生效参数，必要时会启动 HotSpot 的诊断监听器。默认输出 TSV。使用 `--json` 时，stdout 只写 JSON 汇总，TSV 证据写到 stderr。`--java-path` 会解析符号链接，并优先扫描目标 `bin/java` 所属的 JDK/JRE。`--root` 指定的目录也优先于系统默认目录。退出码 `0` 表示已排除影响或已确认缓解，`1` 表示存在受影响 JVM，`2` 表示用法或依赖错误，`3` 表示证据不足，`4` 表示有符合条件但未关联到运行中 JVM 的安装。检查思路参考两个上游项目和相应厂商公告。[Bash 检查器](https://github.com/ubitquity/cve-2026-114938-java4shell-remediation) · [Python 检查器](https://github.com/Mahgal/java4shell-check) · [Oracle 安全公告](https://www.oracle.com/security-alerts/cspunov2026.html)
 
+需要逐资产报告时，可单独运行增强版 `scripts/java4shell-scan.sh`。它增加了厂商和产品证据、容器线索以及 JSON/CSV 明细。运行进程以 `/proc` 映射为准，未验证的磁盘安装最多给出 `potential`，对于疑似受影响的运行 JVM，缺少生效参数时保留 `unknown`。
+
+```bash
+bash scripts/java4shell-scan.sh --jcmd --json > java4shell-details.json
+bash scripts/java4shell-scan.sh --demo --json
+```
+
+增强版退出码为 `0`（没有命中门禁且证据足够）、`1`（命中 `--fail-on`，默认含 `affected,potential`）、`2`（参数或 I/O 错误）、`3`（证据不足）。`--jdk` 指定要盘点的运行时目录。`--java-path` 会执行指定程序的 `-version`，请传入可信 Java 程序。`--jcmd` 从当前 `PATH` 查找诊断工具，并可能启动 HotSpot 诊断监听器。
+
 ### 可选运行实例与厂商补丁参考核验
 
 ```bash
