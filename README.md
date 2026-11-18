@@ -295,6 +295,20 @@ php-selfcheck collect --java-command > host-report.json
 
 程序不执行公开触发器。输出只使用“候选”“当前节点不适用”“达到公开修复基线”或“未知”，并保留 `patch_verified=false`、`exploitability_confirmed=false`。首个公开修复基线为 17.0.21.1、21.0.13.1、25.0.5.1、27.0.1.1；厂商回补和捆绑 JDK 应以各自公告为准。升级后还要重建容器并重启全部实例。
 
+#### 独立 Bash 检查脚本
+
+可以将 `scripts/check-java4shell.sh` 单独拷贝到 Linux 主机。它需要 Bash 4.4+ 和常见 GNU 工具，无需 Python 或编译。
+
+```bash
+# 采集磁盘安装、运行映像和操作系统可见的 CPU 特性
+bash scripts/check-java4shell.sh
+
+# 用业务 JVM 的运行账号读取生效参数，并增加一个嵌入式 JRE 搜索目录
+bash scripts/check-java4shell.sh --jcmd --root /opt/my-service
+```
+
+脚本从 `/proc/cpuinfo` 检查所有可见逻辑 CPU。开启 `--jcmd` 后，使用当前 `PATH` 里的 `jcmd` 读取 JVM 生效参数，必要时会启动 HotSpot 的诊断监听器。结果是制表符分隔的文本。退出码 `0` 表示已排除影响或已确认缓解，`1` 表示存在受影响 JVM，`2` 表示用法或依赖错误，`3` 表示证据不足，`4` 表示有符合条件但未关联到运行中 JVM 的安装。检查思路参考两个上游项目和相应厂商公告。[Bash 检查器](https://github.com/ubitquity/cve-2026-114938-java4shell-remediation) · [Python 检查器](https://github.com/Mahgal/java4shell-check) · [Oracle 安全公告](https://www.oracle.com/security-alerts/cspunov2026.html)
+
 ### 可选运行实例与厂商补丁参考核验
 
 ```bash
