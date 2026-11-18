@@ -13,6 +13,7 @@
   "admins": {},
   "collection_defaults": {
     "php_command": false,
+    "java_command": false,
     "package_audit": false,
     "middleware": false,
     "php_modules": false,

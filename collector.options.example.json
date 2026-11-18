@@ -2,6 +2,7 @@
   "fingerprint_file": null,
   "php_command": false,
   "php_binary": null,
+  "java_command": false,
   "package_audit": false,
   "middleware": false,
   "php_modules": false,

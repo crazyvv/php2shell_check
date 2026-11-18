@@ -52,9 +52,34 @@ fn builtin_coverage_cms_node_static_and_servers_are_evidence_hints() {
     );
     assert!(has(&r, "nextjs") && has(&r, "astro"));
     assert_eq!(r["php_hint"], false);
-    assert_eq!(r["library"]["rule_count"], 51);
+    assert_eq!(r["library"]["rule_count"], 63);
     assert_eq!(r["library"]["sha256"].as_str().unwrap().len(), 64);
     assert!(!r.to_string().contains("opaque-request-id"));
+}
+#[test]
+fn java_product_hints_are_passive_and_do_not_claim_java4shell() {
+    let r = detect(
+        &[
+            ("X-Jenkins", "2.492.1"),
+            ("X-Elastic-Product", "Elasticsearch"),
+        ],
+        "",
+    );
+    assert!(has(&r, "java-jenkins") && has(&r, "java-elasticsearch"));
+    assert_eq!(r["java_hint"], true);
+    assert_eq!(r["php_hint"], false);
+    let finding = scanner::inspect_with_library(
+        &[("X-Jenkins".into(), "2.492.1".into())],
+        &[],
+        Some(&Url::parse("https://app.example.com/").unwrap()),
+        &fingerprints::builtin(),
+    );
+    assert_eq!(finding["verdict"], "发现 Java 服务线索，需核验 Java4Shell");
+    assert_eq!(
+        finding["java4shell"]["safe_probe"]["http_requests_added"],
+        0
+    );
+    assert_eq!(finding["java4shell"]["exploitability_confirmed"], false);
 }
 #[test]
 fn external_resource_and_plain_mentions_do_not_identify_target_php() {

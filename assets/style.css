@@ -211,6 +211,8 @@ footer { display: flex; justify-content: space-between; gap: 20px; padding: 2px 
 .runtime-comparison p { margin: 4px 0; }
 .comparison-change { color: #244a84; }
 .comparison-conclusion { color: var(--warning); font-weight: 750; }
+.java4shell-evidence { border-color: #ead49a; border-left-color: #c58a13; background: var(--warning-soft); }
+.java4shell-evidence > strong { color: #704d09; }
 
 /* Administrator workspace. */
 .admin-main { max-width: 1360px; }

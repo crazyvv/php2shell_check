@@ -1,4 +1,5 @@
-//! Local Linux inventory. Never reads process environment or command lines; never uploads.
+//! Local Linux inventory. Never reads process environments or uploads data. Java inspection
+//! retains only allowlisted mitigation flags from command lines and discards all other arguments.
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
@@ -21,22 +22,34 @@ pub(crate) fn which(name: &str) -> Option<PathBuf> {
             }
         })
 }
-pub(crate) async fn run(exe: &Path, args: &[&str]) -> Value {
+async fn run_command(exe: &Path, args: &[&str], clear_java_options: bool) -> Value {
     use tokio::io::AsyncReadExt;
     let command: Vec<_> = std::iter::once(exe.to_string_lossy().to_string())
         .chain(args.iter().map(|s| s.to_string()))
         .collect();
     let result: anyhow::Result<(i32, String)> = async {
-        let mut child = tokio::process::Command::new(exe)
-            .args(args)
+        let mut process = tokio::process::Command::new(exe);
+        process.args(args);
+        if clear_java_options {
+            process
+                .env_remove("JAVA_TOOL_OPTIONS")
+                .env_remove("JDK_JAVA_OPTIONS")
+                .env_remove("_JAVA_OPTIONS");
+        }
+        let mut child = process
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()?;
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
-        // Drain both pipes while retaining at most 24 KB. Avoid unbounded output allocation.
-        async fn read(mut pipe: impl tokio::io::AsyncRead + Unpin) -> std::io::Result<Vec<u8>> {
+        // PrintFlagsFinal is commonly larger than the ordinary command limit. It is only used by
+        // the explicit Java collector and is reduced to allowlisted flags before serialization.
+        let output_limit = if clear_java_options { 262_144 } else { 24_000 };
+        async fn read(
+            mut pipe: impl tokio::io::AsyncRead + Unpin,
+            output_limit: usize,
+        ) -> std::io::Result<Vec<u8>> {
             let mut output = vec![];
             let mut buf = [0; 4096];
             loop {
@@ -44,18 +57,22 @@ pub(crate) async fn run(exe: &Path, args: &[&str]) -> Value {
                 if n == 0 {
                     break;
                 }
-                let take = n.min(24000 - output.len());
+                let take = n.min(output_limit.saturating_sub(output.len()));
                 output.extend_from_slice(&buf[..take]);
             }
             Ok(output)
         }
         let (out, err, status) = tokio::time::timeout(Duration::from_secs(10), async {
-            tokio::join!(read(stdout), read(stderr), child.wait())
+            tokio::join!(
+                read(stdout, output_limit),
+                read(stderr, output_limit),
+                child.wait()
+            )
         })
         .await?;
         let mut bytes = out?;
         bytes.extend(err?);
-        bytes.truncate(24000);
+        bytes.truncate(output_limit);
         Ok((
             status?.code().unwrap_or(-1),
             String::from_utf8_lossy(&bytes).into_owned(),
@@ -66,6 +83,12 @@ pub(crate) async fn run(exe: &Path, args: &[&str]) -> Value {
         Ok((code, out)) => json!({"command":command,"exit_code":code,"output":out}),
         Err(e) => json!({"command":command,"error":e.to_string()}),
     }
+}
+pub(crate) async fn run(exe: &Path, args: &[&str]) -> Value {
+    run_command(exe, args, false).await
+}
+pub(crate) async fn run_clean_java(exe: &Path, args: &[&str]) -> Value {
+    run_command(exe, args, true).await
 }
 pub async fn collect() -> Value {
     collect_with_options(&CollectOptions::default()).await
@@ -167,8 +190,9 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
     }
     let middleware = crate::middleware::collect(options).await;
     let package_audit = crate::hostaudit::collect(options.package_audit).await;
+    let java4shell = crate::java4shell::collect(options.java_command).await;
     bounded_report(
-        json!({"php_command":{"status":if options.php_command {"enabled"}else{"disabled"},"scope":"cli_only","detail":"显式开启才运行 PHP；CLI 配置不能代表 Web/FPM"},"package_audit":package_audit,"collection_options":options,"middleware":middleware,"schema":"php-selfcheck-host/v1","hostname":std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim(),"collected_at":chrono::Utc::now().to_rfc3339(),"platform":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"source":"developer_supplied_unverified","checks":checks,"runtime_observations":runtime_observations,"processes":processes,"limitations":["CLI 版本不等于 Web/FPM 实例版本；报告不自动证明补丁或漏洞状态。","仅检查当前主机可见进程与标准路径；容器、远端主机、自定义安装目录需另行核验。","此报告未签名，平台记录为开发者提交材料。"]}),
+        json!({"php_command":{"status":if options.php_command {"enabled"}else{"disabled"},"scope":"cli_only","detail":"显式开启才运行 PHP；CLI 配置不能代表 Web/FPM"},"java4shell":java4shell,"package_audit":package_audit,"collection_options":options,"middleware":middleware,"schema":"php-selfcheck-host/v1","hostname":std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim(),"collected_at":chrono::Utc::now().to_rfc3339(),"platform":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"source":"developer_supplied_unverified","checks":checks,"runtime_observations":runtime_observations,"processes":processes,"limitations":["CLI 版本不等于 Web/FPM 实例版本；报告不自动证明补丁或漏洞状态。","Java4Shell 核验只检查版本、VM、当前 CPU 与受限参数线索，不触发漏洞或确认可利用性。","仅检查当前主机可见进程与标准路径；容器、远端主机、自定义安装目录需另行核验。","此报告未签名，平台记录为开发者提交材料。"]}),
     )
 }
 
@@ -183,6 +207,8 @@ fn bounded_report(mut report: Value) -> Value {
         "/middleware/web_probes",
         "/runtime_observations",
         "/package_audit/instances",
+        "/java4shell/runtimes",
+        "/java4shell/running_processes",
     ] {
         while serde_json::to_vec_pretty(&report).map_or(usize::MAX, |v| v.len()) > 190_000 {
             let removed = match report.pointer_mut(pointer) {
@@ -237,6 +263,7 @@ pub struct CollectOptions {
     pub fingerprint_file: Option<PathBuf>,
     pub php_command: bool,
     pub php_binary: Option<PathBuf>,
+    pub java_command: bool,
     pub package_audit: bool,
     pub middleware: bool,
     pub php_modules: bool,
@@ -253,6 +280,7 @@ impl Default for CollectOptions {
             fingerprint_file: None,
             php_command: false,
             php_binary: None,
+            java_command: false,
             package_audit: false,
             middleware: false,
             php_modules: false,
@@ -329,6 +357,9 @@ pub struct CollectArgs {
     /// 自定义 PHP CLI 的绝对路径（需要 --php-command）
     #[arg(long)]
     pub php_binary: Option<PathBuf>,
+    /// Java4Shell 主机核验：运行 java -version/PrintFlagsFinal 并读取 CPU 与受限 JVM 参数
+    #[arg(long,num_args=0..=1,default_missing_value="true",require_equals=true)]
+    pub java_command: Option<bool>,
     /// 从运行进程/模块反查软件包，核对厂商参考规则与旧进程状态
     #[arg(long,num_args=0..=1,default_missing_value="true",require_equals=true)]
     pub package_audit: Option<bool>,
@@ -379,6 +410,9 @@ impl CollectArgs {
         }
         if let Some(value) = self.php_binary {
             options.php_binary = Some(value);
+        }
+        if let Some(value) = self.java_command {
+            options.java_command = value;
         }
         if let Some(value) = self.package_audit {
             options.package_audit = value;

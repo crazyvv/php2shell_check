@@ -21,7 +21,7 @@ function emphasizedText(text,terms,tone='info') {
 }
 function evidenceSummary(r) {
   const versions=Array.isArray(r.versions)?r.versions.filter(v=>typeof v==='string'):[];
-  const tone=r.verdict==='疑似受影响'?'risk':r.verdict==='无法完成检测' || r.verdict==='无法判断'?'warning':'info';
+  const tone=r.verdict==='疑似受影响'?'risk':r.verdict==='无法完成检测' || r.verdict==='无法判断' || r.verdict?.includes('Java4Shell')?'warning':'info';
   const wrap=node('div',undefined,'evidence-summary '+tone);
   wrap.append(node('strong',tone==='risk'?'优先复核 · 版本风险线索':tone==='warning'?'证据受限 · 需要复核':'已观测到的证据','evidence-heading'));
   if(versions.length){const row=node('p');row.append(node('span','PHP 版本声明：'));for(const version of versions.slice(0,8))row.append(node('code','PHP '+version,'evidence-value '+tone));wrap.append(row);}
@@ -31,7 +31,7 @@ function evidenceSummary(r) {
 }
 function nextStep(r){
   const wrap=node('div',undefined,'next-step');wrap.append(node('strong','下一步'));
-  const advice=r.verdict==='疑似受影响'?'核对实际 Web/FPM 版本、厂商回补记录并安排修复，逐个后端实例复核。':r.verdict==='无法完成检测'?'先核对访问控制、防护页或服务异常，再从允许访问的环境复测。':r.verdict==='版本达到修复基线（待核验）'?'核对实际 Web 实例与完整修补包，确认更新后的进程已重启。':'补充实际 Web/FPM 运行时和软件包材料；隐藏版本或未命中特征不能认定安全。';
+  const advice=r.verdict==='疑似受影响'?'核对实际 Web/FPM 版本、厂商回补记录并安排修复，逐个后端实例复核。':r.verdict?.includes('Java4Shell')?'在实际 Java 节点运行带 --java-command 的主机采集，核对 JVM build、VM、CPU、运行参数和全部实例重启状态。':r.verdict==='无法完成检测'?'先核对访问控制、防护页或服务异常，再从允许访问的环境复测。':r.verdict==='版本达到修复基线（待核验）'?'核对实际 Web 实例与完整修补包，确认更新后的进程已重启。':'补充实际 Web/FPM 运行时和软件包材料；隐藏版本或未命中特征不能认定安全。';
   wrap.append(node('p',advice));return wrap;
 }
 function assessmentView(a) {
@@ -75,11 +75,32 @@ function fingerprintsView(f) {
   if(f.library) wrap.append(node('p',`特征库 ${f.library.version || '未知'} · ${f.library.rule_count ?? '未知'} 条规则 · ${f.library.source || ''}`,'fine'));
   return wrap;
 }
+function java4shellView(j) {
+  const wrap=node('div');if(!j || j.status==='not_observed')return wrap;
+  const box=node('div',undefined,'runtime-comparison java4shell-evidence');box.append(node('strong','Java4Shell / CVE-2026-114938 · 主机条件待核验'));
+  box.append(node('p',j.detail || '网页只能提供 Java 产品线索。','comparison-conclusion'));
+  const products=(Array.isArray(j.products)?j.products:[]).map(p=>p?.name).filter(Boolean);if(products.length)box.append(node('p','响应产品线索：'+products.join('、'),'fine'));
+  box.append(node('p','远程检查没有增加请求、没有发送畸形 Base64、没有运行 PoC。','fine'));
+  const required=Array.isArray(j.required_evidence)?j.required_evidence:[];if(required.length)box.append(node('p','缺失证据：'+required.join('；'),'fine'));
+  wrap.append(box);return wrap;
+}
+function javaHostEvidenceView(j) {
+  const wrap=node('div');if(!j || !j.status || j.status==='disabled')return wrap;
+  const labels={candidate_found:'发现候选，需优先复核',no_runtime_found:'未发现可见 Java 运行时',no_candidate_in_discovered_scope:'已发现范围内未形成候选',unknown:'证据不足'};
+  const box=node('div',undefined,'runtime-comparison java4shell-evidence');box.append(node('strong','Java4Shell 主机核验（提交材料，未经独立核验）'));
+  box.append(node('p',labels[j.status] || j.status,j.status==='candidate_found'?'review-priority':'fine'));
+  const hw=j.hardware || {};box.append(node('p',`当前节点：${hw.arch || '未知'} · CPU 条件 ${hw.status || '未知'} · 已见 ${Array.isArray(hw.observed_flags)?hw.observed_flags.join(', '):'未知'} · 缺少 ${Array.isArray(hw.missing_flags)?hw.missing_flags.join(', '):'未知'}`,'fine'));
+  const statuses={affected_candidate:'受影响版本候选',affected_candidate_eol:'非支持线候选',candidate_hardware_unknown:'CPU 条件未知',candidate_default_mitigated:'采集器清洁环境观察到缓解默认值',fixed_release:'达到公开修复基线',not_in_disclosed_range:'不在披露版本范围',not_applicable_hardware:'当前节点硬件不适用',not_applicable_vm:'VM 实现不适用',unknown:'未知'};
+  for(const r of (Array.isArray(j.runtimes)?j.runtimes:[]).slice(0,32))box.append(node('p',`${r.binary || 'Java 路径未知'} · ${r.vm || 'VM 未知'} · Java ${r.version || '版本未知'} · ${statuses[r.status] || r.status || '未知'} · ${r.detail || ''}`,'fine'));
+  for(const p of (Array.isArray(j.running_processes)?j.running_processes:[]).slice(0,32)){const flags=Array.isArray(p.known_command_line_flags)?p.known_command_line_flags.join(', '):'';box.append(node('p',`JVM PID ${p.pid || '未知'} · ${p.name || ''} · 相关命令行参数 ${flags || '未观察到（环境与参数文件未读取）'}`,'fine'));}
+  box.append(node('p','该材料不确认外部输入到达 Base64 解码器，也不确认漏洞可利用或修复已独立验证。','fine'));wrap.append(box);return wrap;
+}
 function hostEvidenceView(e) {
   const wrap=node('div');
   wrap.append(node('b','主机材料 / 手工复核：未经独立核验'));
   if(e.report_limits?.truncated) wrap.append(node('p','报告因大小限制省略了部分条目，结果不完整；未列出不代表不存在。','fine'));
   if(e.php_command?.status === 'disabled') wrap.append(node('p','本次未开启 PHP 命令采集。','fine'));
+  wrap.append(javaHostEvidenceView(e.java4shell));
   for(const r of e.runtime_observations || []) {
     wrap.append(node('p',`${r.scope === 'cli_only' ? '仅 CLI，不能代表 Web' : r.scope === 'web_runtime_claimed' ? '提交人声明为 Web 实例' : '运行环境归属未知'} · SAPI ${r.sapi} · PHP ${r.version || '未知'} · upload_progress ${statusNames[r.upload_progress] || '未知'}`,'fine'));
   }
@@ -167,7 +188,7 @@ function renderJobs(jobs, endpoint='/api/jobs', showOwners=false, options={}) {
         const row=node('tr'), target=node('td'), verdict=node('td'), evidence=node('td');
         target.append(node('div',r.target),node('p',`${r.connected_ip || '—'} · HTTP ${r.http_status || '—'}`,'fine'));
         verdict.append(badge(r.verdict)); evidence.append(evidenceSummary(r));
-        evidence.append(assessmentView(r.assessment),fingerprintsView(r.fingerprints));
+        evidence.append(assessmentView(r.assessment),fingerprintsView(r.fingerprints),java4shellView(r.java4shell));
         if(r.version_warnings?.length) evidence.append(node('p',`需优先复核的版本声明：${r.version_warnings.join('、')}。多版本冲突时仍需确认实际后端。`,'fine'));
         if(r.host_comparison) evidence.append(hostComparisonView(r.host_comparison));
         for(const h of r.host_evidence || []) evidence.append(hostEvidenceView(h.assessment));

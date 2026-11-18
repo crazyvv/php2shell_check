@@ -34,6 +34,7 @@ pub struct Policy {
 #[serde(default, deny_unknown_fields)]
 pub struct CollectionDefaults {
     pub php_command: bool,
+    pub java_command: bool,
     pub package_audit: bool,
     pub middleware: bool,
     pub php_modules: bool,

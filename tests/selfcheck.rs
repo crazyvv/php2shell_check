@@ -1208,7 +1208,7 @@ async fn administrator_fingerprint_editor_authorization_validation_conflicts_and
         .await
         .unwrap();
     assert_eq!(initial["revision"], 0);
-    assert_eq!(initial["metadata"]["rule_count"], 51);
+    assert_eq!(initial["metadata"]["rule_count"], 63);
     let valid=json!({"schema":"php-selfcheck-fingerprints/v1","version":"admin-1","mode":"replace","rules":[{"id":"owned","name":"Our app","category":"framework","runtime":"php","any":[{"source":"header","header":"x-owned-app","pattern":"^yes$"}]}]}).to_string();
     let origin = admin
         .post(format!("{}/api/admin/fingerprints/save", p.base))
@@ -1299,7 +1299,7 @@ async fn administrator_fingerprint_editor_authorization_validation_conflicts_and
     assert_eq!(saved["revision"], 1);
     assert_eq!(saved["origin"], "database");
     assert_eq!(saved["metadata"]["version"], "admin-1");
-    assert_eq!(old_library.metadata()["version"], "2026-10-26.1");
+    assert_eq!(old_library.metadata()["version"], "2026-11-18.1");
     let me = anonymous
         .get(format!("{}/api/me", p.base))
         .send()
@@ -1397,7 +1397,7 @@ async fn administrator_fingerprint_editor_authorization_validation_conflicts_and
     assert_eq!(off.status(), 200);
     assert_eq!(
         off.json::<Value>().await.unwrap()["metadata"]["rule_count"],
-        50
+        62
     );
     db.execute_batch("CREATE TRIGGER prevent_rule_audit BEFORE INSERT ON audit WHEN new.action='fingerprints_save' BEGIN SELECT RAISE(ABORT,'test audit failure'); END;").unwrap();
     assert_eq!(
@@ -1420,7 +1420,7 @@ async fn administrator_fingerprint_editor_authorization_validation_conflicts_and
         .await
         .unwrap();
     assert_eq!(untouched["revision"], 2);
-    assert_eq!(untouched["metadata"]["rule_count"], 50);
+    assert_eq!(untouched["metadata"]["rule_count"], 62);
     db.execute_batch("DROP TRIGGER prevent_rule_audit;")
         .unwrap();
     let (one, two) = tokio::join!(

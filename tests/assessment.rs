@@ -83,6 +83,17 @@ fn middleware_import_is_scoped_unverified_and_bounded() {
 }
 
 #[test]
+fn java4shell_host_material_stays_unverified_and_bounded() {
+    let value = assessment::host(
+        &json!({"report":{"java4shell":{"status":"candidate_found","hardware":{"status":"eligible","arch":"x86_64"},"runtimes":[{"status":"affected_candidate","version":"17.0.21","vm":"hotspot","exploitability_confirmed":true}],"running_processes":[{"pid":"123","known_command_line_flags":["-XX:-UseBASE64Intrinsics"]}],"checks":{"poc_executed":false}}}}),
+    );
+    assert_eq!(value["java4shell"]["status"], "candidate_found");
+    assert_eq!(value["java4shell"]["confidence"], "unverified");
+    assert_eq!(value["java4shell"]["patch_verified"], false);
+    assert_eq!(value["java4shell"]["exploitability_confirmed"], false);
+}
+
+#[test]
 fn vendor_reference_import_never_becomes_verified_or_promotes_verdict() {
     let a = assessment::host(
         &json!({"report":{"package_audit":{"status":"completed","rules_independently_verified":true,"instances":[{"pid":"123","artifacts":[{"running_patch_status":"meets_vendor_reference","package":{"patch_status":"meets_vendor_reference"}}]}]}}}),

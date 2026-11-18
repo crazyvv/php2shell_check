@@ -7,10 +7,12 @@
 <body>
 <header><div class="brand"><span class="mark">P</span><div>PHP 安全自查台<small>漏洞机理、利用链与防守复核</small></div></div><nav class="topnav"><a href="/">扫描页</a><a href="/admin">管理员</a></nav></header>
 <main class="knowledge">
-  <section class="card hero"><p class="eyebrow">CVE-2026-109618 / CVE-2026-109619</p><h1>PHP2Shell 漏洞知识库</h1>
+  <section class="card hero"><p class="eyebrow">CVE-2026-109618 / CVE-2026-109619 / CVE-2026-114938</p><h1>PHP2Shell / Java4Shell 漏洞知识库</h1>
     <p>本页把社区研究中的内存破坏、跨请求状态和会话上传进度链路，整理成适合开发、安全和运维共同复核的知识。利用链按前置条件、数据流、观测点和处置说明，不提供可执行载荷。</p>
     <div class="knowledge-callout warning"><strong>证据边界</strong><p>社区研究的复现结论、在野情报和补丁分析需要分别核验。版本响应头、会话 Cookie、HTTP 500/502、响应时间或错误文本都不能单独确认漏洞、利用成功或修复完成。</p></div>
   </section>
+
+  <section class="card wide"><h2>Java4Shell：网页线索与主机判据必须分开</h2><p>Java4Shell（CVE-2026-114938）是 OpenJDK HotSpot x86-64 Base64 intrinsic 的堆缓冲区越界写。Oracle 官方记录给出 CVSS 3.1 8.1、网络可达、攻击复杂度高且无需权限；CISA 在 2026-11-17 的补充记录中标为尚无已知利用。</p><div class="knowledge-table"><table><thead><tr><th>证据层</th><th>能够说明</th><th>不能说明</th></tr></thead><tbody><tr><td>网页被动指纹</td><td>响应可能来自 Jenkins、Keycloak、Jira、Confluence、Artifactory 等 Java 产品</td><td>不能确认 JVM build、VM、CPU、启动参数或漏洞</td></tr><tr><td>本地主机采集</td><td>Java 版本、HotSpot/OpenJ9、当前 CPU flags、受限启动参数线索</td><td>不能确认外部输入到达 Base64 decoder，也不确认可利用性</td></tr><tr><td>修复复核</td><td>厂商固定构建、运行映像和全部实例重启</td><td>仅达到通用版本号不能替代捆绑运行时和厂商回补核验</td></tr></tbody></table></div><div class="knowledge-callout warning"><strong>安全边界</strong><p>扫描不发送畸形 Base64、不运行 PoC、不附加 JVM。首个公开修复基线为 17.0.21.1 / 21.0.13.1 / 25.0.5.1 / 27.0.1.1；厂商构建仍以各自公告为准。</p></div><p class="fine">来源：<a href="https://www.cve.org/CVERecord?id=CVE-2026-114938" target="_blank" rel="noreferrer">Oracle CVE 记录</a> · <a href="https://www.oracle.com/security-alerts/cspunov2026.html" target="_blank" rel="noreferrer">Oracle 2026-11 CSPU</a> · <a href="https://calif.io/java4shell" target="_blank" rel="noreferrer">Calif 技术披露</a> · <a href="https://github.com/openjdk/jdk/commit/5177a70b385c16f26ede191fdac7aaba0bed0f8b" target="_blank" rel="noreferrer">OpenJDK 修复提交</a>。完整判据见 docs/java4shell-review.md。</p></section>
 
   <section class="card wide"><h2>请求在什么阶段进入风险路径</h2>
     <div class="knowledge-flow" aria-label="请求处理顺序">

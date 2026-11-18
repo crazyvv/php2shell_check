@@ -85,6 +85,13 @@ test('PHP command and package audit are independent explicit collection switches
   assert.equal(get('collectCommand').textContent,'php-selfcheck collect --package-audit > host-report.json');
 });
 
+test('Java4Shell host collection is an independent explicit switch',async()=>{
+  const app=setup();await flush();const get=id=>app.document.getElementById(id);
+  get('collectJavaCommand').checked=true;get('collectJavaCommand').onchange();
+  assert.equal(get('collectCommand').textContent,'php-selfcheck collect --java-command > host-report.json');
+  assert(!get('collectPhpCommand').checked);assert(!get('collectMiddleware').checked);
+});
+
 test('fingerprint rendering shows evidence as plain text and handles older records',async()=>{
   const app=setup();await flush();
   function flatten(e){return [e,...(e.children||[]).flatMap(flatten)];}
@@ -95,6 +102,16 @@ test('fingerprint rendering shows evidence as plain text and handles older recor
   assert(content.includes('<script>unsafe</script>'));assert(content.includes('仅外部资源引用'));assert(content.includes('https://other.example'));assert(content.includes('company-1'));
   assert(!flatten(view).some(n=>n.innerHTML));
   assert.equal(vm.runInContext('fingerprintsView(undefined).children.length',app.context),0);
+});
+
+test('Java4Shell web and host evidence preserve missing-proof boundaries',async()=>{
+  const {context}=setup();const flat=e=>[e,...(e.children||[]).flatMap(flat)];
+  context.javaFixture={status:'java_product_hint',detail:'<img onerror=unsafe>',products:[{name:'Jenkins'}],required_evidence:['JVM build','CPU flags']};
+  let view=vm.runInContext('java4shellView(javaFixture)',context),text=flat(view).map(n=>n.textContent).join(' ');
+  assert(text.includes('<img onerror=unsafe>'));assert(text.includes('没有发送畸形 Base64'));assert(text.includes('JVM build'));assert(!flat(view).some(n=>n.innerHTML));
+  context.hostJava={status:'candidate_found',hardware:{arch:'x86_64',status:'eligible',observed_flags:['avx512vbmi'],missing_flags:[]},runtimes:[{binary:'/opt/jdk/bin/java',vm:'hotspot',version:'17.0.21',status:'affected_candidate',detail:'候选'}],running_processes:[{pid:'8',name:'java',known_command_line_flags:[]}]};
+  view=vm.runInContext('javaHostEvidenceView(hostJava)',context);text=flat(view).map(n=>n.textContent).join(' ');
+  assert(text.includes('发现候选'));assert(text.includes('不确认外部输入'));assert(text.includes('环境与参数文件未读取'));
 });
 
 test('administrator rule drafts validate, save, preserve conflicts and clear on logout',async()=>{

@@ -118,7 +118,7 @@ fn fingerprint_export_validate_and_check_override_work_without_exposing_file_pat
         .unwrap();
     assert!(checked.status.success());
     let metadata: Value = serde_json::from_slice(&checked.stdout).unwrap();
-    assert_eq!(metadata["rule_count"], 51);
+    assert_eq!(metadata["rule_count"], 63);
     let cfg = dir.path().join("config.json");
     std::fs::write(&cfg, include_str!("../config.open.example.json")).unwrap();
     std::fs::write(&file, include_str!("../fingerprints.example.json")).unwrap();

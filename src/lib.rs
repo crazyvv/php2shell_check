@@ -21,3 +21,5 @@ pub mod surfaces;
 pub mod settings;
 
 pub mod evidence_lab;
+
+pub mod java4shell;

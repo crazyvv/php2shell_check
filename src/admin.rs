@@ -166,7 +166,7 @@ pub async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response>
             "newest" => "created DESC,id DESC".to_owned(),
             "oldest" => "created ASC,id ASC".to_owned(),
             "risk_desc" | "risk_asc" => format!(
-                "CASE WHEN json_array_length(results)=0 THEN 1 ELSE 0 END, (SELECT max(CASE json_extract(value,'$.verdict') WHEN '疑似受影响' THEN 6 WHEN '无法完成检测' THEN 5 WHEN '无法判断' THEN 4 WHEN '已识别 PHP 特征，版本未知' THEN 3 WHEN '疑似使用 PHP' THEN 2 WHEN '版本达到修复基线（待核验）' THEN 1 WHEN '未发现 PHP 特征' THEN 0 ELSE 4 END) FROM json_each(jobs.results)) {}, created DESC,id DESC",
+                "CASE WHEN json_array_length(results)=0 THEN 1 ELSE 0 END, (SELECT max(CASE json_extract(value,'$.verdict') WHEN '疑似受影响' THEN 6 WHEN '无法完成检测' THEN 5 WHEN '发现 Java 服务线索，需核验 Java4Shell' THEN 4 WHEN '无法判断' THEN 4 WHEN '已识别 PHP 特征，版本未知' THEN 3 WHEN '疑似使用 PHP' THEN 2 WHEN '版本达到修复基线（待核验）' THEN 1 WHEN '未发现 PHP 特征' THEN 0 ELSE 4 END) FROM json_each(jobs.results)) {}, created DESC,id DESC",
                 if sort == "risk_desc" { "DESC" } else { "ASC" }
             ),
             _ => return Ok(error(400, "不支持的排序方式")),

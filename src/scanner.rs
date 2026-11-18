@@ -402,6 +402,11 @@ pub fn inspect_with_library(
     };
     let mut assessment = crate::assessment::remote(headers, body, &versions);
     assessment["surfaces"] = crate::surfaces::inspect(url, body);
+    let java4shell = crate::java4shell::remote(&fingerprints);
+    if verdict == "未发现 PHP 特征" && java4shell["status"] == "java_product_hint" {
+        verdict = "发现 Java 服务线索，需核验 Java4Shell";
+        reason = "网页特征不能确认 JVM build、CPU 或启动参数；请提交主机核验材料";
+    }
     let warnings: Vec<_> = versions
         .iter()
         .filter(|v| version_risk(v).0 == "疑似受影响")
@@ -421,7 +426,7 @@ pub fn inspect_with_library(
             "挑战页响应不能确认业务实例的补丁状态；版本声明仅作为原始线索保留",
         );
     }
-    json!({"fingerprints":fingerprints,"version_warnings":warnings,"assessment":assessment,"verdict":verdict,"reason":reason,"versions":versions,"evidence":evidence,"cves":["CVE-2026-109618","CVE-2026-109619"],"rule_date":RULE_DATE,"source":SOURCE,"rule_provenance":"2026-10-23 已核对 PHP 官方 GHSA 与 php-src NEWS","exploitation_verified":false})
+    json!({"fingerprints":fingerprints,"java4shell":java4shell,"version_warnings":warnings,"assessment":assessment,"verdict":verdict,"reason":reason,"versions":versions,"evidence":evidence,"cves":["CVE-2026-109618","CVE-2026-109619"],"rule_date":RULE_DATE,"source":SOURCE,"rule_provenance":"2026-10-23 已核对 PHP 官方 GHSA 与 php-src NEWS；Java4Shell 独立证据见 java4shell 字段","exploitation_verified":false})
 }
 async fn headers_using<F, Fut>(mut fetch: F) -> Result<(Reply, IpAddr, Vec<Value>)>
 where

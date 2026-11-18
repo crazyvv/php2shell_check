@@ -1,6 +1,6 @@
 {
   "schema": "php-selfcheck-fingerprints/v1",
-  "version": "2026-10-26.1",
+  "version": "2026-11-18.1",
   "mode": "replace",
   "rules": [
     {
@@ -984,6 +984,162 @@
       ],
       "all": [],
       "advice": "响应命中挑战页线索，无法据此判断业务实例；请由管理员在允许访问的环境复核，不进行自动绕过。"
+    },
+    {
+      "id": "java-jenkins",
+      "name": "Jenkins",
+      "category": "framework",
+      "runtime": "java",
+      "confidence": "medium",
+      "any": [
+        { "source": "header", "header": "x-jenkins", "pattern": "(?i)^(?P<version>[0-9][0-9A-Za-z.+~_:-]{0,79})" },
+        { "source": "header", "header": "x-hudson", "pattern": ".+" }
+      ],
+      "all": [],
+      "advice": "Java 产品线索不等于 Java4Shell 漏洞。需在实际节点核验 JVM build、HotSpot、CPU 指令集、启动参数和外部 Base64 输入路径。"
+    },
+    {
+      "id": "java-keycloak",
+      "name": "Keycloak",
+      "category": "framework",
+      "runtime": "java",
+      "confidence": "medium",
+      "any": [
+        { "source": "cookie_name", "pattern": "(?i)^(?:AUTH_SESSION_ID|KC_RESTART|KEYCLOAK_IDENTITY)$" },
+        { "source": "resource_path", "pattern": "(?i)(?:^|/)resources/[^/]{1,100}/(?:login/)?keycloak/", "same_origin": true }
+      ],
+      "all": [],
+      "advice": "Java 产品线索不等于 Java4Shell 漏洞。需在实际节点核验 JVM build、HotSpot、CPU 指令集、启动参数和外部 Base64 输入路径。"
+    },
+    {
+      "id": "java-jira",
+      "name": "Atlassian application / Jira hint",
+      "category": "framework",
+      "runtime": "java",
+      "confidence": "low",
+      "any": [
+        { "source": "header", "header": "x-arequestid", "pattern": ".+" },
+        { "source": "meta_generator", "pattern": "(?i)Atlassian\\s+JIRA(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_:-]{0,79}))?" }
+      ],
+      "all": [],
+      "advice": "x-arequestid 是 Atlassian 共享线索，不足以单独确认 Jira；产品版本也不是 JVM build。请核验实际产品、捆绑运行时和全部节点重启状态。"
+    },
+    {
+      "id": "java-confluence",
+      "name": "Atlassian Confluence",
+      "category": "framework",
+      "runtime": "java",
+      "confidence": "medium",
+      "any": [
+        { "source": "header", "header": "x-confluence-request-time", "pattern": "^[0-9]{5,20}$" },
+        { "source": "meta_generator", "pattern": "(?i)Atlassian\\s+Confluence(?:\\s+(?P<version>[0-9][0-9A-Za-z.+~_:-]{0,79}))?" }
+      ],
+      "all": [],
+      "advice": "Confluence 版本不是 JVM build。请按 Atlassian 支持路径更新捆绑运行时，并核验全部节点已重启。"
+    },
+    {
+      "id": "java-artifactory",
+      "name": "JFrog Artifactory",
+      "category": "framework",
+      "runtime": "java",
+      "confidence": "medium",
+      "any": [
+        { "source": "header", "header": "x-artifactory-id", "pattern": ".+" },
+        { "source": "header", "header": "x-jfrog-version", "pattern": "^(?P<version>[0-9][0-9A-Za-z.+~_:-]{0,79})" },
+        { "source": "header", "header": "x-artifactory-node-id", "pattern": ".+" }
+      ],
+      "all": [],
+      "advice": "Artifactory 产品版本不是 JVM build。需核验实际容器/主机运行时和厂商修复公告。"
+    },
+    {
+      "id": "java-elasticsearch",
+      "name": "Elasticsearch",
+      "category": "framework",
+      "runtime": "java",
+      "confidence": "medium",
+      "any": [
+        { "source": "header", "header": "x-elastic-product", "pattern": "(?i)^Elasticsearch$" }
+      ],
+      "all": [],
+      "advice": "Elasticsearch 线索不确认节点 JVM 或认证前输入路径。应逐个数据节点核验捆绑 JDK 和服务重启。"
+    },
+    {
+      "id": "java-solr",
+      "name": "Apache Solr",
+      "category": "framework",
+      "runtime": "java",
+      "confidence": "low",
+      "any": [
+        { "source": "title", "pattern": "(?i)\\bApache\\s+Solr\\b" },
+        { "source": "body", "pattern": "(?i)\\bSolr\\s+Admin\\b" }
+      ],
+      "all": [],
+      "advice": "页面标题或正文仅为低可信产品线索；需主机侧核验 JVM、CPU 和实际输入路径。"
+    },
+    {
+      "id": "java-gerrit",
+      "name": "Gerrit Code Review",
+      "category": "framework",
+      "runtime": "java",
+      "confidence": "low",
+      "any": [
+        { "source": "title", "pattern": "(?i)\\bGerrit\\s+Code\\s+Review\\b" },
+        { "source": "header", "header": "x-gerrit-auth", "pattern": ".+" }
+      ],
+      "all": [],
+      "advice": "产品线索不确认 Java4Shell。请核验 Gerrit 实际 JVM build、节点 CPU 与运行参数。"
+    },
+    {
+      "id": "java-pingfederate",
+      "name": "PingFederate",
+      "category": "framework",
+      "runtime": "java",
+      "confidence": "low",
+      "any": [
+        { "source": "title", "pattern": "(?i)\\bPingFederate\\b" },
+        { "source": "resource_path", "pattern": "(?i)(?:^|/)pf/[^?#]{0,200}$", "same_origin": true }
+      ],
+      "all": [],
+      "advice": "产品线索不确认 Java4Shell。身份系统应优先核验实际 JVM、补丁和全部实例重启状态。"
+    },
+    {
+      "id": "java-spring-runtime",
+      "name": "Spring application",
+      "category": "framework",
+      "runtime": "java",
+      "confidence": "low",
+      "any": [
+        { "source": "header", "header": "x-application-context", "pattern": ".+" },
+        { "source": "body", "pattern": "(?i)\\bWhitelabel\\s+Error\\s+Page\\b" }
+      ],
+      "all": [],
+      "advice": "Spring 页面只能提示 Java 可能性，无法确认使用的 Base64 路径或 JVM 条件。"
+    },
+    {
+      "id": "java-tomcat-runtime",
+      "name": "Apache Tomcat / Coyote",
+      "category": "runtime",
+      "runtime": "java",
+      "confidence": "low",
+      "any": [
+        { "source": "header", "header": "server", "pattern": "(?i)\\b(?:Apache-Coyote|Apache\\s+Tomcat)(?:[/ ](?P<version>[0-9][0-9A-Za-z.+~_:-]{0,79}))?" },
+        { "source": "title", "pattern": "(?i)^\\s*Apache\\s+Tomcat" }
+      ],
+      "all": [],
+      "advice": "Tomcat 版本不是 JVM build；Server 头也可能被代理改写。需主机侧核验。"
+    },
+    {
+      "id": "java-wildfly-runtime",
+      "name": "WildFly / JBoss / Undertow",
+      "category": "runtime",
+      "runtime": "java",
+      "confidence": "low",
+      "any": [
+        { "source": "header", "header": "server", "pattern": "(?i)\\b(?:WildFly|JBoss|Undertow)\\b(?:[/ ](?P<version>[0-9][0-9A-Za-z.+~_:-]{0,79}))?" },
+        { "source": "header", "header": "x-powered-by", "pattern": "(?i)\\b(?:WildFly|JBoss|Undertow)\\b" }
+      ],
+      "all": [],
+      "advice": "Java 中间件线索不确认 JVM build 或 Java4Shell；需在实际节点核验。"
     }
   ]
 }

@@ -155,11 +155,13 @@ cargo build --release --locked -j 4
 
 ## 可配置的网站特征库
 
-扫描结果可展示 CMS/商城、框架、运行时声明、静态生成器、托管平台、Web 中间件、CDN/WAF 和挑战页等特征。内置 51 条规则，覆盖 WordPress/WooCommerce、Drupal、Joomla、Magento、Laravel、ThinkPHP、Discuz!、Next.js、Nuxt、Shopify、Nginx、Tengine、Cloudflare 等。
+扫描结果可展示 CMS/商城、框架、运行时声明、静态生成器、托管平台、Web 中间件、CDN/WAF 和挑战页等特征。内置 63 条规则，除原有 PHP、Node.js 和基础设施特征外，增加 Jenkins、Keycloak、Jira、Confluence、Artifactory、Elasticsearch、Solr、Gerrit、PingFederate、Spring、Tomcat 和 WildFly/JBoss/Undertow 等 Java 产品线索。
 
 匹配仅使用已经取得的响应头、Cookie **名称**、generator 标签、标题、资源路径及有限正文；不会请求额外路径、登录页或外部资源。每个命中保留规则 ID、表达式、来源 URL、证据位置、资源来源和可信度。页面、管理员历史、JSON/CSV 导出和本机端口 Web 观测均展示这些信息；结果记录特征库版本、有效规则数和内容 SHA-256，已有历史不因修改规则而重判。
 
 产品特征是线索：CMS/框架版本不当作 PHP 版本；第三方资源单独标为外部引用，不据此推断当前站点运行 PHP。Next.js 等也可能来自静态导出；CDN、WAF 或托管平台命中不代表没有 PHP 后端或已修复。明确的挑战页线索使检测保持“无法完成检测”，保留命中依据，不自动绕过或继续跳转。普通 CDN 特征不会单独认定为受阻。
+
+Java 产品命中只生成 `java4shell.status=java_product_hint`，不会从网页推断 JVM build、HotSpot/OpenJ9、CPU 指令集、启动参数或漏洞可利用性。HTTP 扫描不会为 Java4Shell 增加请求，不发送畸形 Base64，也不运行 PoC。完整判据、版本边界与来源见 [Java4Shell 防守核验](docs/java4shell-review.md)。
 
 ### 使用自己的规则文件
 
@@ -281,6 +283,18 @@ php-selfcheck collect --options collector.options.example.json --php-command=fal
 
 PHP 命令所得配置始终标为 `cli_only`，不能证明 Web/FPM、容器或全部后端实例的配置与补丁状态。外部命令超时 10 秒，保留输出最多 24 KB。不读取进程环境或完整命令行，报告未签名，业务关联由提交人指定。
 
+### Java4Shell 主机核验
+
+```bash
+php-selfcheck collect --java-command > host-report.json
+```
+
+`--java-command` 默认关闭且独立于 PHP 与中间件选项。开启后只执行发现到的 Java 程序的 `-version` 和 `-XX:+PrintFlagsFinal -version`，并检查当前命名空间可见的 CPU flags、JVM 进程和 Java4Shell 相关启动参数。调用 Java 时清除采集器自身的 `JAVA_TOOL_OPTIONS`、`JDK_JAVA_OPTIONS` 与 `_JAVA_OPTIONS`，避免把采集环境选项误当成运行服务配置；不会读取目标进程环境、附加 JVM 或保存其他命令行参数。
+
+候选必须分层核对：HotSpot/GraalVM、公开受影响版本范围、x86-64、当前节点可见的 `avx512f`/`avx512bw`/`avx512vbmi`/`bmi2`，以及服务实际使用的 Base64 intrinsic/JIT 条件。采集器新启动进程观察到的默认参数不代表运行服务；命令行没有相关参数也不代表环境变量或参数文件未设置。当前节点硬件不适用只说明当前放置，迁移后必须重新采集。
+
+程序不执行公开触发器。输出只使用“候选”“当前节点不适用”“达到公开修复基线”或“未知”，并保留 `patch_verified=false`、`exploitability_confirmed=false`。首个公开修复基线为 17.0.21.1、21.0.13.1、25.0.5.1、27.0.1.1；厂商回补和捆绑 JDK 应以各自公告为准。升级后还要重建容器并重启全部实例。
+
 ### 可选运行实例与厂商补丁参考核验
 
 ```bash
@@ -304,7 +318,7 @@ php-selfcheck collect --php-command --package-audit --middleware --php-modules -
 
 ## 可选 Web 中间件、PHP 模块与端口采集
 
-PHP 命令、软件包核验、中间件、PHP 模块、端口与 Web 探测六个开关**默认全部关闭**。不添加这些选项时，仅读取基础进程和包信息。页面“主机采集”区域可勾选功能，生成在目标主机手工执行的命令；不会通过网页远程执行系统命令。
+PHP 命令、Java4Shell 主机核验、软件包核验、中间件、PHP 模块、端口与 Web 探测七个开关**默认全部关闭**。不添加这些选项时，仅读取基础进程和包信息。页面“主机采集”区域可勾选功能，生成在目标主机手工执行的命令；不会通过网页远程执行系统命令。
 
 ```bash
 # 仅识别 Web 中间件
@@ -322,7 +336,7 @@ php-selfcheck collect --middleware --ports --web-probe \
   --max-web-probes 8 > host-report.json
 ```
 
-六个开关均接受显式 `=true` / `=false`。模块、端口与 Web 功能需要 `--middleware`，Web 功能还需要 `--ports`；不满足依赖会给出错误，不会静默扩大采集。Web Host 用于虚拟主机和证书校验，不用于指定远端地址；IP Host 必须与已关联的本机连接地址一致。
+七个开关均接受显式 `=true` / `=false`。模块、端口与 Web 功能需要 `--middleware`，Web 功能还需要 `--ports`；不满足依赖会给出错误，不会静默扩大采集。Web Host 用于虚拟主机和证书校验，不用于指定远端地址；IP Host 必须与已关联的本机连接地址一致。
 
 也可复制 `collector.options.example.json`，修改布尔值后使用：
 
@@ -330,7 +344,7 @@ php-selfcheck collect --middleware --ports --web-probe \
 php-selfcheck collect --options collector.options.example.json --web-probe=false > host-report.json
 ```
 
-命令行显式值覆盖文件。采集器配置与服务端 `config.json` 分开，示例文件包含六个开关、php_binary、web_host、web_path、web_schemes、max_web_probes。
+命令行显式值覆盖文件。采集器配置与服务端 `config.json` 分开，示例文件包含七个开关、php_binary、web_host、web_path、web_schemes、max_web_probes。
 
 检测范围与证据边界：
 
@@ -453,7 +467,7 @@ php-selfcheck compare-reports --before before.json --after after.json --json
 
 权限和范围变更用于后续请求、新提交任务；已经提交的任务固定使用当时快照，结果及审计记录包含 `settings_revision`。管理员收紧范围不会中断已有任务，紧急撤销请停止服务。特殊地址、DNS 固定、TLS 校验和限流仍由程序校验。
 
-服务器配置 JSON 同样支持 `collection_defaults`；未设置时六项均默认关闭。`collection_defaults` 包含 `php_command`、`package_audit`、`middleware`、`php_modules`、`ports`、`web_probe` 六个布尔值，仅设置扫描页面所生成的本地采集命令默认选项；用户可修改本次采集选项。模块/端口/Web 需要中间件，Web 还需要端口采集。不远程运行采集命令，不能约束独立采集器。
+服务器配置 JSON 同样支持 `collection_defaults`；未设置时七项均默认关闭。`collection_defaults` 包含 `php_command`、`java_command`、`package_audit`、`middleware`、`php_modules`、`ports`、`web_probe` 七个布尔值，仅设置扫描页面所生成的本地采集命令默认选项；用户可修改本次采集选项。模块/端口/Web 需要中间件，Web 还需要端口采集。不远程运行采集命令，不能约束独立采集器。
 
 部署地址、数据库路径、账号和密码由服务器配置及账号命令维护；后台只显示部署信息和账号名称，不返回密码或密码散列。特征 JSON 使用专门的特征库面板维护。配置面板支持的 JSON 是在线字段子集，可用文件导入完整部署 JSON：浏览器只提取在线字段，忽略账号、密码散列、部署路径和其他字段；也可导出当前在线字段 JSON 用于合并回服务器配置。不要把含凭据的完整配置粘贴到在线 JSON 文本框。
 

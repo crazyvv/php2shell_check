@@ -52,6 +52,7 @@ enum Category {
 #[serde(rename_all = "snake_case")]
 enum Runtime {
     Php,
+    Java,
     Nodejs,
     Static,
     #[default]
@@ -353,7 +354,7 @@ impl Library {
             }
             matches.push(json!({"id":compiled.rule.id,"name":compiled.rule.name,"category":compiled.rule.category,"runtime_hint":compiled.rule.runtime,"confidence":compiled.rule.confidence,"relation":if response_hint{"response"}else{"external_reference"},"versions":versions,"version_conflict":versions.len()>1,"evidence":evidence,"advice":compiled.rule.advice,"php_hint":compiled.rule.runtime==Runtime::Php && response_hint,"blocked_hint":compiled.rule.category==Category::Challenge && response_hint,"patch_verified":false}));
         }
-        json!({"library":self.metadata,"matches":matches,"matches_truncated":truncated,"php_hint":matches.iter().any(|m|m["php_hint"]==true),"blocked_hint":matches.iter().any(|m|m["blocked_hint"]==true),"limitations":"被动特征仅为线索；资源可能来自外部服务或静态导出，不确认实际运行版本、实例归属或修复状态"})
+        json!({"library":self.metadata,"matches":matches,"matches_truncated":truncated,"php_hint":matches.iter().any(|m|m["php_hint"]==true),"java_hint":matches.iter().any(|m|m["runtime_hint"]=="java" && m["relation"]=="response"),"blocked_hint":matches.iter().any(|m|m["blocked_hint"]==true),"limitations":"被动特征仅为线索；资源可能来自外部服务或静态导出，不确认实际运行版本、实例归属或修复状态"})
     }
 }
 #[derive(Debug)]

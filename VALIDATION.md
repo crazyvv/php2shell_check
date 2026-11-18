@@ -198,3 +198,11 @@ Linux musl 静态程序通过本机启动和真实 Chromium 全流程：管理�
 页面按 1280–1920px 桌面工作区重新整理，不增加移动端折叠规则。统一为冷灰背景和深蓝主色，压缩页头、卡片、表单和结果表格间距；红色只表达需要优先复核的风险线索，琥珀色表达待补证据。开发者页增加分组开关、采集器三列网格与复核四列网格；知识库改为双栏卡片及全宽流程、矩阵；管理员后台增加汇总标签和分区导航。所有原有字段 ID、接口和操作流程保持不变。
 
 本地复核：Rust 1.91.1 locked/offline 78 项通过，Node 前端 11 项通过；真实 Chromium 1440×1100 完成开发者、知识库、规则维护、在线设置、冲突处理及退出清理全流程。浏览器额外断言页头高度、主按钮颜色和知识库双栏位置，并保存开发者全页、证据区、知识库及管理员全页截图。Windows/Linux 正式构建及发布状态以 v0.7.1 发布回执为准。
+
+## v0.8.0 — Java4Shell 防守识别
+
+2026-11-18 核对 Oracle/CVE.org 对 CVE-2026-114938 的记录、Oracle 2026-11 CSPU、CISA ADP、OpenJDK 修复提交 `5177a70b385c16f26ede191fdac7aaba0bed0f8b` 及 Calif/JFrog/Semgrep 技术分析；社区仓库 ikow/java4shell-poc 固定阅读提交 `15904ba6cf099e106d049162901e8a2e063bf3bf`，未运行或复制其 PoC。完整来源、版本边界及证据分层见 `docs/java4shell-review.md`。
+
+远程侧新增 12 条 Java 产品被动规则，内置规则总数为 63；它只复用已有响应并生成 `java_product_hint`，不从网页推断 JVM、CPU、启动参数或可利用性。显式 `--java-command` 才在本机运行 `java -version` / `PrintFlagsFinal`，核验版本、HotSpot/OpenJ9、当前节点指令集及受限缓解参数；不发送畸形 Base64、不运行 PoC、不附加 JVM、不读取进程环境。导入材料按字段白名单、数量和长度收敛，所有“已修复／可利用”声明强制保持未验证。
+
+本地复核：Rust 1.91.1 locked/offline 84 项通过，Node 前端 13 项通过；稳定工具链 fmt 与 clippy `-D warnings`、actionlint、规则 JSON/CLI 校验及 v0.8.0 标签一致性校验通过。真实 Chromium 1440×1100 验证远程 Java 线索、主机候选材料、知识页、管理员在线开关和现有流程；Linux x86_64 musl 静态程序完成版本、离线 PoC、回环 Web 服务及默认采集冒烟。Windows/Linux 正式状态以标签发布回执为准。

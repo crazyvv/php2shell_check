@@ -25,6 +25,16 @@ and [licenses/spcaeo-php2shell-check-NOTICE.txt](licenses/spcaeo-php2shell-check
 Technology hints do not establish a runtime, ownership or patch status. This
 integration does not imply affiliation or endorsement.
 
+Java4Shell applicability and host-inventory design reference the defensive
+analysis and scanner structure published in
+[ikow/java4shell-poc](https://github.com/ikow/java4shell-poc), commit
+`15904ba6cf099e106d049162901e8a2e063bf3bf`. The upstream repository is MIT
+licensed; its license is preserved in
+[licenses/ikow-java4shell-poc-MIT.txt](licenses/ikow-java4shell-poc-MIT.txt).
+No trigger, exploit, memory-corruption validation or target-interaction code
+was copied or executed. Version parsing, bounded local inventory, passive
+fingerprints and evidence handling are independently implemented in Rust.
+
 The defensive chain descriptions and evidence-lab design also reference the
 published research in [ikow/php2shell-poc](https://github.com/ikow/php2shell-poc),
 commit `caffb96b0a165eb3796828a9a1dc7445ec7ff77d`, and the SAPI/event
