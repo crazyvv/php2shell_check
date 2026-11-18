@@ -305,9 +305,12 @@ bash scripts/check-java4shell.sh
 
 # 用业务 JVM 的运行账号读取生效参数，并增加一个嵌入式 JRE 搜索目录
 bash scripts/check-java4shell.sh --jcmd --root /opt/my-service
+
+# 将指定 Java 加入磁盘搜索，并将 JSON 汇总单独保存
+bash scripts/check-java4shell.sh --json --java-path /opt/jdk/bin/java > java4shell.json
 ```
 
-脚本从 `/proc/cpuinfo` 检查所有可见逻辑 CPU。开启 `--jcmd` 后，使用当前 `PATH` 里的 `jcmd` 读取 JVM 生效参数，必要时会启动 HotSpot 的诊断监听器。结果是制表符分隔的文本。退出码 `0` 表示已排除影响或已确认缓解，`1` 表示存在受影响 JVM，`2` 表示用法或依赖错误，`3` 表示证据不足，`4` 表示有符合条件但未关联到运行中 JVM 的安装。检查思路参考两个上游项目和相应厂商公告。[Bash 检查器](https://github.com/ubitquity/cve-2026-114938-java4shell-remediation) · [Python 检查器](https://github.com/Mahgal/java4shell-check) · [Oracle 安全公告](https://www.oracle.com/security-alerts/cspunov2026.html)
+脚本从 `/proc/cpuinfo` 检查所有可见逻辑 CPU。开启 `--jcmd` 后，使用当前 `PATH` 里的 `jcmd` 读取 JVM 生效参数，必要时会启动 HotSpot 的诊断监听器。默认输出 TSV。使用 `--json` 时，stdout 只写 JSON 汇总，TSV 证据写到 stderr。`--java-path` 会解析符号链接，并将目标 `bin/java` 所属的 JDK/JRE 加入磁盘搜索。退出码 `0` 表示已排除影响或已确认缓解，`1` 表示存在受影响 JVM，`2` 表示用法或依赖错误，`3` 表示证据不足，`4` 表示有符合条件但未关联到运行中 JVM 的安装。检查思路参考两个上游项目和相应厂商公告。[Bash 检查器](https://github.com/ubitquity/cve-2026-114938-java4shell-remediation) · [Python 检查器](https://github.com/Mahgal/java4shell-check) · [Oracle 安全公告](https://www.oracle.com/security-alerts/cspunov2026.html)
 
 ### 可选运行实例与厂商补丁参考核验
 
