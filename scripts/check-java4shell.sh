@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 # check-java4shell.sh — CVE-2026-114938 (Java4Shell) 本地证据检测
-# 基线: php2shell_check/scripts/check-java4shell.sh
-# 增强: --json 机器可读汇总、--java-path 指定运行时、帮助信息完善
 # 依赖: bash 4.4+, Linux /proc, awk/find/realpath/stat/timeout/uname。无需 Python/网络。
 
 set -u
@@ -15,10 +13,11 @@ Usage: check-java4shell.sh [--jcmd] [--root DIRECTORY]... [--json] [--java-path 
 
   --jcmd              用 jcmd VM.flags -all 读取 JVM 实际生效的 flags
                       （可能启动 HotSpot 诊断监听器，建议以 JVM 服务账户运行）
-  --root DIR          额外扫描嵌入式运行时目录（可重复）
+  --root DIR          优先扫描额外的嵌入式运行时目录（可重复）
   --json              输出 JSON 汇总到 stdout，TSV 证据到 stderr
-  --java-path PATH    以指定的 JDK/JRE bin/java 增加磁盘搜索起点
-                      （默认从 PATH 解析，仍扫描其他目录和运行中 JVM）
+  --java-path PATH    优先扫描该 Java 所属的 JDK/JRE。解析符号链接后必须
+                      指向可执行的 bin/java。未指定时从 PATH 查找 Java。
+                      仍会检查其他目录和运行中 JVM。
   --help              显示本帮助
 
 默认输出制表符分隔的 TSV 证据到 stdout。
@@ -31,7 +30,8 @@ HELP
 attach=0
 json_mode=0
 java_path=""
-roots=(/usr/lib/jvm /usr/lib64/jvm /usr/java /usr/local/lib/jvm /usr/local/java /opt /srv /app)
+roots=()
+default_roots=(/usr/lib/jvm /usr/lib64/jvm /usr/java /usr/local/lib/jvm /usr/local/java /opt /srv /app)
 
 while (($#)); do
   case $1 in
@@ -62,7 +62,8 @@ done
 [[ $(uname -s) == Linux ]] || { printf '%s\n' 'Linux /proc is required' >&2; exit 2; }
 
 if [[ -n $java_path ]]; then
-  if ! java_bin=$(realpath -e -- "$java_path" 2>/dev/null) || [[ $java_bin != */bin/java ]]; then
+  if ! java_bin=$(realpath -e -- "$java_path" 2>/dev/null) ||
+     [[ $java_bin != */bin/java || ! -f $java_bin || ! -x $java_bin ]]; then
     printf '%s\n' '--java-path must resolve to a JDK/JRE bin/java' >&2
     exit 2
   fi
@@ -215,8 +216,8 @@ process_start() {
 }
 
 handles_sigquit() {
-  local key mask
-  while read -r key mask _; do
+  local key mask rest
+  while read -r key mask rest; do
     if [[ $key == SigCgt: && $mask =~ ^[[:xdigit:]]+$ ]]; then
       (( (16#${mask: -1} & 4) != 0 )) && return 0
       return 1
@@ -329,10 +330,16 @@ for proc in /proc/[0-9]*; do
 done
 
 # ==================== 磁盘安装扫描 ====================
+[[ -n ${JAVA_HOME:-} ]] && roots+=("$JAVA_HOME")
 if [[ $java_bin == */bin/java ]]; then
-  roots=("${java_bin%/bin/java}" "${roots[@]}")
+  java_home=${java_bin%/bin/java}
+  if [[ -n $java_path ]]; then
+    roots=("${java_home:-/}" "${roots[@]}")
+  else
+    roots+=("${java_home:-/}")
+  fi
 fi
-[[ -n ${JAVA_HOME:-} ]] && roots=("$JAVA_HOME" "${roots[@]}")
+roots+=("${default_roots[@]}")
 
 for root in "${roots[@]}"; do
   [[ -d $root ]] || continue
