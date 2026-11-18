@@ -886,9 +886,47 @@ libjvm_meta() {
             sub(/^[[:space:]]+/, "", path)
             if (path !~ /^\//) next
             row = dev "\037" inode "\037" path
-            if (!seen[row]++) print row
+            if (!seen[row]++) print row "\037" $1
         }
     ' "$1/maps" 2>/dev/null
+}
+
+mapping_identity() {
+    local proc=$1 range=$2 expected=$3 disk=$4 mapped
+    if [[ $disk == "$expected" ]]; then
+        printf 'maps'
+        return
+    fi
+    [[ ${disk##* } == "${expected##* }" && $range =~ ^[[:xdigit:]]+-[[:xdigit:]]+$ ]] || return 1
+    mapped=$(file_id "$proc/map_files/$range") || return 2
+    [[ $mapped == "$disk" ]] || return 1
+    printf 'map_files'
+}
+
+jcmd_version() {
+    local pid=$1 jc=$2 out
+    have timeout || return 1
+    out=$(timeout -k 1s 3s "$jc" "$pid" VM.version 2>/dev/null) || return 1
+    printf '%s\n' "$out" | awk '
+        / VM version / {
+            for (i = 1; i < NF; ++i) {
+                if ($i == "version" && $(i+1) ~ /^[0-9]+([._][0-9]+)*\+([0-9]+)([-.][A-Za-z0-9._~+-]+)?$/) {
+                    print $(i+1)
+                    exit
+                }
+            }
+        }
+    '
+}
+
+runtime_version_conflicts() {
+    local runtime=$1 disk=$2
+    [[ -n $runtime && -n $disk ]] || return 1
+    if [[ $disk == *+* ]]; then
+        [[ ${runtime,,} != "${disk,,}" ]]
+    else
+        [[ ${runtime%%+*} != "$disk" ]]
+    fi
 }
 
 jcmd_bin() {
@@ -994,10 +1032,11 @@ launcher_flags() {
 
 scan_processes() {
     local pid proc exe exe_clean comm named has_jvm maps_ok explicit=0
-    local libmeta libpaths nlib libpath libdev libino st sdev sino mhex nhex ma mi verified
+    local libmeta libpath libdev libino st mhex nhex verified range expected identity_source identity_rc
     local root root_disp version vendor product vm arch build bevid cpu status reason
     local flags feff mit fn notes container start1 start2
     local bevid_and_build verify_problem libmeta2 libmeta3 jc jcf vmname vmtext
+    local runtime_version disk_version version_conflict weak_identity
 
     local pidlist
     if [ ${#PID_ARGS[@]} -gt 0 ]; then
@@ -1058,46 +1097,47 @@ scan_processes() {
             continue
         fi
 
-        # --- 校验运行中映射的 HotSpot 库与磁盘文件是否同一 inode ---
+        # File identity and JVM version evidence have independent lifetimes.
         verified=0
+        weak_identity=0
+        version_conflict=0
+        identity_source=""
+        runtime_version=""
+        disk_version=""
         root=""
         libpath=""
+        st=""
         verify_problem=""
-        if [ "$has_jvm" -eq 1 ]; then
-            libpaths=$(printf '%s\n' "$libmeta" | awk -F '\037' 'NF >= 3 { print $3 }' | LC_ALL=C sort -u)
-            nlib=$(printf '%s\n' "$libmeta" | grep -c . 2>/dev/null)
-            if [ "${nlib:-0}" -eq 1 ]; then
-                libpath=$libpaths
-                case $libpath in
-                    *"(deleted)"*)
-                        verify_problem="运行中的 HotSpot 库已被删除（升级后未重启），无法核对磁盘文件" ;;
-                    *)
-                        libdev=$(printf '%s\n' "$libmeta" | awk -F '\037' 'NR == 1 { print $1; exit }')
-                        libino=$(printf '%s\n' "$libmeta" | awk -F '\037' 'NR == 1 { print $2; exit }')
-                        st=$(file_id "$proc/root$libpath" || echo "")
-                        if [ -z "$st" ]; then
-                            verify_problem="磁盘上找不到对应的 libjvm.so（容器/挂载差异或文件已删除）"
-                        fi
-                        if [ -n "$st" ]; then
-                            read -r ma mi sino <<< "$st"
-                            mhex=${libdev%%:*}
-                            nhex=${libdev##*:}
-                            if [[ $mhex =~ ^[[:xdigit:]]+$ && $nhex =~ ^[[:xdigit:]]+$ &&
-                                  $sino == "$libino" && $ma == "$((16#$mhex))" && $mi == "$((16#$nhex))" ]]; then
-                                verified=1
-                            fi
-                        fi
-                        ;;
+        if [[ -n $libmeta && $libmeta != *$'\n'* ]]; then
+            IFS=$'\037' read -r libdev libino libpath range <<< "$libmeta"
+            mhex=${libdev%%:*}
+            nhex=${libdev##*:}
+            if [[ $libpath == *" (deleted)" ]]; then
+                verify_problem="运行中的 HotSpot 库已被删除，无法核对磁盘文件"
+            elif ! st=$(file_id "$proc/root$libpath"); then
+                verify_problem="无法读取磁盘上对应的 libjvm.so 文件身份"
+            elif [[ $mhex =~ ^[[:xdigit:]]+$ && $nhex =~ ^[[:xdigit:]]+$ ]]; then
+                expected="$((16#$mhex)) $((16#$nhex)) $libino"
+                identity_rc=0
+                identity_source=$(mapping_identity "$proc" "$range" "$expected" "$st") || identity_rc=$?
+                case $identity_rc in
+                    0) verified=1 ;;
+                    2) weak_identity=1 ;;
+                    *) verify_problem="无法将运行中映射与磁盘文件关联" ;;
                 esac
-                if [ "$verified" -eq 0 ] && [ -z "$verify_problem" ]; then
-                    verify_problem="运行中的 HotSpot 库与磁盘文件不是同一份（可能已被替换）"
+                if [ "$identity_source" = map_files ] || [ "$weak_identity" -eq 1 ] ||
+                   [ "$identity_rc" -ne 0 ]; then
+                    add_note "maps 设备号及 inode: $expected；磁盘 stat: $st"
                 fi
-            elif [ "${nlib:-0}" -gt 1 ]; then
-                verify_problem="进程内存在 $nlib 个不同的 HotSpot 库映射，无法确定运行实体"
+                if [ "$weak_identity" -eq 1 ]; then
+                    add_note "inode 相同但设备号不同，无法读取 map_files 进一步核实"
+                fi
+                if [ "$verified" -eq 1 ] || [ "$weak_identity" -eq 1 ]; then
+                    root=$(jvm_root_from_lib "$proc" "$libpath")
+                fi
             fi
-            if [ "$verified" -eq 1 ]; then
-                root=$(jvm_root_from_lib "$proc" "$libpath")
-            fi
+        elif [[ -n $libmeta ]]; then
+            verify_problem="进程内存在多个不同的 HotSpot 库映射，无法确定运行实体"
         fi
 
         version=""; vendor=""; product=""; vm=""; arch=""
@@ -1109,7 +1149,14 @@ scan_processes() {
             vmname=$(release_get "$root/release" JAVA_VM_NAME)
             arch=$(release_get "$root/release" OS_ARCH)
             product=$(jdk_product "$root" "$vendor")
-            add_note "已映射的 HotSpot 库与磁盘 JDK 的设备号和 inode 一致"
+            disk_version=$version
+            if [ "$weak_identity" -eq 1 ]; then
+                add_note "未关联的磁盘 release 构建: ${disk_version:-未知}"
+            fi
+            case $identity_source in
+                maps) add_note "已映射的 HotSpot 库与磁盘 JDK 的设备号和 inode 一致" ;;
+                map_files) add_note "已通过 map_files 核实映射对象与磁盘文件的设备号和 inode" ;;
+            esac
             root_disp=${root#"$proc/root"}
             [ -n "$root_disp" ] || root_disp=$root
             libmeta2=$(libjvm_meta "$proc")
@@ -1126,7 +1173,7 @@ scan_processes() {
         fi
         [ -n "$arch" ] || arch=$ARCH_RAW
 
-        if [ "$verified" -ne 1 ] || [ -n "$verify_problem" ]; then
+        if { [ "$verified" -ne 1 ] && [ "$weak_identity" -ne 1 ]; } || [ -n "$verify_problem" ]; then
             verify_problem=${verify_problem:-无法核实运行中 JVM 映像}
             container=$(container_hint "$proc")
             start2=$(java_process_start "$pid")
@@ -1164,23 +1211,30 @@ scan_processes() {
             elif ! handles_sigquit "$proc"; then
                 add_note "目标 JVM 未注册 SIGQUIT 处理器（attach 监听器未启用），跳过 jcmd"
             elif [ -n "$start1" ] && [ "$(java_process_start "$pid")" = "$start1" ] &&
-                 [ "$(libjvm_meta "$proc")" = "$libmeta" ] && jcf=$(jcmd_flags "$pid" "$jc"); then
-                jcmd_ok=1
-                read -r b64 eavx <<< "$jcf"
-                [[ $b64 == false || $eavx =~ ^[0-2]$ || ( $b64 == true && $eavx == 3 ) ]] && feff="true"
-                if [ "$b64" = "false" ]; then
-                    MIT_EFF=1
-                elif [ "$b64" = "true" ]; then
-                    MIT_EFF=0
+                 [ "$(libjvm_meta "$proc")" = "$libmeta" ]; then
+                if jcf=$(jcmd_flags "$pid" "$jc"); then
+                    jcmd_ok=1
+                    read -r b64 eavx <<< "$jcf"
+                    [[ $b64 == false || $eavx =~ ^[0-2]$ || ( $b64 == true && $eavx == 3 ) ]] && feff="true"
+                    if [ "$b64" = "false" ]; then
+                        MIT_EFF=1
+                    elif [ "$b64" = "true" ]; then
+                        MIT_EFF=0
+                    fi
+                    case $eavx in
+                        0|1|2) MIT_EFF=1 ;;
+                    esac
+                    add_note "jcmd 实测生效参数：UseBASE64Intrinsics=$b64 UseAVX=$eavx（以 JVM 实际值为准）"
+                else
+                    add_note "jcmd 生效参数查询失败，启动参数仅作线索"
                 fi
-                case $eavx in
-                    0|1|2) MIT_EFF=1 ;;
-                esac
-                add_note "jcmd 实测生效参数：UseBASE64Intrinsics=$b64 UseAVX=$eavx（以 JVM 实际值为准）"
-                libmeta3=$(libjvm_meta "$proc")
-                if [ "$libmeta3" != "$libmeta" ] || [ "$(java_process_start "$pid")" != "$start1" ]; then
-                    add_note "jcmd attach 后进程映射或身份发生变化，结论可能不适用于当前进程"
-                    jcmd_ok=0
+                if [ "$(java_process_start "$pid")" = "$start1" ] &&
+                   [ "$(libjvm_meta "$proc")" = "$libmeta" ] &&
+                   runtime_version=$(jcmd_version "$pid" "$jc") && [ -n "$runtime_version" ]; then
+                    add_note "jcmd 自报运行构建: $runtime_version；磁盘 release: ${disk_version:-未知}"
+                    if runtime_version_conflicts "$runtime_version" "$disk_version"; then
+                        version_conflict=1
+                    fi
                 fi
             else
                 add_note "jcmd 探测失败或超时（attach 未被响应），启动参数仅作线索"
@@ -1193,13 +1247,16 @@ scan_processes() {
         start2=$(java_process_start "$pid")
         libmeta3=$(libjvm_meta "$proc")
         if [ -z "$start1" ] || [ "$start1" != "$start2" ] || [ ! -d "$proc" ] ||
-           [ "$libmeta3" != "$libmeta" ] || [ "$(file_id "$proc/root$libpath")" != "$st" ]; then
+           [ "$libmeta3" != "$libmeta" ] || [ "$(file_id "$proc/root$libpath")" != "$st" ] ||
+           { [ "$identity_source" = map_files ] && [ "$(file_id "$proc/map_files/$range")" != "$st" ]; }; then
             emit_finding "pid:$pid" "process" "unknown" "采集期间进程已退出或身份发生变化。" \
                 "unknown" "进程已退出" "$(cpu_assess "$arch" "$CPU_STATE")" "" "" "" "" "" "$arch" "" "false" "" ""
             continue
         fi
 
-        printf '%s\n' "$st" >> "$ACTIVE_FILE"
+        if [ "$verified" -eq 1 ] && [ "$version_conflict" -eq 0 ]; then
+            printf '%s\n' "$st" >> "$ACTIVE_FILE"
+        fi
 
         cpu=$(cpu_assess "$arch" "$CPU_STATE")
         bevid_and_build=$(build_assess "$version" "$vendor" "$product" "$vm" "$(release_get "$root/release" IMPLEMENTOR_VERSION)")
@@ -1222,7 +1279,21 @@ scan_processes() {
             fn=1
             add_note "缓解裁决采用显式信任的启动参数，未通过 jcmd 核实"
         fi
-        if [ "$openj9" -eq 1 ]; then
+        if [ "$version_conflict" -eq 1 ]; then
+            status=unknown
+            reason="jcmd 自报运行构建与磁盘 release 不一致"
+            build=unknown
+            bevid=$reason
+            version=$runtime_version
+            vendor="" product="" vm=""
+        elif [ "$weak_identity" -eq 1 ]; then
+            status=potential
+            reason="运行库身份未核实：inode 相同、设备号不同，磁盘构建仅供参考"
+            build=candidate
+            bevid=$reason
+            version=$runtime_version
+            vendor="" product="" vm=""
+        elif [ "$openj9" -eq 1 ]; then
             build="outside_scope"
             bevid="运行在 Eclipse OpenJ9（自有 Base64 实现，不经过 HotSpot intrinsic）"
             status="not_affected"

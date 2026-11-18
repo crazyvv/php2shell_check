@@ -323,6 +323,8 @@ bash scripts/java4shell-scan.sh --demo --json
 
 增强版使用已核实的厂商和完整构建号识别修复。已识别为 Oracle Java SE 的 `.1+4` 构建会匹配修复规则，只有短版本时仍需核对完整构建。默认扫描保留未经证实的运行中 JVM 为 `unknown`。`--assume-flags-effective` 可按明确的启动缓解参数进行估算，报告会标明这一判断依据。`jcmd` 的实测结果优先。
 
+当 `maps` 与磁盘设备号不同、inode 相同时，增强版尝试用 `map_files` 核对实际映射对象与磁盘文件。若因权限限制无法补证，进程保留 `potential`，磁盘安装仍单列。开启 `--jcmd` 时，JVM 自报的完整构建号单独记录。它与磁盘构建冲突时返回 `unknown`，构建号一致也不会单独触发文件去重。只有文件身份已核实且版本无冲突时才去重。
+
 增强版 JSON 的 `coverage` 记录 `--root-depth` 上限、达到深度边界的目录数、递归扫描出错的根目录数和读取失败的进程映射数。达到深度边界表示该目录以下没有搜索。若未命中门禁，覆盖不足会返回退出码 `3`。`candidate` 是 JSON 和 CSV 中的 `build_assessment` 值，`--fail-on` 匹配最终的 `status`。运行 `bash tests/java4shell-scan.sh` 可验证构建规则和覆盖报告。
 
 ### 可选运行实例与厂商补丁参考核验

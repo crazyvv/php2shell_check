@@ -97,3 +97,63 @@ bash "$scanner" --quiet --no-processes --jdk "$fixture/jdk" \
     --java-path "$fixture/launcher/bin/java" --json > "$fixture/report.json"
 grep -Fq '"version": "21.0.13.1+4-LTS"' "$fixture/report.json"
 grep -Fq '"kind": "java-binary", "status": "not_affected"' "$fixture/report.json"
+
+(
+    file_id() { printf '%s' "$mapped_identity"; }
+    mapped_identity='0 49 860636'
+    [[ $(mapping_identity /proc/1 'aa-bb' '0 46 860636' '0 49 860636') == map_files ]]
+    mapped_identity='0 46 860636'
+    if mapping_identity /proc/1 'aa-bb' '0 46 860636' '0 49 860636'; then
+        exit 1
+    fi
+    runtime_version_conflicts '21.0.13.1+3' '21.0.13.1+4'
+    ! runtime_version_conflicts '21.0.13.1+4' '21.0.13.1'
+)
+
+cat > "$fixture/tools/jcmd" <<'JCMD'
+#!/bin/sh
+printf '%s\n' '123:' 'OpenJDK 64-Bit Server VM version 21.0.13.1+3' 'JDK 21.0.13.1'
+JCMD
+chmod +x "$fixture/tools/jcmd"
+if have timeout; then
+    [[ $(jcmd_version 123 "$fixture/tools/jcmd") == '21.0.13.1+3' ]]
+fi
+
+if [[ $OS == Linux ]]; then
+    (
+        sleep 30 &
+        second=$!
+        trap 'kill "$second" 2>/dev/null || :; wait "$second" 2>/dev/null || :' EXIT
+        PID_ARGS=("$$" "$second")
+        ACTIVE_FILE="$fixture/active-ids"
+        : > "$ACTIVE_FILE"
+        CPU_STATE=present
+        JCMD=1
+        libjvm_meta() { printf '00:2e\037860636\037/test/lib/server/libjvm.so\037aa-bb'; }
+        file_id() {
+            case $1 in
+                "/proc/$$/root/"*) printf '0 46 860636' ;;
+                "/proc/$second/root/"*) printf '0 49 860636' ;;
+                *) return 1 ;;
+            esac
+        }
+        jvm_root_from_lib() { printf '%s' "$fixture/jdk"; }
+        jcmd_bin() { printf 'fixture-jcmd'; }
+        handles_sigquit() { return 0; }
+        launcher_flags() { return 0; }
+        jcmd_flags() { printf 'true 3'; }
+        jcmd_version() { printf '%s' "${reported_version:-21.0.13.1+4}"; }
+        container_hint() { return 0; }
+        emit_finding() { printf '%s %s %s\n' "$1" "$3" "$8"; }
+        scan_processes > "$fixture/pid-report"
+        grep -Fxq "pid:$$ not_affected 21.0.13.1+4" "$fixture/pid-report"
+        grep -Fxq "pid:$second potential 21.0.13.1+4" "$fixture/pid-report"
+        [[ $(cat "$ACTIVE_FILE") == '0 46 860636' ]]
+
+        reported_version=21.0.13.1+3
+        : > "$ACTIVE_FILE"
+        scan_processes > "$fixture/pid-report"
+        grep -Fxq "pid:$second unknown 21.0.13.1+3" "$fixture/pid-report"
+        [[ ! -s $ACTIVE_FILE ]]
+    )
+fi
