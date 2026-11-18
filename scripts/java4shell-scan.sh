@@ -666,24 +666,31 @@ build_assess() {
 # 缓解参数
 #   多次出现按最后一个生效；-XX:UseAVX<=2 视为已缓解
 # ---------------------------------------------------------------------------
-mitigation_from_flags() {
-    local flags=${1:-} f disable=0 avx=3 val
-    for f in $flags; do
-        case $f in
-            -XX:-UseBASE64Intrinsics) disable=1 ;;
-            -XX:+UseBASE64Intrinsics) disable=0 ;;
-            -XX:UseAVX=*)
-                val=${f#-XX:UseAVX=}
-                case $val in
-                    ''|*[!0-9]*) : ;;
-                    *) avx=$val ;;
-                esac
-                ;;
+flag_assessment() {
+    local base64=$1 avx=$2
+    if [[ $base64 == false || $avx =~ ^0*[0-2]$ ]]; then
+        printf 'mitigated'
+    elif [[ $base64 == true && $avx =~ ^0*3$ ]]; then
+        printf 'unmitigated'
+    else
+        printf 'unknown'
+    fi
+}
+
+launcher_flag_assessment() {
+    local flags=${1:-} flag base64=unknown avx=unknown
+    for flag in $flags; do
+        case $flag in
+            -XX:-UseBASE64Intrinsics) base64=false ;;
+            -XX:+UseBASE64Intrinsics) base64=true ;;
+            -XX:UseAVX=*) avx=${flag#-XX:UseAVX=} ;;
         esac
     done
-    [ "$disable" -eq 1 ] && return 0
-    [ "$avx" -le 2 ] && return 0
-    return 1
+    flag_assessment "$base64" "$avx"
+}
+
+mitigation_from_flags() {
+    [[ $(launcher_flag_assessment "${1:-}") == mitigated ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -911,17 +918,23 @@ jcmd_version() {
         / VM version / {
             for (i = 1; i < NF; ++i) {
                 if ($i == "version" && $(i+1) ~ /^[0-9]+([._][0-9]+)*\+([0-9]+)([-.][A-Za-z0-9._~+-]+)?$/) {
-                    print $(i+1)
+                    full = $(i+1)
                     exit
                 }
             }
+        }
+        $1 == "JDK" && $2 ~ /^[0-9]+([._][0-9]+)*$/ { short = $2 }
+        END {
+            if (full != "") print full
+            else if (short != "") print short
+            else exit 1
         }
     '
 }
 
 runtime_version_conflicts() {
     local runtime=$1 disk=$2
-    [[ -n $runtime && -n $disk ]] || return 1
+    [[ $runtime == *+* && -n $disk ]] || return 1
     if [[ $disk == *+* ]]; then
         [[ ${runtime,,} != "${disk,,}" ]]
     else
@@ -1035,6 +1048,7 @@ scan_processes() {
     local libmeta libpath libdev libino st mhex nhex verified range expected identity_source identity_rc
     local root root_disp version vendor product vm arch build bevid cpu status reason
     local flags feff mit fn notes container start1 start2
+    local measured_state assumed_state b64 eavx reported_version
     local bevid_and_build verify_problem libmeta2 libmeta3 jc jcf vmname vmtext
     local runtime_version disk_version version_conflict weak_identity
 
@@ -1200,8 +1214,8 @@ scan_processes() {
         fi
 
         # --- 生效参数（--jcmd，可选）：读 JVM 真实生效值，而不是启动器写法 ---
-        jcmd_ok=0
-        MIT_EFF=0
+        measured_state=
+        assumed_state=unknown
         if [ "$JCMD" -eq 1 ] && [ "$has_jvm" -eq 1 ]; then
             jc=$(jcmd_bin)
             if [ -z "$jc" ]; then
@@ -1213,27 +1227,27 @@ scan_processes() {
             elif [ -n "$start1" ] && [ "$(java_process_start "$pid")" = "$start1" ] &&
                  [ "$(libjvm_meta "$proc")" = "$libmeta" ]; then
                 if jcf=$(jcmd_flags "$pid" "$jc"); then
-                    jcmd_ok=1
                     read -r b64 eavx <<< "$jcf"
-                    [[ $b64 == false || $eavx =~ ^[0-2]$ || ( $b64 == true && $eavx == 3 ) ]] && feff="true"
-                    if [ "$b64" = "false" ]; then
-                        MIT_EFF=1
-                    elif [ "$b64" = "true" ]; then
-                        MIT_EFF=0
+                    measured_state=$(flag_assessment "$b64" "$eavx")
+                    if [ "$measured_state" != unknown ]; then feff=true; fi
+                    add_note "jcmd 生效参数：UseBASE64Intrinsics=$b64 UseAVX=$eavx"
+                    if [ "$measured_state" = unknown ]; then
+                        add_note "实测参数不足以确认缓解状态"
                     fi
-                    case $eavx in
-                        0|1|2) MIT_EFF=1 ;;
-                    esac
-                    add_note "jcmd 实测生效参数：UseBASE64Intrinsics=$b64 UseAVX=$eavx（以 JVM 实际值为准）"
                 else
                     add_note "jcmd 生效参数查询失败，启动参数仅作线索"
                 fi
                 if [ "$(java_process_start "$pid")" = "$start1" ] &&
                    [ "$(libjvm_meta "$proc")" = "$libmeta" ] &&
-                   runtime_version=$(jcmd_version "$pid" "$jc") && [ -n "$runtime_version" ]; then
-                    add_note "jcmd 自报运行构建: $runtime_version；磁盘 release: ${disk_version:-未知}"
-                    if runtime_version_conflicts "$runtime_version" "$disk_version"; then
-                        version_conflict=1
+                   reported_version=$(jcmd_version "$pid" "$jc"); then
+                    if [[ $reported_version == *+* ]]; then
+                        runtime_version=$reported_version
+                        add_note "jcmd 自报运行构建: $runtime_version；磁盘 release: ${disk_version:-未知}"
+                        if runtime_version_conflicts "$runtime_version" "$disk_version"; then
+                            version_conflict=1
+                        fi
+                    else
+                        add_note "jcmd 仅报告短版本 $reported_version，无法核对运行构建号"
                     fi
                 fi
             else
@@ -1267,18 +1281,23 @@ scan_processes() {
         vmtext=$(lower "${vm:-} ${vmname:-}")
         case $vmtext in *openj9*) openj9=1 ;; *) openj9=0 ;; esac
 
-        if [ "$jcmd_ok" -eq 1 ]; then
-            mit=$MIT_EFF
-        else
-            mit=0
-            mitigation_from_flags "$flags" && mit=1
-        fi
         fn=0
-        [ "$feff" = "true" ] && fn=1
-        if [ "$jcmd_ok" -eq 0 ] && [ "$ASSUME_FEFF" -eq 1 ] && [ "$mit" -eq 1 ]; then
-            fn=1
-            add_note "缓解裁决采用显式信任的启动参数，未通过 jcmd 核实"
-        fi
+        mit=0
+        case $measured_state in
+            mitigated) fn=1; mit=1 ;;
+            unmitigated) fn=1 ;;
+            '')
+                if [ "$ASSUME_FEFF" -eq 1 ]; then
+                    assumed_state=$(launcher_flag_assessment "$flags")
+                    case $assumed_state in
+                        mitigated) fn=1; mit=1 ;;
+                        unmitigated) fn=1 ;;
+                    esac
+                    if [ "$fn" -eq 1 ]; then
+                        add_note "裁决采用显式信任的启动参数，未通过 jcmd 核实"
+                    fi
+                fi ;;
+        esac
         if [ "$version_conflict" -eq 1 ]; then
             status=unknown
             reason="jcmd 自报运行构建与磁盘 release 不一致"
@@ -1302,9 +1321,10 @@ scan_processes() {
         else
             status=$(classify "$build" "$cpu" "$mit" "$fn" "$(norm_arch "$arch")")
             reason=$(make_reason "$status" "$build" "$bevid" "$cpu" "$mit" "$(norm_arch "$arch")")
-            if [ "$status" = mitigated ] && [ "$feff" = false ]; then
-                reason="按显式信任的 JVM 启动参数判为已缓解，尚无 jcmd 实测。"
-            fi
+            case "$status:$assumed_state" in
+                mitigated:mitigated) reason="按显式信任的 JVM 启动参数估算为已缓解，尚无 jcmd 实测。" ;;
+                affected:unmitigated) reason="按显式信任的 JVM 启动参数估算为受影响，尚无 jcmd 实测。" ;;
+            esac
         fi
 
         emit_finding "pid:$pid" "process" "$status" "$reason" "$build" "$bevid" \

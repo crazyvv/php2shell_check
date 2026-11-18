@@ -28,6 +28,11 @@ assert_build candidate 21.0.13.1+1 'Amazon.com Inc.' '' HotSpot Corretto-21.0.13
 assert_build fixed 17.0.21.1+2 OpenJDK '' HotSpot
 assert_build candidate 17.0.21.1+2 'Unlisted vendor' '' HotSpot
 assert_build candidate 17.0.21.1+2 OpenJDK GraalVM HotSpot
+assert_build candidate 27.0.1.1+2 OpenJDK OpenJDK HotSpot
+assert_build fixed 27.0.1.1+4 OpenJDK OpenJDK HotSpot
+assert_build candidate 27.0.1.1+2 'Amazon.com Inc.' '' HotSpot Corretto-27.0.1.1.4
+assert_build fixed 27.0.1.1+4-FR 'Amazon.com Inc.' '' HotSpot Corretto-27.0.1.1.4
+assert_build candidate 21.0.13.1+2 'Eclipse Adoptium' '' HotSpot
 assert_build candidate 21.1.3+9 OpenJDK OpenJDK HotSpot
 assert_build unfixed 8u511b33-perf 'Oracle Corporation' 'Oracle Java SE' HotSpot
 assert_build unknown 8u511b33-perf-b32 'Oracle Corporation' 'Oracle Java SE' HotSpot
@@ -35,6 +40,16 @@ assert_build unknown 1.8.0_511-perf-b32 'Oracle Corporation' 'Oracle Java SE' Ho
 assert_build unfixed 17.0.21.0.3 'Oracle Corporation' 'Oracle GraalVM for JDK' HotSpot
 assert_build outside_scope 21.0.13+9 IBM '' OpenJ9
 [[ $(classify candidate present 0 0 amd64 installation) == potential ]]
+[[ $(classify unfixed present 0 0 amd64 installation) == potential ]]
+[[ $(flag_assessment true unknown) == unknown ]]
+[[ $(flag_assessment unknown 3) == unknown ]]
+[[ $(flag_assessment true 3) == unmitigated ]]
+[[ $(flag_assessment false unknown) == mitigated ]]
+[[ $(flag_assessment true 2) == mitigated ]]
+[[ $(launcher_flag_assessment '-XX:+UseBASE64Intrinsics') == unknown ]]
+[[ $(launcher_flag_assessment '-XX:UseAVX=3') == unknown ]]
+[[ $(launcher_flag_assessment '-XX:+UseBASE64Intrinsics -XX:UseAVX=3') == unmitigated ]]
+[[ $(launcher_flag_assessment '-XX:-UseBASE64Intrinsics -XX:+UseBASE64Intrinsics -XX:UseAVX=2') == mitigated ]]
 
 fixture=$(mktemp -d)
 trap 'rm -rf -- "$fixture"' EXIT
@@ -108,6 +123,7 @@ grep -Fq '"kind": "java-binary", "status": "not_affected"' "$fixture/report.json
     fi
     runtime_version_conflicts '21.0.13.1+3' '21.0.13.1+4'
     ! runtime_version_conflicts '21.0.13.1+4' '21.0.13.1'
+    ! runtime_version_conflicts '21.0.13.1' '21.0.13.1+4'
 )
 
 cat > "$fixture/tools/jcmd" <<'JCMD'
@@ -142,7 +158,7 @@ if [[ $OS == Linux ]]; then
         handles_sigquit() { return 0; }
         launcher_flags() { return 0; }
         jcmd_flags() { printf 'true 3'; }
-        jcmd_version() { printf '%s' "${reported_version:-21.0.13.1+4}"; }
+        jcmd_version() { printf '%s' "${fixture_runtime_version:-21.0.13.1+4}"; }
         container_hint() { return 0; }
         emit_finding() { printf '%s %s %s\n' "$1" "$3" "$8"; }
         scan_processes > "$fixture/pid-report"
@@ -150,10 +166,35 @@ if [[ $OS == Linux ]]; then
         grep -Fxq "pid:$second potential 21.0.13.1+4" "$fixture/pid-report"
         [[ $(cat "$ACTIVE_FILE") == '0 46 860636' ]]
 
-        reported_version=21.0.13.1+3
+        fixture_runtime_version=21.0.13.1+3
         : > "$ACTIVE_FILE"
         scan_processes > "$fixture/pid-report"
         grep -Fxq "pid:$second unknown 21.0.13.1+3" "$fixture/pid-report"
         [[ ! -s $ACTIVE_FILE ]]
+
+        PID_ARGS=("$$")
+        ASSUME_FEFF=1
+        fixture_runtime_version=21.0.13
+        jvm_root_from_lib() { printf '%s' "$fixture/affected-jdk"; }
+        mkdir "$fixture/affected-jdk"
+        printf '%s\n' 'JAVA_RUNTIME_VERSION="21.0.13+9"' 'IMPLEMENTOR="OpenJDK"' > "$fixture/affected-jdk/release"
+        launcher_flags() { printf '%s' "$fixture_flags"; }
+        jcmd_flags() { printf '%s' "$fixture_measured"; }
+        emit_finding() { printf '%s %s %s\n' "$3" "${15}" "${17}"; }
+
+        fixture_flags='-XX:+UseBASE64Intrinsics -XX:UseAVX=3'
+        fixture_measured='true unknown'
+        scan_processes > "$fixture/pid-report"
+        grep -q '^unknown false .*仅报告短版本' "$fixture/pid-report"
+
+        JCMD=0
+        scan_processes > "$fixture/pid-report"
+        grep -q '^affected false .*显式信任' "$fixture/pid-report"
+        fixture_flags='-XX:+UseBASE64Intrinsics'
+        scan_processes > "$fixture/pid-report"
+        grep -q '^unknown false ' "$fixture/pid-report"
+        fixture_flags='-XX:UseAVX=2'
+        scan_processes > "$fixture/pid-report"
+        grep -q '^mitigated false .*显式信任' "$fixture/pid-report"
     )
 fi
