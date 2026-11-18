@@ -453,6 +453,10 @@ list_roots() {
 # ---------------------------------------------------------------------------
 range_assess() {
     local v=$1 base major first last fixed fixed_note
+    if [[ $v =~ ^[0-9]+$ ]]; then
+        printf 'unknown\t仅有 Java 主版本号（%s），缺少可供范围判定的版本细节' "$v"
+        return
+    fi
     base=${v%%+*}
     major=${base%%.*}
     major=${major//[!0-9]/}
@@ -792,12 +796,24 @@ file_id() {
 }
 
 jdk_product() {
-    local home=$1 vendor=$2 label graal
+    local home=$1 vendor=$2 label graal edition
     case $(lower "$vendor") in
         openjdk) printf 'OpenJDK' ;;
         oracle|"oracle corporation")
             graal=$(release_get "$home/release" GRAALVM_VERSION)
-            label=$(lower "$(printf '%s %s %s'                 "$(release_get "$home/release" GRAALVM_EDITION)"                 "$(release_get "$home/release" IMPLEMENTOR_VERSION)"                 "$(release_get "$home/release" JAVA_RUNTIME_NAME)")")
+            edition=$(lower "$(release_get "$home/release" GRAALVM_EDITION)")
+            label=$(lower "$(printf '%s %s %s' "$edition" \
+                "$(release_get "$home/release" IMPLEMENTOR_VERSION)" \
+                "$(release_get "$home/release" JAVA_RUNTIME_NAME)")")
+            case "$label" in
+                *"enterprise edition"*|*"graalvm enterprise"*)
+                    printf 'Oracle GraalVM Enterprise Edition'
+                    return ;;
+            esac
+            if [[ $edition == ee && $graal == 21.3.* ]]; then
+                printf 'Oracle GraalVM Enterprise Edition'
+                return
+            fi
             case "$graal $label" in
                 *graalvm*) printf 'Oracle GraalVM for JDK'; return ;;
             esac
@@ -812,6 +828,20 @@ jdk_product() {
                     fi ;;
             esac ;;
     esac
+}
+
+assess_jdk_build() {
+    local home=$1 version=$2 vendor=$3 product=$4 vm=$5 distribution="" graal=""
+    if [ -n "$home" ]; then
+        distribution=$(release_get "$home/release" IMPLEMENTOR_VERSION)
+        if [ "$product" = "Oracle GraalVM Enterprise Edition" ]; then
+            graal=$(release_get "$home/release" GRAALVM_VERSION)
+            if [[ $graal =~ ^[0-9]+(\.[0-9]+){1,4}$ ]]; then
+                version=$graal
+            fi
+        fi
+    fi
+    build_assess "$version" "$vendor" "$product" "$vm" "$distribution"
 }
 
 scan_installations() {
@@ -851,7 +881,7 @@ scan_installations() {
         fi
 
         cpu=$(cpu_assess "$arch" "$CPU_STATE")
-        bevid_and_build=$(build_assess "$version" "$vendor" "$product" "$vm" "$(release_get "$root/release" IMPLEMENTOR_VERSION)")
+        bevid_and_build=$(assess_jdk_build "$root" "$version" "$vendor" "$product" "$vm")
         build=$(printf '%s' "$bevid_and_build" | cut -f1)
         bevid=$(printf '%s' "$bevid_and_build" | cut -f2-)
 
@@ -1273,7 +1303,7 @@ scan_processes() {
         fi
 
         cpu=$(cpu_assess "$arch" "$CPU_STATE")
-        bevid_and_build=$(build_assess "$version" "$vendor" "$product" "$vm" "$(release_get "$root/release" IMPLEMENTOR_VERSION)")
+        bevid_and_build=$(assess_jdk_build "$root" "$version" "$vendor" "$product" "$vm")
         build=$(printf '%s' "$bevid_and_build" | cut -f1)
         bevid=$(printf '%s' "$bevid_and_build" | cut -f2-)
         [ -n "$build" ] || build="unknown"
@@ -1372,7 +1402,7 @@ scan_processes_other() {
 # 采集：java -version 门禁
 # ---------------------------------------------------------------------------
 scan_java_binary() {
-    local bin=$1 out version vendor vm arch product build bevid cpu status reason notes home full_version distribution=
+    local bin=$1 out version vendor vm arch product build bevid cpu status reason notes home full_version
     [ -f "$bin" ] || die "java 可执行文件不存在: $bin"
     [ -x "$bin" ] || die "java 不可执行: $bin"
 
@@ -1390,7 +1420,6 @@ scan_java_binary() {
     vendor=""
     if [ -n "$home" ]; then
         vendor=$(release_get "$home/release" IMPLEMENTOR)
-        distribution=$(release_get "$home/release" IMPLEMENTOR_VERSION)
     fi
 
     notes=""
@@ -1400,18 +1429,22 @@ scan_java_binary() {
         *hotspot*|*"server vm"*|*"client vm"*) vm="HotSpot" ;;
     esac
     product=""
-    case $(lower "$out") in
-        *graalvm*) product="GraalVM"; notes="版本输出提示 GraalVM" ;;
-        *"java(tm) se runtime environment"*)
-            vendor=${vendor:-Oracle}
-            product="Oracle Java SE" ;;
-        *)
-            if [ -n "$home" ]; then product=$(jdk_product "$home" "$vendor"); fi ;;
-    esac
+    if [ -n "$home" ]; then product=$(jdk_product "$home" "$vendor"); fi
+    if [ -z "$product" ]; then
+        case $(lower "$out") in
+            *"graalvm enterprise"*)
+                vendor=${vendor:-Oracle}
+                product="Oracle GraalVM Enterprise Edition" ;;
+            *graalvm*) product="GraalVM"; notes="版本输出提示 GraalVM" ;;
+            *"java(tm) se runtime environment"*)
+                vendor=${vendor:-Oracle}
+                product="Oracle Java SE" ;;
+        esac
+    fi
     arch=$ARCH_RAW
 
     cpu=$(cpu_assess "$arch" "$CPU_STATE")
-    bevid_and_build=$(build_assess "$version" "$vendor" "$product" "$vm" "$distribution")
+    bevid_and_build=$(assess_jdk_build "$home" "$version" "$vendor" "$product" "$vm")
     build=$(printf '%s' "$bevid_and_build" | cut -f1)
     bevid=$(printf '%s' "$bevid_and_build" | cut -f2-)
     [ -n "$build" ] || build="unknown"

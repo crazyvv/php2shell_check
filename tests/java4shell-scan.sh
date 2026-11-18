@@ -18,7 +18,10 @@ assert_build() {
 assert_build unknown 17.0.6 'Oracle Corporation' 'Oracle Java SE' HotSpot
 assert_build unknown 17.0.6+9 'Oracle Corporation' 'Oracle Java SE' HotSpot
 assert_build unfixed 17.0.6+10 'Oracle Corporation' 'Oracle Java SE' HotSpot
+assert_build unknown 21 OpenJDK OpenJDK HotSpot
+assert_build unknown 25 OpenJDK OpenJDK HotSpot
 assert_build unfixed 21+35 OpenJDK OpenJDK HotSpot
+assert_build unfixed 21.0.13 OpenJDK OpenJDK HotSpot
 assert_build unknown 21.0.13.1 'Oracle Corporation' 'Oracle Java SE' HotSpot
 assert_build unknown 21.0.13.1+3 'Oracle Corporation' 'Oracle Java SE' HotSpot
 assert_build fixed 21.0.13.1+4 'Oracle Corporation' 'Oracle Java SE' HotSpot
@@ -56,6 +59,16 @@ trap 'rm -rf -- "$fixture"' EXIT
 mkdir -p "$fixture/jdk" "$fixture/root/boundary/deeper" "$fixture/tools"
 printf '%s\n' 'JAVA_RUNTIME_VERSION="21.0.13.1+4"' 'IMPLEMENTOR="Oracle Corporation"' \
     'JAVA_RUNTIME_NAME="Java(TM) SE Runtime Environment"' > "$fixture/jdk/release"
+
+mkdir -p "$fixture/graal-ee" "$fixture/graal-jdk"
+printf '%s\n' 'JAVA_RUNTIME_VERSION="17.0.18+8"' 'IMPLEMENTOR="Oracle Corporation"'     'GRAALVM_EDITION="Enterprise Edition"' 'GRAALVM_VERSION="21.3.20.0.3"' > "$fixture/graal-ee/release"
+printf '%s\n' 'JAVA_RUNTIME_VERSION="17.0.21.0.3+1"' 'IMPLEMENTOR="Oracle Corporation"'     'GRAALVM_EDITION="ee"' 'GRAALVM_VERSION="23.0.12"' > "$fixture/graal-jdk/release"
+[[ $(jdk_product "$fixture/graal-jdk" 'Oracle Corporation') == 'Oracle GraalVM for JDK' ]]
+bash "$scanner" --quiet --no-processes --jdk "$fixture/graal-ee" --fail-on affected --json > "$fixture/ee.json"
+grep -Fq '"product": "Oracle GraalVM Enterprise Edition"' "$fixture/ee.json"
+grep -Fq '"build_assessment": "unfixed"' "$fixture/ee.json"
+grep -Fq 'Oracle GraalVM Enterprise Edition 受影响构建（21.3.20.0.3）' "$fixture/ee.json"
+grep -Fq '"version": "17.0.18+8"' "$fixture/ee.json"
 
 rc=0
 bash "$scanner" --quiet --no-processes --jdk "$fixture/jdk" --root "$fixture/root" \
