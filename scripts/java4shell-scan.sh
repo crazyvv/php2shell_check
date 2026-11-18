@@ -111,7 +111,7 @@ $NICKNAME · $CVE 主机暴露面检测（$PROG v$SCRIPT_VERSION）
   --details             TXT 报告展开全部资产与证据
   --fail-on LIST        命中即退出 1，逗号分隔（默认 "affected,potential"）
   --assume-flags-effective
-                        在报告备注中标记启动参数估算；裁决仍以 JVM 生效值为准
+                        允许用明确的 JVM 启动参数进行估算；报告仍区分估算与 jcmd 实测
   --quiet               抑制进度提示
   -h, --help            显示本帮助
   -V, --version         显示版本
@@ -560,8 +560,8 @@ build_assess() {
     fi
 
     # ---- 精确规则：OpenJDK / Oracle OpenJDK 构建 ----
-    if { [ "$vl" = "openjdk" ] || [ "$vl" = "oracle" ] || [ "$vl" = "oracle corporation" ]; } \
-       && [ "$pl" = "openjdk" ]; then
+    if [[ ( $vl == openjdk && ( -z $pl || $pl == openjdk ) ) ||
+          ( ( $vl == oracle || $vl == "oracle corporation" ) && $pl == openjdk ) ]]; then
         case $v in
             17.0.21.1+2|21.0.13.1+2|25.0.5.1+2|27.0.1.1+4)
                 printf 'fixed\tOpenJDK 修复 GA 标签（%s）' "${base}"
@@ -603,6 +603,21 @@ build_assess() {
                     21.3.20.0.3)
                         printf 'unfixed\tOracle GraalVM Enterprise Edition 受影响构建（%s）' "$base"; return ;;
                 esac ;;
+        esac
+    fi
+
+    if [[ $vl == "amazon.com inc." || $vl == "amazon.com inc" ]]; then
+        local distribution
+        distribution=$(lower "${5:-}")
+        distribution=${distribution#corretto-}
+        case "$v:$distribution" in
+            17.0.21.1.2:*|21.0.13.1.2:*|25.0.5.1.2:*|27.0.1.1.4:*|\
+            17.0.21.1+2:17.0.21.1.2|17.0.21.1+2-lts:17.0.21.1.2|\
+            21.0.13.1+2:21.0.13.1.2|21.0.13.1+2-lts:21.0.13.1.2|\
+            25.0.5.1+2:25.0.5.1.2|25.0.5.1+2-lts:25.0.5.1.2|\
+            27.0.1.1+4:27.0.1.1.4|27.0.1.1+4-fr:27.0.1.1.4)
+                printf 'fixed\tAmazon Corretto 已核实的修复发行版本'
+                return ;;
         esac
     fi
 
@@ -759,16 +774,49 @@ add_note() { NOTES="${NOTES:+$NOTES | }$1"; }
 # ---------------------------------------------------------------------------
 # 采集：JDK 安装目录
 # ---------------------------------------------------------------------------
+file_id() {
+  local raw device inode
+  raw=$(stat -Lc '%d %i' -- "$1" 2>/dev/null) || return 1
+  read -r device inode <<< "$raw"
+  [[ $device =~ ^[0-9]+$ && $inode =~ ^[0-9]+$ ]] || return 1
+  # Decode Linux st_dev. Keep inode as text to preserve all 64 bits.
+  printf '%s %s %s' "$(( (device >> 8 & 0xfff) | (device >> 32 & 0xfffff000) ))" \
+    "$(( (device & 0xff) | (device >> 12 & 0xffffff00) ))" "$inode"
+}
+
+jdk_product() {
+    local home=$1 vendor=$2 label graal
+    case $(lower "$vendor") in
+        openjdk) printf 'OpenJDK' ;;
+        oracle|"oracle corporation")
+            graal=$(release_get "$home/release" GRAALVM_VERSION)
+            label=$(lower "$(printf '%s %s %s'                 "$(release_get "$home/release" GRAALVM_EDITION)"                 "$(release_get "$home/release" IMPLEMENTOR_VERSION)"                 "$(release_get "$home/release" JAVA_RUNTIME_NAME)")")
+            case "$graal $label" in
+                *graalvm*) printf 'Oracle GraalVM for JDK'; return ;;
+            esac
+            if [ -n "$graal" ]; then printf 'Oracle GraalVM for JDK'; return; fi
+            case $label in
+                *"java(tm)"*|*"java se"*) printf 'Oracle Java SE' ;;
+                *openjdk*) printf 'OpenJDK' ;;
+                *)
+                    if [ -f "$home/README" ] &&
+                       head -c 65536 "$home/README" 2>/dev/null | grep -q 'Thank you for using the Oracle JDK.'; then
+                        printf 'Oracle Java SE'
+                    fi ;;
+            esac ;;
+    esac
+}
+
 scan_installations() {
     local root version vendor product vm arch notes build cpu status mit flags feff vmname vmtext openj9
-    local bevid reason major label graal readme bevid_and_build lib lib_id matched
+    local bevid reason bevid_and_build lib lib_id matched
 
     while IFS= read -r root; do
         [ -n "$root" ] || continue
         matched=0
         for lib in "$root"/lib/libjvm.so "$root"/lib/*/libjvm.so                    "$root"/lib/*/*/libjvm.so "$root"/jre/lib/*/libjvm.so "$root"/jre/lib/*/*/libjvm.so; do
             [ -f "$lib" ] || continue
-            lib_id=$(stat -Lc '%Hd %Ld %i' -- "$lib" 2>/dev/null) || continue
+            lib_id=$(file_id "$lib") || continue
             if grep -Fxq -- "$lib_id" "$ACTIVE_FILE"; then matched=1; break; fi
         done
         [ "$matched" -eq 0 ] || continue
@@ -788,32 +836,7 @@ scan_installations() {
             add_note "缺少 release 元数据（可能不是完整 JDK Home，或为嵌入式 JRE）"
         fi
 
-        # Oracle 产品线识别
-        if [ "$(lower "$vendor")" = "oracle corporation" ]; then
-            graal=$(release_get "$root/release" GRAALVM_VERSION)
-            label=$(lower "$(printf '%s %s %s %s' \
-                "$graal" \
-                "$(release_get "$root/release" GRAALVM_EDITION)" \
-                "$(release_get "$root/release" IMPLEMENTOR_VERSION)" \
-                "$(release_get "$root/release" JAVA_RUNTIME_NAME)")")
-            readme=""
-            [ -r "$root/README" ] && readme=$(head -c 65536 "$root/README" 2>/dev/null)
-            if [ -n "$graal" ]; then
-                product="Oracle GraalVM for JDK"
-                add_note "GraalVM 产品线补丁状态需按其自身公告确认"
-            elif case $label in *graalvm*) true ;; *) false ;; esac; then
-                product="Oracle GraalVM for JDK"
-                add_note "GraalVM 产品线补丁状态需按其自身公告确认"
-            elif case $label in *"java(tm)"*|*"java se"*) true ;; *) false ;; esac; then
-                product="Oracle Java SE"
-            elif printf '%s' "$readme" | grep -q 'Thank you for using the Oracle JDK.'; then
-                product="Oracle Java SE"
-            else
-                add_note "Oracle 元数据无法区分 Java SE 与 Oracle OpenJDK"
-            fi
-        elif [ "$(lower "$vendor")" = "openjdk" ]; then
-            product="OpenJDK"
-        fi
+        product=$(jdk_product "$root" "$vendor")
 
         if [ -z "$arch" ]; then
             arch=$ARCH_RAW
@@ -821,7 +844,7 @@ scan_installations() {
         fi
 
         cpu=$(cpu_assess "$arch" "$CPU_STATE")
-        bevid_and_build=$(build_assess "$version" "$vendor" "$product" "$vm")
+        bevid_and_build=$(build_assess "$version" "$vendor" "$product" "$vm" "$(release_get "$root/release" IMPLEMENTOR_VERSION)")
         build=$(printf '%s' "$bevid_and_build" | cut -f1)
         bevid=$(printf '%s' "$bevid_and_build" | cut -f2-)
 
@@ -1051,7 +1074,7 @@ scan_processes() {
                     *)
                         libdev=$(printf '%s\n' "$libmeta" | awk -F '\037' 'NR == 1 { print $1; exit }')
                         libino=$(printf '%s\n' "$libmeta" | awk -F '\037' 'NR == 1 { print $2; exit }')
-                        st=$(stat -Lc '%Hd %Ld %i' "$proc/root$libpath" 2>/dev/null || echo "")
+                        st=$(file_id "$proc/root$libpath" || echo "")
                         if [ -z "$st" ]; then
                             verify_problem="磁盘上找不到对应的 libjvm.so（容器/挂载差异或文件已删除）"
                         fi
@@ -1085,6 +1108,7 @@ scan_processes() {
             vm=$(release_get "$root/release" JVM_VARIANT)
             vmname=$(release_get "$root/release" JAVA_VM_NAME)
             arch=$(release_get "$root/release" OS_ARCH)
+            product=$(jdk_product "$root" "$vendor")
             add_note "已映射的 HotSpot 库与磁盘 JDK 的设备号和 inode 一致"
             root_disp=${root#"$proc/root"}
             [ -n "$root_disp" ] || root_disp=$root
@@ -1122,7 +1146,7 @@ scan_processes() {
         if [ -n "$flags" ]; then
             # 启动参数是可信的"启动证据"，但 JVM 有效值仍需按实际进程确认
             if [ "$ASSUME_FEFF" -eq 1 ]; then
-                add_note "启动参数: $flags（已请求按启动参数估算，正式裁决仍以 JVM 生效值为准）"
+                add_note "启动参数: $flags（已请求按启动参数估算，jcmd 实测优先）"
             else
                 add_note "启动参数: $flags（启动证据，未确认该 JVM 的有效值）"
             fi
@@ -1169,7 +1193,7 @@ scan_processes() {
         start2=$(java_process_start "$pid")
         libmeta3=$(libjvm_meta "$proc")
         if [ -z "$start1" ] || [ "$start1" != "$start2" ] || [ ! -d "$proc" ] ||
-           [ "$libmeta3" != "$libmeta" ] || [ "$(stat -Lc '%Hd %Ld %i' "$proc/root$libpath" 2>/dev/null)" != "$st" ]; then
+           [ "$libmeta3" != "$libmeta" ] || [ "$(file_id "$proc/root$libpath")" != "$st" ]; then
             emit_finding "pid:$pid" "process" "unknown" "采集期间进程已退出或身份发生变化。" \
                 "unknown" "进程已退出" "$(cpu_assess "$arch" "$CPU_STATE")" "" "" "" "" "" "$arch" "" "false" "" ""
             continue
@@ -1178,7 +1202,7 @@ scan_processes() {
         printf '%s\n' "$st" >> "$ACTIVE_FILE"
 
         cpu=$(cpu_assess "$arch" "$CPU_STATE")
-        bevid_and_build=$(build_assess "$version" "$vendor" "$product" "$vm")
+        bevid_and_build=$(build_assess "$version" "$vendor" "$product" "$vm" "$(release_get "$root/release" IMPLEMENTOR_VERSION)")
         build=$(printf '%s' "$bevid_and_build" | cut -f1)
         bevid=$(printf '%s' "$bevid_and_build" | cut -f2-)
         [ -n "$build" ] || build="unknown"
@@ -1194,6 +1218,10 @@ scan_processes() {
         fi
         fn=0
         [ "$feff" = "true" ] && fn=1
+        if [ "$jcmd_ok" -eq 0 ] && [ "$ASSUME_FEFF" -eq 1 ] && [ "$mit" -eq 1 ]; then
+            fn=1
+            add_note "缓解裁决采用显式信任的启动参数，未通过 jcmd 核实"
+        fi
         if [ "$openj9" -eq 1 ]; then
             build="outside_scope"
             bevid="运行在 Eclipse OpenJ9（自有 Base64 实现，不经过 HotSpot intrinsic）"
@@ -1203,6 +1231,9 @@ scan_processes() {
         else
             status=$(classify "$build" "$cpu" "$mit" "$fn" "$(norm_arch "$arch")")
             reason=$(make_reason "$status" "$build" "$bevid" "$cpu" "$mit" "$(norm_arch "$arch")")
+            if [ "$status" = mitigated ] && [ "$feff" = false ]; then
+                reason="按显式信任的 JVM 启动参数判为已缓解，尚无 jcmd 实测。"
+            fi
         fi
 
         emit_finding "pid:$pid" "process" "$status" "$reason" "$build" "$bevid" \
@@ -1250,7 +1281,7 @@ scan_processes_other() {
 # 采集：java -version 门禁
 # ---------------------------------------------------------------------------
 scan_java_binary() {
-    local bin=$1 out version vendor vm arch product build bevid cpu status reason notes
+    local bin=$1 out version vendor vm arch product build bevid cpu status reason notes home full_version distribution=
     [ -f "$bin" ] || die "java 可执行文件不存在: $bin"
     [ -x "$bin" ] || die "java 不可执行: $bin"
 
@@ -1262,8 +1293,14 @@ scan_java_binary() {
     fi
 
     version=$(printf '%s\n' "$out" | sed -n 's/.*version "\([^"]*\)".*/\1/p' | head -n 1)
-    vendor=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*\([^ ]*\)[[:space:]]*version[[:space:]]*".*/\1/p' | head -n 1)
-    [ -n "$vendor" ] || vendor="unknown"
+    full_version=$(printf '%s\n' "$out" | sed -n 's/.*Runtime Environment.*(build \([^, )]*\).*/\1/p' | head -n 1)
+    [ -z "$full_version" ] || version=$full_version
+    home=$(java_root_of "$(resolve_symlinks "$bin")")
+    vendor=""
+    if [ -n "$home" ]; then
+        vendor=$(release_get "$home/release" IMPLEMENTOR)
+        distribution=$(release_get "$home/release" IMPLEMENTOR_VERSION)
+    fi
 
     notes=""
     vm=""
@@ -1274,12 +1311,16 @@ scan_java_binary() {
     product=""
     case $(lower "$out") in
         *graalvm*) product="GraalVM"; notes="版本输出提示 GraalVM" ;;
+        *"java(tm) se runtime environment"*)
+            vendor=${vendor:-Oracle}
+            product="Oracle Java SE" ;;
+        *)
+            if [ -n "$home" ]; then product=$(jdk_product "$home" "$vendor"); fi ;;
     esac
-    if [ "$(lower "$vendor")" = "java" ]; then vendor="Oracle"; fi
     arch=$ARCH_RAW
 
     cpu=$(cpu_assess "$arch" "$CPU_STATE")
-    bevid_and_build=$(build_assess "$version" "$vendor" "$product" "$vm")
+    bevid_and_build=$(build_assess "$version" "$vendor" "$product" "$vm" "$distribution")
     build=$(printf '%s' "$bevid_and_build" | cut -f1)
     bevid=$(printf '%s' "$bevid_and_build" | cut -f2-)
     [ -n "$build" ] || build="unknown"

@@ -190,7 +190,15 @@ classify_build() {
   fi
 }
 
-file_id() { stat -Lc '%Hd:%Ld:%i' -- "$1" 2>/dev/null; }
+file_id() {
+  local raw device inode
+  raw=$(stat -Lc '%d %i' -- "$1" 2>/dev/null) || return 1
+  read -r device inode <<< "$raw"
+  [[ $device =~ ^[0-9]+$ && $inode =~ ^[0-9]+$ ]] || return 1
+  # Decode Linux st_dev. Keep inode as text to preserve all 64 bits.
+  printf '%s:%s:%s' "$(( (device >> 8 & 0xfff) | (device >> 32 & 0xfffff000) ))" \
+    "$(( (device & 0xff) | (device >> 12 & 0xffffff00) ))" "$inode"
+}
 
 jvm_maps() {
   awk '

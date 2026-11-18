@@ -22,7 +22,12 @@ assert_build unfixed 21+35 OpenJDK OpenJDK HotSpot
 assert_build unknown 21.0.13.1 'Oracle Corporation' 'Oracle Java SE' HotSpot
 assert_build unknown 21.0.13.1+3 'Oracle Corporation' 'Oracle Java SE' HotSpot
 assert_build fixed 21.0.13.1+4 'Oracle Corporation' 'Oracle Java SE' HotSpot
-assert_build candidate 21.0.13.1.2 'Amazon.com Inc.' '' HotSpot
+assert_build fixed 21.0.13.1.2 'Amazon.com Inc.' '' HotSpot
+assert_build fixed 21.0.13.1+2-LTS 'Amazon.com Inc.' '' HotSpot Corretto-21.0.13.1.2
+assert_build candidate 21.0.13.1+1 'Amazon.com Inc.' '' HotSpot Corretto-21.0.13.1.2
+assert_build fixed 17.0.21.1+2 OpenJDK '' HotSpot
+assert_build candidate 17.0.21.1+2 'Unlisted vendor' '' HotSpot
+assert_build candidate 17.0.21.1+2 OpenJDK GraalVM HotSpot
 assert_build candidate 21.1.3+9 OpenJDK OpenJDK HotSpot
 assert_build unfixed 8u511b33-perf 'Oracle Corporation' 'Oracle Java SE' HotSpot
 assert_build unknown 8u511b33-perf-b32 'Oracle Corporation' 'Oracle Java SE' HotSpot
@@ -66,3 +71,29 @@ if [[ $OS == Linux ]]; then
         [[ $LIMITED_PROCS == 1 ]]
     )
 fi
+
+(
+    stat() {
+        [[ $1 == -Lc && $2 == '%d %i' ]] || return 1
+        printf '%s %s\n' "$(( (23 << 20) | (259 << 8) | 7 ))" 9223372036855101503
+    }
+    [[ $(file_id anywhere) == '259 5895 9223372036855101503' ]]
+)
+
+for fixed in 17.0.21.1 21.0.13.1 25.0.5.1 27.0.1.1; do
+    assert_build fixed "$fixed+4" 'Oracle Corporation' 'Oracle Java SE' HotSpot
+    assert_build unknown "$fixed+3" 'Oracle Corporation' 'Oracle Java SE' HotSpot
+done
+
+mkdir -p "$fixture/launcher/bin"
+cat > "$fixture/launcher/bin/java" <<'JAVA'
+#!/bin/sh
+printf '%s\n' 'java version "21.0.13.1"' \
+    'Java(TM) SE Runtime Environment (build 21.0.13.1+4-LTS)' \
+    'Java HotSpot(TM) 64-Bit Server VM (build 21.0.13.1+4-LTS, mixed mode)' >&2
+JAVA
+chmod +x "$fixture/launcher/bin/java"
+bash "$scanner" --quiet --no-processes --jdk "$fixture/jdk" \
+    --java-path "$fixture/launcher/bin/java" --json > "$fixture/report.json"
+grep -Fq '"version": "21.0.13.1+4-LTS"' "$fixture/report.json"
+grep -Fq '"kind": "java-binary", "status": "not_affected"' "$fixture/report.json"
