@@ -321,6 +321,8 @@ bash scripts/java4shell-scan.sh --demo --json
 
 增强版退出码为 `0`（没有命中门禁且证据足够）、`1`（命中 `--fail-on`，默认含 `affected,potential`）、`2`（参数或 I/O 错误）、`3`（证据不足）。`--jdk` 指定要盘点的运行时目录。`--java-path` 会执行指定程序的 `-version`，请传入可信 Java 程序。`--jcmd` 从当前 `PATH` 查找诊断工具，并可能启动 HotSpot 诊断监听器。
 
+增强版 JSON 的 `coverage` 记录 `--root-depth` 上限、达到深度边界的目录数、递归扫描出错的根目录数和读取失败的进程映射数。达到深度边界表示该目录以下没有搜索。若未命中门禁，覆盖不足会返回退出码 `3`。`candidate` 是 JSON 和 CSV 中的 `build_assessment` 值，`--fail-on` 匹配最终的 `status`。运行 `bash tests/java4shell-scan.sh` 可验证构建规则和覆盖报告。
+
 ### 可选运行实例与厂商补丁参考核验
 
 ```bash

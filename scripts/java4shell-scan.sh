@@ -66,6 +66,9 @@ CPU_STATE="unknown"
 CPU_SOURCE=""
 CPU_COUNTS="0 0 0"
 LIMITED_PROCS=0
+ROOT_COVERAGE_FILE=""
+ROOT_DEPTH_BOUNDARIES=0
+ROOT_SCAN_ERRORS=0
 
 # 必需的 CPU 特性（x86-64）
 REQ_FEATURES="avx512f avx512bw avx512vbmi bmi2"
@@ -368,17 +371,35 @@ root_of_lib() { jvm_root_from_lib "" "$1"; }
 
 # --root：在给定目录里找嵌入式运行时的 libjvm.so，反推 Home
 scan_root_dirs() {
-    local r lib home
+    local r entry home relative separators
     [ ${#ROOT_ARGS[@]} -gt 0 ] || return 0
-    have find || return 0
-    for r in ${ROOT_ARGS[@]+"${ROOT_ARGS[@]}"}; do
-        [ -d "$r" ] || continue
-        while IFS= read -r lib; do
-            [ -n "$lib" ] || continue
-            home=$(root_of_lib "$lib")
+    for r in "${ROOT_ARGS[@]}"; do
+        if ! have find || [ ! -d "$r" ]; then
+            printf 'error\n' >> "$ROOT_COVERAGE_FILE"
+            warn "无法搜索安装目录: $r"
+            continue
+        fi
+        r=$(real_path "$r")
+        if ! find "$r" -xdev -maxdepth "$ROOT_DEPTH" \
+                \( -type d -o -name libjvm.so \( -type f -o -type l \) \) -print0 \
+                > "$WORK/root-entries" 2>/dev/null; then
+            printf 'error\n' >> "$ROOT_COVERAGE_FILE"
+            warn "搜索安装目录时发生错误，结果可能不完整: $r"
+        fi
+        while IFS= read -r -d '' entry; do
+            if [ -d "$entry" ] && [ ! -L "$entry" ]; then
+                relative=${entry#"${r%/}/"}
+                separators=${relative//[^\/]/}
+                if { [ "$entry" = "$r" ] && [ "$ROOT_DEPTH" -eq 0 ]; } ||
+                   { [ "$entry" != "$r" ] && [ "$((${#separators} + 1))" -eq "$ROOT_DEPTH" ]; }; then
+                    printf 'boundary\n' >> "$ROOT_COVERAGE_FILE"
+                fi
+                continue
+            fi
+            home=$(root_of_lib "$entry")
             [ -n "$home" ] && [ -d "$home" ] || continue
             printf '%s\n' "$(real_path "$home")"
-        done < <(find "$r" -xdev -maxdepth "$ROOT_DEPTH" -name libjvm.so \( -type f -o -type l \) 2>/dev/null)
+        done < "$WORK/root-entries"
     done
 }
 
@@ -429,8 +450,6 @@ list_roots() {
 
 # ---------------------------------------------------------------------------
 # 构建判定（版本 -> fixed|unfixed|outside_scope|candidate|unknown + 依据）
-#   gate=1 时走"公开影响范围门禁"口径（等价 python 版）
-#   gate=0 时走"厂商/产品精确规则 + 范围兜底"口径（等价 Go 版）
 # ---------------------------------------------------------------------------
 range_assess() {
     local v=$1 base major first last fixed fixed_note
@@ -456,6 +475,15 @@ range_assess() {
             printf 'unknown\tJava %s 不在已核对的受影响范围表（17/21/25/27）内，需按厂商公告确认' "$major"
             return ;;
     esac
+
+    if [ "$major" = 17 ] && [ "$(vcmp "$base" "$first")" = 0 ]; then
+        local build_number=""
+        if [[ $v =~ \+([0-9]+) ]]; then build_number=${BASH_REMATCH[1]}; fi
+        if [ -z "$build_number" ] || ! vge "$build_number" 10; then
+            printf 'unknown\tJava 17.0.6 缺少已核实的受影响构建号（基线 +10）'
+            return
+        fi
+    fi
 
     if vge "$base" "$fixed"; then
         printf 'candidate\t需核对厂商及完整修复构建（参考 %s）' "$fixed_note"
@@ -942,7 +970,7 @@ launcher_flags() {
 }
 
 scan_processes() {
-    local pid proc exe exe_clean comm named has_jvm explicit=0
+    local pid proc exe exe_clean comm named has_jvm maps_ok explicit=0
     local libmeta libpaths nlib libpath libdev libino st sdev sino mhex nhex ma mi verified
     local root root_disp version vendor product vm arch build bevid cpu status reason
     local flags feff mit fn notes container start1 start2
@@ -984,8 +1012,18 @@ scan_processes() {
         fi
 
         has_jvm=0
-        if [ -r "$proc/maps" ] && grep -q '/libjvm\.so' "$proc/maps" 2>/dev/null; then
-            has_jvm=1
+        maps_ok=1
+        if libmeta=$(libjvm_meta "$proc"); then
+            [ -z "$libmeta" ] || has_jvm=1
+        else
+            maps_ok=0
+            if [ -d "$proc" ]; then LIMITED_PROCS=$((LIMITED_PROCS + 1)); fi
+        fi
+        if [ "$maps_ok" -eq 0 ] && { [ "$explicit" -eq 1 ] || [ "$named" -eq 1 ]; }; then
+            emit_finding "pid:$pid" "process" "unknown" "无法读取进程映射，无法核实运行中 JVM。" \
+                "unknown" "进程映射不可读" "$(cpu_assess "$ARCH_RAW" "$CPU_STATE")" \
+                "" "" "" "" "" "$ARCH_RAW" "" "false" "" ""
+            continue
         fi
 
         if [ "$named" -eq 0 ] && [ "$has_jvm" -eq 0 ]; then
@@ -993,8 +1031,6 @@ scan_processes() {
                 emit_finding "pid:$pid" "process" "unknown" \
                     "该 PID 既不是 Java 启动器，也未映射 HotSpot 库，无法判定。" "unknown" "非 Java 进程" \
                     "$(cpu_assess "$ARCH_RAW" "$CPU_STATE")" "" "" "" "" "" "$ARCH_RAW" "" "false" "" ""
-            elif [ ! -r "$proc/maps" ]; then
-                LIMITED_PROCS=$((LIMITED_PROCS + 1))
             fi
             continue
         fi
@@ -1004,8 +1040,7 @@ scan_processes() {
         root=""
         libpath=""
         verify_problem=""
-        if [ "$has_jvm" -eq 1 ] && [ -r "$proc/maps" ]; then
-            libmeta=$(libjvm_meta "$proc")
+        if [ "$has_jvm" -eq 1 ]; then
             libpaths=$(printf '%s\n' "$libmeta" | awk -F '\037' 'NF >= 3 { print $3 }' | LC_ALL=C sort -u)
             nlib=$(printf '%s\n' "$libmeta" | grep -c . 2>/dev/null)
             if [ "${nlib:-0}" -eq 1 ]; then
@@ -1533,6 +1568,8 @@ report_json() {
     printf '  "cpu": {"arch": %s, "state": %s, "required_features": %s, "counts": %s, "source": %s},\n' \
         "$(jstr "$ARCH_RAW")" "$(jstr "$CPU_STATE")" "$(jstr "$REQ_FEATURES")" "$(jstr "$CPU_COUNTS")" "$(jstr "$CPU_SOURCE")"
 
+    printf '  "coverage": {"root_max_depth": %s, "root_depth_boundaries": %s, "root_scan_errors": %s, "unreadable_process_maps": %s},\n'         "$((10#$ROOT_DEPTH))" "$ROOT_DEPTH_BOUNDARIES" "$ROOT_SCAN_ERRORS" "$LIMITED_PROCS"
+
     printf '  "warnings": ['
     first=1
     while IFS= read -r id; do
@@ -1663,9 +1700,9 @@ parse_args() {
         die "--processes-only 与 --root 不能同时使用"
     fi
 
-    case ${FAIL_ON:-} in
-        ''|*[!a-z_,]*) die "--fail-on 只接受 affected,potential,mitigated,not_affected,unknown" ;;
-    esac
+    local status_pattern='(affected|potential|mitigated|not_affected|unknown)'
+    [[ $FAIL_ON =~ ^$status_pattern(,$status_pattern)*$ ]] ||
+        die "--fail-on 只接受 affected,potential,mitigated,not_affected,unknown"
 }
 
 cleanup() {
@@ -1683,6 +1720,8 @@ main() {
     WARN_FILE="$WORK/warnings.txt"
     APP_FILE="$WORK/apps.tsv"
     ACTIVE_FILE="$WORK/active-ids"
+    ROOT_COVERAGE_FILE="$WORK/root-coverage"
+    : > "$ROOT_COVERAGE_FILE"
     : > "$FIND_FILE"; : > "$WARN_FILE"; : > "$APP_FILE"; : > "$ACTIVE_FILE"
     trap 'cleanup' EXIT
     trap 'exit 130' INT
@@ -1776,6 +1815,12 @@ main() {
         scan_apps "$APPS_DIR" "$APPS_DEPTH"
     fi
 
+    ROOT_DEPTH_BOUNDARIES=$(grep -cx boundary "$ROOT_COVERAGE_FILE")
+    ROOT_SCAN_ERRORS=$(grep -cx error "$ROOT_COVERAGE_FILE")
+    if [ "$ROOT_DEPTH_BOUNDARIES" -gt 0 ]; then
+        warn "有 $ROOT_DEPTH_BOUNDARIES 个目录达到 --root-depth $ROOT_DEPTH，更深的目录未检查。"
+    fi
+
     if [ "${LIMITED_PROCS:-0}" -gt 0 ]; then
         warn "有 $LIMITED_PROCS 个进程的映射无法读取，进程发现可能不完整。"
     fi
@@ -1812,10 +1857,13 @@ main() {
     done
     IFS=$oldifs
     if [ "$rc" -eq 0 ] && { [ "$(status_count unknown)" -gt 0 ] ||
-                           [ "$(total_count)" -eq 0 ] || [ "$LIMITED_PROCS" -gt 0 ]; }; then
+                           [ "$(total_count)" -eq 0 ] || [ "$LIMITED_PROCS" -gt 0 ] ||
+                           [ "$ROOT_DEPTH_BOUNDARIES" -gt 0 ] || [ "$ROOT_SCAN_ERRORS" -gt 0 ]; }; then
         rc=3
     fi
     exit "$rc"
 }
 
-main "$@"
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+    main "$@"
+fi
