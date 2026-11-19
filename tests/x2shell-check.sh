@@ -38,6 +38,10 @@ assert_build fixed 27.0.1.1+4-FR 'Amazon.com Inc.' '' HotSpot Corretto-27.0.1.1.
 assert_build candidate 21.0.13.1+2 'Eclipse Adoptium' '' HotSpot
 assert_build candidate 21.1.3+9 OpenJDK OpenJDK HotSpot
 assert_build outside_scope 1.8.0_441-b07 'Oracle Corporation' 'Oracle Java SE' HotSpot
+for vendor in 'Red Hat, Inc.' 'Eclipse Adoptium' 'Amazon.com Inc.' 'Azul Systems, Inc.' Debian; do
+    assert_build outside_scope 1.8.0_442-b06 "$vendor" "" HotSpot
+done
+assert_build unknown 1.8.0_442-b06 'Unknown vendor' '' HotSpot
 assert_build outside_scope 8u441 OpenJDK OpenJDK HotSpot
 assert_build unknown 8u511 'Oracle Corporation' 'Oracle Java SE' HotSpot
 [[ $(nginx2root_reference 1.32.0) == *'"status":"meets_upstream_reference"'* ]]

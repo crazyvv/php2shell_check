@@ -383,13 +383,28 @@ pub(crate) fn build_status(r: &Release) -> BuildStatus {
     }
     static STANDARD_JAVA_8: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^(?:1\.8\.0_|8u)([0-9]+)(?:-?b[0-9]+)?$").unwrap());
+    let standard_openjdk8 = matches!(
+        vendor.to_ascii_lowercase().as_str(),
+        "openjdk"
+            | "debian"
+            | "ubuntu"
+            | "canonical"
+            | "eclipse adoptium"
+            | "temurin"
+            | "amazon.com inc."
+            | "amazon.com inc"
+            | "azul systems, inc."
+            | "azul"
+            | "red hat, inc."
+            | "red hat"
+    );
     if let Some(update) = r
         .full_build
         .as_deref()
         .or(r.version.as_deref())
         .and_then(|v| STANDARD_JAVA_8.captures(v))
         .and_then(|caps| caps.get(1)?.as_str().parse::<u32>().ok())
-        && (vendor == "OpenJDK" || (vendor == "Oracle Corporation" && update < 511))
+        && (standard_openjdk8 || (vendor == "Oracle Corporation" && update < 511))
     {
         return NotAffected;
     }

@@ -306,7 +306,7 @@ pub(crate) fn collect(
         .filter(|path| Path::new(path).is_file())
         .map(|path| {
             let raw = elf_version(Path::new(path), true);
-            json!({"path":path,"version":raw,"version_status":version_status(raw.as_deref(),true)})
+            json!({"path":path,"version":raw,"version_status":version_status(raw.as_deref(),true),"httpd_association":"unverified"})
         })
         .collect();
         if running.is_empty() && installations.is_empty() && modules.is_empty() && proc_available {
@@ -339,6 +339,11 @@ pub(crate) fn sanitize_host(raw: &Value) -> Value {
                 "disk_identity_matched":r["disk_identity_matched"].as_bool(),"mod_http2_mapped":r["mod_http2_mapped"].as_bool()})
         }).collect();
         out[section] = json!(rows);
+        if section == "module_installations" {
+            for row in out[section].as_array_mut().into_iter().flatten() {
+                row["httpd_association"] = json!("unverified");
+            }
+        }
     }
     let cfg = &raw["configuration"];
     out["configuration"] = json!({"scope":"disk_directive_hints","files_examined":cfg["files_examined"].as_u64(),

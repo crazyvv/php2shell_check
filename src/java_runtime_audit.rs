@@ -786,6 +786,16 @@ mod tests {
             status("Oracle Corporation", "1.8.0_441-b07", ""),
             NotAffected
         );
+        for vendor in [
+            "Red Hat, Inc.",
+            "Eclipse Adoptium",
+            "Amazon.com Inc.",
+            "Azul Systems, Inc.",
+            "Debian",
+        ] {
+            assert_eq!(status(vendor, "1.8.0_442-b06", ""), NotAffected);
+        }
+        assert_eq!(status("Unknown vendor", "1.8.0_442-b06", ""), Unknown);
         assert_eq!(status("OpenJDK", "8u441", ""), NotAffected);
         assert_eq!(status("Oracle Corporation", "8u511", ""), Unknown);
         assert_eq!(

@@ -563,7 +563,7 @@ build_assess() {
     major=${major//[!0-9]/}
 
     # Oracle Java 8 Performance Pack boundaries come from the vendor advisory.
-    local legacy_pattern='^(1\.8\.0_[0-9]+(-[A-Za-z0-9.-]+)?|8u[0-9]+(b[0-9]+)?(-perf)?)$'
+    local legacy_pattern='^(1\.8\.0_[0-9]+(-[A-Za-z0-9.-]+)?|8u[0-9]+(-?b[0-9]+)?(-perf)?)$'
     if [[ $v =~ $legacy_pattern ]]; then
         if [[ $vl == oracle || $vl == "oracle corporation" ]]; then
             case $v in
@@ -578,10 +578,17 @@ build_assess() {
         local update legacy_update_pattern='^(1\.8\.0_|8u)([0-9]+)(-b[0-9]+|b[0-9]+)?$'
         if [[ $v =~ $legacy_update_pattern ]]; then
             update=${BASH_REMATCH[2]}
-            if [[ $vl == openjdk ]] || { [[ $vl == oracle || $vl == "oracle corporation" ]] && vlt "$update" 511; }; then
-                printf 'outside_scope\t已识别的标准 Java 8 构建不在本次披露范围内'
-                return
-            fi
+            case $vl in
+                openjdk|debian|ubuntu|canonical|"eclipse adoptium"|temurin|"amazon.com inc."|"amazon.com inc"|\
+                "azul systems, inc."|azul|"red hat, inc."|"red hat")
+                    printf 'outside_scope\t已识别的标准 OpenJDK 8 发行构建不在本次披露范围内'
+                    return ;;
+                oracle|"oracle corporation")
+                    if vlt "$update" 511; then
+                        printf 'outside_scope\t已识别的 Oracle Java 8 标准旧构建不在本次披露范围内'
+                        return
+                    fi ;;
+            esac
         fi
         printf 'unknown\tJava 8 构建缺少适用的厂商规则'
         return
@@ -2448,10 +2455,10 @@ apache_inventory() {
         [[ $reference != unknown ]] || unknown=1
         package_hint=$(web_package_hint "$path")
         if [ "$format" = json ]; then
-            row+="$comma{\"kind\":\"module_installation\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"package_evidence\":${package_hint:-null},\"http2_evidence\":\"$disk_http2\"}"
+            row+="$comma{\"kind\":\"module_installation\",\"httpd_association\":\"unverified\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"package_evidence\":${package_hint:-null},\"http2_evidence\":\"$disk_http2\"}"
             comma=,
         else
-            printf 'Apache 磁盘模块 · %q · %s · %s\n' "$path" "${version:-版本未知}" "$reference"
+            printf 'Apache 磁盘模块 · %q · %s · %s · 所属 httpd 待核验\n' "$path" "${version:-版本未知}" "$reference"
         fi
         if [[ $format != json && -n $package_hint ]]; then printf '软件包线索: %s\n' "$package_hint"; fi
         modules=$((modules + 1))

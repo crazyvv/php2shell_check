@@ -10,6 +10,9 @@
 - 公开首个修复版本为 17.0.21.1、21.0.13.1、25.0.5.1、27.0.1.1。公开研究给出的通用受影响起点为 17.0.6；18 及之后的非支持版本应升级到受支持修复线。Oracle Java SE 8u511b33-perf 是官方列出的特殊受影响构建，不能据此扩大到所有 Java 8；通用 `java -version` 输出不能可靠区分该 perf 构建，因此程序要求用 Oracle 资产/补丁库存单独核验。
 - 披露路径要求 HotSpot/GraalVM 类 VM、x86-64、当前 JVM 可见相应 AVX-512/BMI2 能力、Base64 intrinsic 和 JIT 路径。OpenJ9/J9 不使用该 HotSpot intrinsic。硬件与运行参数是适用条件，不是版本补丁的替代品。
 
+标准 Java 8 构建需要与 Oracle Java SE Performance Pack 分开判定。Oracle 的 CVE 清单在 Java 8 线仅列出 8u511b33-perf。已识别的 Red Hat、Debian、Ubuntu、Temurin、Corretto 和 Azul 标准 OpenJDK 8 构建按披露范围排除，缺少明确厂商或产品证据的构建保持未知。Oracle 8u511 的短标识仍需核对具体发行构建。
+[Oracle CVE 记录](https://www.cve.org/CVERecord?id=CVE-2026-114938) · [Red Hat 公告](https://access.redhat.com/security/cve/CVE-2026-114938) · [Azul 安全更新](https://www.azul.com/products/security-update/)
+
 ## 程序如何判断
 
 远程扫描只复用已经取得的响应，识别 Java 产品特征并输出 `java_product_hint`。它不会为 Java4Shell 增加请求，也不会尝试寻找或调用产品接口。网页证据无法获知 JVM 和 CPU，因此永远不会直接生成“漏洞已确认”。
