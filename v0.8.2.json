@@ -1,0 +1,44 @@
+{
+  "state": "published",
+  "tag": "v0.8.2",
+  "repository": "crazyvv/x2shell-check",
+  "source_commit": "530bf68d7bca5070494084bea3790224f15110e3",
+  "release_url": "https://github.com/crazyvv/x2shell-check/releases/tag/v0.8.2",
+  "published_at": "2026-11-19T04:05:26Z",
+  "checksums": {
+    "x2shell-check-v0.8.2-linux-x86_64.tar.gz": "f91e8751d08f299472e44628e4d7078bdd754e0a04b718ca62529f004e9d445c",
+    "x2shell-check-v0.8.2-windows-x86_64.zip": "dfde95408bf80eed8ffe4442ced860201d3da82ed314a886e4bb5ef94593ac8b",
+    "x2shell-check.sh": "757c1aa821a9abd6a927a76e267b61d0d464fd6ac389d30e2b4d58dbb2e9b2dc"
+  },
+  "verified_by_download": true,
+  "workflow_run": "https://github.com/crazyvv/x2shell-check/actions/runs/44455131066",
+  "browser_check": {
+    "state": "passed",
+    "checks": [
+      "java4shell-passive-and-host-evidence",
+      "desktop-density-and-palette",
+      "desktop-knowledge-grid",
+      "module-links-and-script-download",
+      "evidence-fonts-colors",
+      "text-only-rendering",
+      "knowledge-page-attribution",
+      "runtime-report-comparison",
+      "rule-edit-validation-save",
+      "live-activation",
+      "conflict-preserves-draft",
+      "logout-cleanup",
+      "passive-surface-clues",
+      "settings-import-validation-save",
+      "settings-live-policy",
+      "settings-conflict-preserves-draft",
+      "progress-permissions-and-defaults"
+    ],
+    "evidence_style": {
+      "family": "ui-monospace, \"Cascadia Code\", Consolas, monospace",
+      "weight": "700",
+      "color": "rgb(159, 29, 20)",
+      "background": "rgb(255, 220, 216)"
+    }
+  },
+  "recorded_at": "2026-11-19T04:05:27.539965+00:00"
+}
