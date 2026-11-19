@@ -37,6 +37,7 @@ pub struct CollectionDefaults {
     pub java_command: bool,
     pub java_attach: bool,
     pub nginx2root: bool,
+    pub apache2root: bool,
     pub package_audit: bool,
     pub middleware: bool,
     pub php_modules: bool,

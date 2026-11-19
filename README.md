@@ -1,6 +1,15 @@
-# PHP 安全自查台
+# 服务暴露面自查台 · Server Exposure Check
 
-面向开发团队的 PHP 安全自查工具，使用 Rust 实现 Web 服务、远程检测器和 Linux 主机采集器。中文 Web 界面内嵌于程序，扫描结果保存在 SQLite，无需外部数据库服务。运行服务不需要 Node.js。
+面向开发与运维团队的多服务暴露面自查工具。Rust 程序提供 Web 工作台、授权目标的 HTTP 检查与 Linux 主机采集，Bash 脚本可无参盘点主机。网页和主机证据分开报告，扫描记录保存在 SQLite，无需外部数据库。
+
+| 专项 | 主要核验内容 |
+| --- | --- |
+| PHP2Shell | PHP 版本、SAPI、会话配置与发行包修复线索 |
+| Java4Shell | JVM 映射、构建、CPU 特性与实际生效参数 |
+| Nginx2Root | 五个 NGINX CVE、运行映像、配置和 SCTP 线索 |
+| Apache2Root | CVE-2026-119618、httpd 与独立 mod_h2 版本、mod_http2 映射和 HTTP/2 线索 |
+
+现有发行包的可执行命令继续使用 `php-selfcheck`。
 
 开发者页面只展示当前扫描，管理员通过独立账号访问历史记录与汇总。支持免密码扫描、可选资产白名单、检测证据展示、主机材料导入和 JSON/CSV 导出；同一目标的最近两份主机材料可按 Web／CLI 范围进行修复前后对比。
 
@@ -337,7 +346,7 @@ bash scripts/java4shell-scan.sh
 bash scripts/java4shell-scan.sh --all --json
 ```
 
-默认读取本机文件和启动线索。JVM 生效参数需要显式加 `--all --jcmd`，必要时 HotSpot 会打开诊断监听器。原有 Java 专项参数仍可用，例如 `--java4shell --json`，已存在的 `--json` 也继续输出 Java 专项格式。Apache 部分列出本机可见的进程和二进制版本。批量模式退出 `1` 表示 Java 或 NGINX 命中风险门禁，`3` 表示证据不完整，`2` 表示用法或采集错误。
+默认读取本机文件和启动线索。JVM 生效参数需要显式加 `--all --jcmd`，必要时 HotSpot 会打开诊断监听器。原有 Java 专项参数仍可用，例如 `--java4shell --json`，已存在的 `--json` 也继续输出 Java 专项格式。Apache 部分列出本机可见的进程和二进制版本。批量模式退出 `1` 表示 Java、NGINX 或 Apache 命中风险门禁，`3` 表示证据不完整，`2` 表示用法或采集错误。
 
 ### Nginx2Root 主机与 HTTP 响应核验
 
@@ -361,6 +370,19 @@ Rust 的 `--middleware` 同时包含 Nginx2Root 和 Apache 等中间件盘点。
 Rust `--java-command` 保留 CLI 默认值采集，并增加当前节点的 CPUID、`/proc/cpuinfo` 交叉核对、JVM 映射身份及磁盘构建证据。`--java-attach` 显式读取同用户 JVM 的生效参数和自报构建，必要时会启动 HotSpot 诊断监听器。运行构建与磁盘构建有冲突时保留未知。
 
 Nginx2Root 检查项参考了研究披露、官方公告和两个只读检查器。版本边界以 NGINX 官方公告为准。[Xint 研究](https://xint.io/blog/nginx2root-remote-code-execution) · [The DevOps Daily 检查器](https://github.com/The-DevOps-Daily/nginx2root-check) · [TimTheBeastNL 检查器](https://github.com/TimTheBeastNL/nginx2root)
+
+### Apache2Root（CVE-2026-119618）
+
+```bash
+# 单项 Bash 检查，批量模式也包含此项
+bash scripts/java4shell-scan.sh --apache2root --json
+# Rust 主机采集，--middleware 也会启用此项
+php-selfcheck collect --apache2root > apache-report.json
+```
+
+Apache 官方披露的 httpd 影响范围为 `2.4.55–2.4.70`，`2.4.71` 发布修复。独立发布的 `mod_h2 2.0.8–2.0.42` 也在影响范围内，单独核对模块的版本和发行包回补。主机报告包括可见进程、主程序版本、`mod_http2.so` 映射、可识别的模块版本及标准磁盘配置中的 `Protocols` 和 `LoadModule` 线索。
+
+Rust 网页检查从常规响应保存 Apache 版本、`h2/h2c` 声明和该次连接的实际协议。HTTP/1.1 响应只说明该次连接的协议，无法覆盖其他虚拟主机、监听地址或代理后的实例。版本命中和协议线索用于安排核验。 [Apache 官方安全公告](https://httpd.apache.org/security/vulnerabilities_24#CVE-2026-119618) · [mod_http2 文档](https://httpd.apache.org/docs/2.4/mod/mod_http2.html)
 
 ### 可选运行实例与厂商补丁参考核验
 
@@ -534,7 +556,7 @@ php-selfcheck compare-reports --before before.json --after after.json --json
 
 权限和范围变更用于后续请求、新提交任务；已经提交的任务固定使用当时快照，结果及审计记录包含 `settings_revision`。管理员收紧范围不会中断已有任务，紧急撤销请停止服务。特殊地址、DNS 固定、TLS 校验和限流仍由程序校验。
 
-服务器配置 JSON 同样支持 `collection_defaults`，各项默认关闭。`collection_defaults` 包含 `php_command`、`java_command`、`java_attach`、`nginx2root`、`package_audit`、`middleware`、`php_modules`、`ports`、`web_probe` 等布尔值，仅设置扫描页面所生成的本地采集命令默认选项；用户可修改本次采集选项。模块/端口/Web 需要中间件，Web 还需要端口采集。不远程运行采集命令，不能约束独立采集器。
+服务器配置 JSON 同样支持 `collection_defaults`，各项默认关闭。`collection_defaults` 包含 `php_command`、`java_command`、`java_attach`、`nginx2root`、`apache2root`、`package_audit`、`middleware`、`php_modules`、`ports`、`web_probe` 等布尔值，仅设置扫描页面所生成的本地采集命令默认选项；用户可修改本次采集选项。模块/端口/Web 需要中间件，Web 还需要端口采集。不远程运行采集命令，不能约束独立采集器。
 
 部署地址、数据库路径、账号和密码由服务器配置及账号命令维护；后台只显示部署信息和账号名称，不返回密码或密码散列。特征 JSON 使用专门的特征库面板维护。配置面板支持的 JSON 是在线字段子集，可用文件导入完整部署 JSON：浏览器只提取在线字段，忽略账号、密码散列、部署路径和其他字段；也可导出当前在线字段 JSON 用于合并回服务器配置。不要把含凭据的完整配置粘贴到在线 JSON 文本框。
 

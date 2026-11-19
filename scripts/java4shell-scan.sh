@@ -88,6 +88,7 @@ $NICKNAME · $CVE 主机暴露面检测（$PROG v$SCRIPT_VERSION）
   $PROG                         # 同时盘点 Java、NGINX 和 Apache
   $PROG --all [--json] [--jcmd]
   $PROG --java4shell [选项]
+  $PROG --apache2root [--json]
   $PROG --nginx2root [--json] [--nginx-path PATH] [--nginx-config FILE]
 
   默认行为：发现本机 JDK 安装 + 检查运行中的 JVM 进程 + 探测 CPU 条件，
@@ -2021,27 +2022,97 @@ nginx2root_sctp() {
         "$(jstr "$(cat /proc/sys/kernel/osrelease 2>/dev/null || :)")" "$loaded" "$automatic_block_hint"
 }
 
+apache_reference() {
+    local raw=$1 scope=${2:-httpd}
+    if [ "$scope" = module ]; then
+        [[ $raw =~ ^2\.0\.([0-9]+)$ ]] || { printf unknown; return; }
+        if vlt "$raw" 2.0.8; then printf outside_upstream_range
+        elif vle "$raw" 2.0.42; then printf potential
+        else printf unknown
+        fi
+    else
+        [[ $raw =~ ^2\.4\.([0-9]+)$ ]] || { printf unknown; return; }
+        if vlt "$raw" 2.4.55; then printf outside_upstream_range
+        elif vle "$raw" 2.4.70; then printf potential
+        else printf meets_upstream_reference
+        fi
+    fi
+}
+
+apache_config_hints() {
+    local file size count=0
+    (
+        for file in /etc/apache2/apache2.conf /etc/apache2/{mods,conf,sites}-enabled/*.conf \
+                    /etc/apache2/mods-enabled/*.load /etc/httpd/conf/httpd.conf /etc/httpd/conf.d/*.conf \
+                    /etc/httpd/conf.modules.d/*.conf /usr/local/apache2/conf/httpd.conf; do
+            [ -f "$file" ] || continue
+            count=$((count + 1))
+            [ "$count" -le 64 ] || { printf '@skipped\n'; break; }
+            size=$(stat -Lc '%s' -- "$file" 2>/dev/null) || size=
+            if ! [[ $size =~ ^[0-9]+$ ]] || [ "$size" -gt 65536 ] || ! head -c 65536 -- "$file" 2>/dev/null; then
+                printf '\n@skipped\n'; continue
+            fi
+            printf '\n@file\n'
+        done
+    ) | awk '
+        /^@file$/ {files++; next}
+        /^@skipped$/ {skipped++; next}
+        { sub(/#.*/, ""); gsub(/"/, ""); $0=tolower($0) }
+        $1 == "loadmodule" && $2 == "http2_module" {mod=1}
+        $1 == "protocols" {
+            if (NF == 2 && $2 == "http/1.1") h1=1
+            for (i=2; i<=NF; i++) {
+                if ($i == "h2") h2=1
+                if ($i == "h2c") h2c=1
+            }
+        }
+        function b(v) { return v ? "true" : "false" }
+        END {
+            printf "{\"scope\":\"disk_directive_hints\",\"files_examined\":%d,\"skipped\":%d,", files, skipped
+            printf "\"h2\":%s,\"h2c\":%s,\"http1_only_directive\":%s,\"load_module\":%s}", b(h2),b(h2c),b(h1),b(mod)
+        }'
+}
+
+apache_mapped_http2() {
+    local file=$1 data limit=1048576
+    [ -r "$file" ] || { printf null; return; }
+    if ! data=$(head -c "$((limit + 1))" -- "$file" 2>/dev/null); then printf null; return; fi
+    if grep -Eq '/mod_http2\.so( \(deleted\))?$' <<< "$data"; then printf true
+    elif [ "${#data}" -ge "$((limit - 1))" ]; then printf null
+    else printf false
+    fi
+}
+
 apache_inventory() {
-    local format=$1 proc name pid path id row= seen=' ' rows=0 disk=0 comma= version
+    local format=$1 proc name pid path id start row= seen=' ' rows=0 disk=0 comma= version reference mapped config
+    local gate=0 modules=0 unknown=0
+    config=$(apache_config_hints)
     for proc in /proc/[0-9]*; do
         [ -r "$proc/comm" ] || continue
         IFS= read -r name < "$proc/comm" 2>/dev/null || continue
         case $name in apache2|httpd) ;; *) continue ;; esac
         ((rows < 24)) || break
         pid=${proc##*/}
+        start=$(java_process_start "$pid")
         path=$(readlink "$proc/exe" 2>/dev/null || :)
         id=$(file_id "$proc/exe" || :)
-        version=$(apache_version "$proc/exe")
-        if [[ -z $id || $(file_id "$proc/exe") != "$id" ]]; then
+        version=$(apache_version "$proc/exe" httpd)
+        mapped=$(apache_mapped_http2 "$proc/maps")
+        if [[ -z $id || -z $start || $(file_id "$proc/exe") != "$id" ||
+              $(java_process_start "$pid") != "$start" ]]; then
             version=
+            mapped=null
         elif [[ $path == /* && $(file_id "$proc/root$path") == "$id" ]]; then
             seen+="$id "
         fi
+        reference=$(apache_reference "$version")
+        [[ $reference != potential ]] || gate=1
+        [[ $reference != unknown ]] || unknown=1
         if [ "$format" = json ]; then
-            row+="$comma{\"kind\":\"process\",\"pid\":$pid,\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version")}"
+            row+="$comma{\"kind\":\"process\",\"pid\":$pid,\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"mod_http2_mapped\":$mapped}"
             comma=,
         else
-            printf 'Apache PID %s · %q · %s\n' "$pid" "$path" "${version:-版本未知}"
+            printf 'Apache PID %s · %q · %s · %s · mod_http2 映射 %s\n' "$pid" "$path" "${version:-版本未知}" "$reference" "$mapped"
         fi
         rows=$((rows + 1))
     done
@@ -2050,38 +2121,63 @@ apache_inventory() {
         id=$(file_id "$path") || continue
         [[ $seen != *" $id "* ]] || continue
         seen+="$id "
-        version=$(apache_version "$path")
+        version=$(apache_version "$path" httpd)
+        reference=$(apache_reference "$version")
+        [[ $reference != potential ]] || gate=1
+        [[ $reference != unknown ]] || unknown=1
         if [ "$format" = json ]; then
-            row+="$comma{\"kind\":\"installation\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version")}"
+            row+="$comma{\"kind\":\"installation\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference")}"
             comma=,
         else
-            printf 'Apache 磁盘安装 · %q · %s\n' "$path" "${version:-版本未知}"
+            printf 'Apache 磁盘安装 · %q · %s · %s\n' "$path" "${version:-版本未知}" "$reference"
         fi
         disk=$((disk + 1))
     done
+    for path in /usr/lib/apache2/modules/mod_http2.so /usr/lib64/httpd/modules/mod_http2.so /usr/lib/httpd/modules/mod_http2.so /usr/local/apache2/modules/mod_http2.so; do
+        [ -f "$path" ] || continue
+        id=$(file_id "$path") || continue
+        [[ $seen != *" $id "* ]] || continue
+        seen+="$id "
+        version=$(apache_version "$path" module)
+        reference=$(apache_reference "$version" module)
+        [[ $reference != potential ]] || gate=1
+        [[ $reference != unknown ]] || unknown=1
+        if [ "$format" = json ]; then
+            row+="$comma{\"kind\":\"module_installation\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference")}"
+            comma=,
+        else
+            printf 'Apache 磁盘模块 · %q · %s · %s\n' "$path" "${version:-版本未知}" "$reference"
+        fi
+        modules=$((modules + 1))
+    done
     local status=observed
-    ((rows + disk > 0)) || status=not_observed
+    ((rows + disk + modules > 0)) || status=not_observed
     if [ "$format" = json ]; then
-        printf '{"status":"%s","scope":"inventory","proc_limit_reached":%s,"findings":[%s]}' \
-            "$status" "$([ "$rows" -ge 24 ] && printf true || printf false)" "$row"
-    elif [ "$status" = not_observed ]; then
-        printf 'Apache · 当前范围未观察到安装或进程\n'
+        printf '{"status":"%s","cve":"CVE-2026-119618","patch_verified":false,"configuration":%s,"proc_limit_reached":%s,"findings":[%s]}' \
+            "$status" "$config" "$([ "$rows" -ge 24 ] && printf true || printf false)" "$row"
+    else
+        if [ "$status" = not_observed ]; then printf 'Apache · 当前范围未观察到安装或进程\n'; fi
+        printf 'Apache CVE-2026-119618 · 磁盘配置线索: %s\n' "$config"
     fi
+    if [ "$gate" -eq 1 ]; then return 1; fi
+    if [ "$unknown" -eq 1 ] || [ "$rows" -ge 24 ]; then return 3; fi
+    return 0
 }
 
 apache_version() {
-    local file=$1 marks
+    local file=$1 scope=$2 marks pattern='Apache/'
     [ -f "$file" ] || return 0
     [[ $(head -c 4 -- "$file" 2>/dev/null) == $'\x7fELF' ]] || return 0
+    if [ "$scope" = module ]; then pattern='mod_http2(/| \(v)'; fi
     marks=$(head -c 16777216 -- "$file" 2>/dev/null |
-        LC_ALL=C grep -aEo 'Apache/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b' | LC_ALL=C sort -u)
-    if [[ $marks =~ ^Apache/([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+        LC_ALL=C grep -aEo "$pattern"'[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b' | LC_ALL=C sort -u)
+    if [[ $marks != *$'\n'* && $marks =~ ([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
         printf '%s' "${BASH_REMATCH[1]}"
     fi
 }
 
 audit_all() {
-    local format=txt rc_java=0 rc_nginx=0 java_report nginx_report apache_report
+    local format=txt rc_java=0 rc_nginx=0 rc_apache=0 java_report nginx_report apache_report
     local -a java_args=(--quiet) nginx_args=()
     while (($#)); do
         case $1 in
@@ -2097,20 +2193,20 @@ audit_all() {
     if [ "$format" = json ]; then
         java_report=$(java4shell_main "${java_args[@]}" --json) || rc_java=$?
         nginx_report=$(nginx2root_scan "${nginx_args[@]}" --json) || rc_nginx=$?
-        apache_report=$(apache_inventory json)
-        printf '{"scope":"local_read_only_inventory","java4shell":%s,"nginx2root":%s,"apache":%s,"exit_codes":{"java4shell":%s,"nginx2root":%s}}\n' \
-            "${java_report:-null}" "${nginx_report:-null}" "${apache_report:-null}" "$rc_java" "$rc_nginx"
+        apache_report=$(apache_inventory json) || rc_apache=$?
+        printf '{"scope":"local_read_only_inventory","java4shell":%s,"nginx2root":%s,"apache":%s,"exit_codes":{"java4shell":%s,"nginx2root":%s,"apache2root":%s}}\n' \
+            "${java_report:-null}" "${nginx_report:-null}" "${apache_report:-null}" "$rc_java" "$rc_nginx" "$rc_apache"
     else
         printf '=== Java4Shell ===\n'
         (java4shell_main "${java_args[@]}") || rc_java=$?
         printf '\n=== Nginx2Root ===\n'
         (nginx2root_scan "${nginx_args[@]}") || rc_nginx=$?
         printf '\n=== Apache HTTP Server ===\n'
-        apache_inventory txt
+        apache_inventory txt || rc_apache=$?
     fi
-    if ((rc_java == 2 || rc_nginx == 2)); then return 2; fi
-    if ((rc_java == 1 || rc_nginx == 1)); then return 1; fi
-    if ((rc_java != 0 || rc_nginx != 0)); then return 3; fi
+    if ((rc_java == 2 || rc_nginx == 2 || rc_apache == 2)); then return 2; fi
+    if ((rc_java == 1 || rc_nginx == 1 || rc_apache == 1)); then return 1; fi
+    if ((rc_java != 0 || rc_nginx != 0 || rc_apache != 0)); then return 3; fi
     return 0
 }
 
@@ -2386,6 +2482,13 @@ main() {
     case $1 in
         --all) shift; audit_all "$@" ;;
         --nginx2root) shift; nginx2root_scan "$@" ;;
+        --apache2root)
+            shift
+            case "${1:-}:$#" in
+                :0) apache_inventory txt ;;
+                --json:1) apache_inventory json ;;
+                *) die "--apache2root 只接受 --json" ;;
+            esac ;;
         --java4shell) shift; java4shell_main "$@" ;;
         *) java4shell_main "$@" ;;
     esac

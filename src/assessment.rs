@@ -213,5 +213,5 @@ pub fn host(payload: &Value) -> Value {
         "source":"developer_supplied_host_report",
         "independently_verified":false
     });
-    json!({"report_limits":payload["report"]["report_limits"],"php_command":payload["report"]["php_command"],"nginx2root":crate::nginx2root::sanitize_host(&payload["report"]["nginx2root"]),"java4shell":crate::java4shell::sanitize_host(&payload["report"]["java4shell"]),"package_audit":audit,"middleware":middleware,"trust":"开发者提交，未经独立核验","association":"用户指定关联目标，未验证实例归属","runtime_observations":observations,"review":payload["review"],"patch_evidence":patch_evidence,"patch_status":"unverified","confidence":"unverified","verdict_promoted":false})
+    json!({"report_limits":payload["report"]["report_limits"],"php_command":payload["report"]["php_command"],"apache2root":crate::apache2root::sanitize_host(&payload["report"]["apache2root"]),"nginx2root":crate::nginx2root::sanitize_host(&payload["report"]["nginx2root"]),"java4shell":crate::java4shell::sanitize_host(&payload["report"]["java4shell"]),"package_audit":audit,"middleware":middleware,"trust":"开发者提交，未经独立核验","association":"用户指定关联目标，未验证实例归属","runtime_observations":observations,"review":payload["review"],"patch_evidence":patch_evidence,"patch_status":"unverified","confidence":"unverified","verdict_promoted":false})
 }

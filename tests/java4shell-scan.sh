@@ -258,3 +258,13 @@ NGINX
         [[ $(main) == *'=== Java4Shell ==='*'=== Nginx2Root ==='*'=== Apache HTTP Server ==='* ]]
     )
 fi
+
+[[ $(apache_reference 2.4.54) == outside_upstream_range ]]
+[[ $(apache_reference 2.4.55) == potential ]]
+[[ $(apache_reference 2.4.70) == potential ]]
+[[ $(apache_reference 2.4.71) == meets_upstream_reference ]]
+[[ $(apache_reference 2.0.42 module) == potential ]]
+[[ $(apache_reference 2.0.43 module) == unknown ]]
+printf '%s\n' '7f000000-7f008000 r-xp 0 00:2e 123 /usr/lib/httpd/modules/mod_http2.so (deleted)' > "$fixture/apache-maps"
+[[ $(apache_mapped_http2 "$fixture/apache-maps") == true ]]
+[[ $(apache_mapped_http2 "$fixture/missing") == null ]]

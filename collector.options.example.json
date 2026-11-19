@@ -5,6 +5,7 @@
   "java_command": false,
   "java_attach": false,
   "nginx2root": false,
+  "apache2root": false,
   "nginx_path": null,
   "package_audit": false,
   "middleware": false,

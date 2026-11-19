@@ -152,7 +152,7 @@ fn build_conflicts(runtime: &str, disk: &str) -> bool {
     }
 }
 
-fn start_time(proc_dir: &Path) -> Option<u64> {
+pub(crate) fn start_time(proc_dir: &Path) -> Option<u64> {
     let stat = fs::read_to_string(proc_dir.join("stat")).ok()?;
     // Field 22, counting from field 3 after the parenthesized comm.
     stat.rsplit_once(')')?

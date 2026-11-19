@@ -165,6 +165,7 @@ async fn resolve(u: &Url, cfg: &Config) -> Result<Vec<IpAddr>> {
 }
 pub struct Reply {
     pub status: u16,
+    pub protocol: Option<&'static str>,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
     pub truncated: bool,
@@ -249,10 +250,15 @@ async fn request_method(u: &Url, ip: IpAddr, kind: RequestKind) -> Result<Reply>
         )
         .header("Accept", "text/html,application/json")
         .header("Accept-Encoding", "identity")
-        .header("Connection", "close")
         .send()
         .await?;
     let status = response.status().as_u16();
+    let protocol = match response.version() {
+        reqwest::Version::HTTP_2 => Some("h2"),
+        reqwest::Version::HTTP_11 => Some("http/1.1"),
+        reqwest::Version::HTTP_10 => Some("http/1.0"),
+        _ => None,
+    };
     let headers = response
         .headers()
         .iter()
@@ -266,6 +272,7 @@ async fn request_method(u: &Url, ip: IpAddr, kind: RequestKind) -> Result<Reply>
     if matches!(kind, RequestKind::Head | RequestKind::GetHeaders) {
         return Ok(Reply {
             status,
+            protocol,
             headers,
             body: vec![],
             truncated: false,
@@ -286,6 +293,7 @@ async fn request_method(u: &Url, ip: IpAddr, kind: RequestKind) -> Result<Reply>
     let truncated = body.len() > MAX_BODY;
     Ok(Reply {
         status,
+        protocol,
         headers,
         body: body.into_iter().take(MAX_BODY).collect(),
         truncated,
@@ -404,6 +412,7 @@ pub fn inspect_with_library(
     assessment["surfaces"] = crate::surfaces::inspect(url, body);
     let java4shell = crate::java4shell::remote(&fingerprints);
     let nginx2root = crate::nginx2root::remote(headers, fingerprints["blocked_hint"] == true);
+    let apache2root = crate::apache2root::remote(headers, fingerprints["blocked_hint"] == true);
     if verdict == "未发现 PHP 特征" && java4shell["status"] == "java_product_hint" {
         verdict = "发现 Java 服务线索，需核验 Java4Shell";
         reason = "网页特征不能确认 JVM build、CPU 或启动参数；请提交主机核验材料";
@@ -427,7 +436,7 @@ pub fn inspect_with_library(
             "挑战页响应不能确认业务实例的补丁状态；版本声明仅作为原始线索保留",
         );
     }
-    json!({"fingerprints":fingerprints,"java4shell":java4shell,"nginx2root":nginx2root,"version_warnings":warnings,"assessment":assessment,"verdict":verdict,"reason":reason,"versions":versions,"evidence":evidence,"cves":["CVE-2026-109618","CVE-2026-109619"],"rule_date":RULE_DATE,"source":SOURCE,"rule_provenance":"2026-10-23 已核对 PHP 官方 GHSA 与 php-src NEWS；Java4Shell 独立证据见 java4shell 字段","exploitation_verified":false})
+    json!({"fingerprints":fingerprints,"java4shell":java4shell,"nginx2root":nginx2root,"apache2root":apache2root,"version_warnings":warnings,"assessment":assessment,"verdict":verdict,"reason":reason,"versions":versions,"evidence":evidence,"cves":["CVE-2026-109618","CVE-2026-109619"],"rule_date":RULE_DATE,"source":SOURCE,"rule_provenance":"2026-10-23 已核对 PHP 官方 GHSA 与 php-src NEWS；Java4Shell 独立证据见 java4shell 字段","exploitation_verified":false})
 }
 async fn headers_using<F, Fut>(mut fetch: F) -> Result<(Reply, IpAddr, Vec<Value>)>
 where
@@ -441,6 +450,7 @@ where
     if matches!(reply.status, 405 | 501) {
         let (mut fallback, next_ip) = fetch(RequestKind::GetHeaders).await?;
         trace.push(json!({"method":"GET","http_status":fallback.status,"ip":next_ip.to_string(),"body_read":false}));
+        // The fallback has its own protocol. Do not merge negotiation across requests.
         fallback.headers.extend(reply.headers);
         reply = fallback;
         ip = next_ip;
@@ -641,7 +651,11 @@ where
         let mut u = normalize(target)?;
         for hop in 0..4 {
             let (r, ip) = fetch(u.clone()).await?;
-            let findings = inspect_with_library(&r.headers, &r.body, Some(&u), &library);
+            let mut findings = inspect_with_library(&r.headers, &r.body, Some(&u), &library);
+            if findings["apache2root"]["status"] == "apache_hint" {
+                findings["apache2root"]["response_protocol"] = json!(r.protocol);
+                findings["apache2root"]["http2_negotiated"] = json!(r.protocol.map(|v| v == "h2"));
+            }
             result["hops"].as_array_mut().unwrap().push(
                 json!({"url":u.as_str(),"ip":ip.to_string(),"status":r.status,"findings":findings}),
             );
@@ -699,6 +713,31 @@ where
 mod tests {
     use super::*;
     #[tokio::test]
+    async fn passive_apache_report_preserves_negotiated_protocol() {
+        let result = scan_using_library(
+            "https://example.test",
+            |_| async {
+                Ok((
+                    Reply {
+                        status: 200,
+                        protocol: Some("h2"),
+                        headers: vec![("server".into(), "Apache/2.4.70".into())],
+                        body: vec![],
+                        truncated: false,
+                    },
+                    "192.0.2.1".parse().unwrap(),
+                ))
+            },
+            false,
+            crate::fingerprints::builtin(),
+        )
+        .await;
+        assert_eq!(result["apache2root"]["version_status"], "potential");
+        assert_eq!(result["apache2root"]["http2_negotiated"], true);
+        assert_eq!(result["apache2root"]["patch_verified"], false);
+    }
+
+    #[tokio::test]
     async fn configured_fingerprints_use_only_fetched_responses_and_stop_at_challenges() {
         let library=crate::fingerprints::Library::from_json(r#"{"schema":"php-selfcheck-fingerprints/v1","version":"custom","mode":"extend","rules":[{"id":"own","name":"Our PHP app","category":"framework","runtime":"php","any":[{"source":"header","header":"x-app","pattern":"^our-app$"}]}]}"#).unwrap();
         let mut calls = 0;
@@ -709,6 +748,7 @@ mod tests {
                 async {
                     Ok((
                         Reply {
+                            protocol: None,
                             status: 200,
                             headers: vec![("x-app".into(), "our-app".into())],
                             body: vec![],
@@ -737,6 +777,7 @@ mod tests {
                 async {
                     Ok((
                         Reply {
+                            protocol: None,
                             status: 302,
                             headers: vec![
                                 ("cf-mitigated".into(), "challenge".into()),
@@ -812,6 +853,7 @@ mod tests {
                 async move {
                     Ok((
                         Reply {
+                            protocol: None,
                             status,
                             headers: vec![],
                             body: vec![],
@@ -838,6 +880,7 @@ mod tests {
                 async {
                     Ok((
                         Reply {
+                            protocol: None,
                             status: 302,
                             headers: vec![("Location".into(), "https://elsewhere.invalid/".into())],
                             body: vec![],
@@ -879,6 +922,7 @@ mod tests {
                 if u.host_str() == Some("example.com") {
                     Ok((
                         Reply {
+                            protocol: None,
                             status: 302,
                             headers: vec![(
                                 "Location".into(),
@@ -905,6 +949,7 @@ mod tests {
             let result = scan_using("https://example.com", move |_| async move {
                 Ok((
                     Reply {
+                        protocol: None,
                         status,
                         headers: vec![],
                         body: vec![],
@@ -919,6 +964,7 @@ mod tests {
         let result = scan_using("https://example.com", |_| async {
             Ok((
                 Reply {
+                    protocol: None,
                     status: 302,
                     headers: vec![("location".into(), "/again".into())],
                     body: vec![],
@@ -955,6 +1001,7 @@ mod tests {
     #[test]
     fn progress_cookie_and_reflection_never_confirm_configuration_or_cve() {
         let reply = Reply {
+            protocol: None,
             status: 200,
             headers: vec![("set-cookie".into(), "PHPSESSID=SECRET; HttpOnly".into())],
             body: b"selfcheck marker reflected".to_vec(),
@@ -968,6 +1015,7 @@ mod tests {
         assert!(!o.to_string().contains("SECRET"));
         assert!(!o.to_string().contains("marker reflected"));
         let empty = Reply {
+            protocol: None,
             headers: vec![],
             ..reply
         };

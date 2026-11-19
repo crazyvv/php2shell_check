@@ -107,6 +107,28 @@ function nginx2rootView(n) {
   box.append(node('p','根据上游公告解释所见版本；需要核对发行包回补和实际配置。','fine'));
   wrap.append(box);return wrap;
 }
+function apache2rootView(report){
+  const wrap=node('div');
+  if(!report?.status || ['disabled','not_observed'].includes(report.status))return wrap;
+  const box=node('div',undefined,'runtime-comparison java4shell-evidence');
+  box.append(node('strong','Apache2Root · CVE-2026-119618'));
+  const labels={potential:'上游受影响范围',outside_upstream_range:'早于披露范围',meets_upstream_reference:'达到上游修复基线',unknown:'版本证据不足'};
+  if(report.status==='apache_hint'){
+    box.append(node('p',`响应版本 ${report.version || '未知'} · ${labels[report.version_status] || '未知'} · 本次协议 ${report.response_protocol || '未知'}`,'fine'));
+    if(report.http2_advertised)box.append(node('p','响应声明支持 h2 或 h2c。','fine'));
+  }
+  for(const r of [...(report.running_processes || []),...(report.installations || []),...(report.module_installations || [])].slice(0,24)){
+    const mapped=r.mod_http2_mapped===true?' · 观察到 mod_http2 映射':'';
+    box.append(node('p',`${r.pid ? 'PID '+r.pid+' · ' : ''}${r.path || '路径未知'} · ${r.version || '版本未知'} · ${labels[r.version_status] || '未知'}${mapped}`,'fine'));
+  }
+  if(report.configuration?.files_examined){
+    const c=report.configuration;
+    const signals=[c.h2&&'h2',c.h2c&&'h2c',c.http1_only_directive&&'HTTP/1.1 限制指令',c.load_module&&'LoadModule http2_module'].filter(Boolean);
+    box.append(node('p','磁盘配置线索：'+(signals.join('、') || '未观察到相关指令'),'fine'));
+  }
+  box.append(node('p','补丁和站点协议以实际运行实例及厂商公告核验。','fine'));
+  wrap.append(box);return wrap;
+}
 function javaHostEvidenceView(j) {
   const wrap=node('div');if(!j || !j.status || j.status==='disabled')return wrap;
   const labels={candidate_found:'发现候选，需优先复核',no_runtime_found:'未发现可见 Java 运行时',no_candidate_in_discovered_scope:'已发现范围内未形成候选',unknown:'证据不足'};
@@ -130,7 +152,7 @@ function hostEvidenceView(e) {
   wrap.append(node('b','主机材料 / 手工复核：未经独立核验'));
   if(e.report_limits?.truncated) wrap.append(node('p','报告因大小限制省略了部分条目，结果不完整；未列出不代表不存在。','fine'));
   if(e.php_command?.status === 'disabled') wrap.append(node('p','本次未开启 PHP 命令采集。','fine'));
-  wrap.append(javaHostEvidenceView(e.java4shell),nginx2rootView(e.nginx2root));
+  wrap.append(javaHostEvidenceView(e.java4shell),nginx2rootView(e.nginx2root),apache2rootView(e.apache2root));
   for(const r of e.runtime_observations || []) {
     wrap.append(node('p',`${r.scope === 'cli_only' ? '仅 CLI，不能代表 Web' : r.scope === 'web_runtime_claimed' ? '提交人声明为 Web 实例' : '运行环境归属未知'} · SAPI ${r.sapi} · PHP ${r.version || '未知'} · upload_progress ${statusNames[r.upload_progress] || '未知'}`,'fine'));
   }
@@ -218,7 +240,7 @@ function renderJobs(jobs, endpoint='/api/jobs', showOwners=false, options={}) {
         const row=node('tr'), target=node('td'), verdict=node('td'), evidence=node('td');
         target.append(node('div',r.target),node('p',`${r.connected_ip || '—'} · HTTP ${r.http_status || '—'}`,'fine'));
         verdict.append(badge(r.verdict)); evidence.append(evidenceSummary(r));
-        evidence.append(assessmentView(r.assessment),fingerprintsView(r.fingerprints),java4shellView(r.java4shell),nginx2rootView(r.nginx2root));
+        evidence.append(assessmentView(r.assessment),fingerprintsView(r.fingerprints),java4shellView(r.java4shell),nginx2rootView(r.nginx2root),apache2rootView(r.apache2root));
         if(r.version_warnings?.length) evidence.append(node('p',`需优先复核的版本声明：${r.version_warnings.join('、')}。多版本冲突时仍需确认实际后端。`,'fine'));
         if(r.host_comparison) evidence.append(hostComparisonView(r.host_comparison));
         for(const h of r.host_evidence || []) evidence.append(hostEvidenceView(h.assessment));

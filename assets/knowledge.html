@@ -2,12 +2,12 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>漏洞知识库 · PHP 安全自查台</title><link rel="stylesheet" href="/style.css">
+  <title>漏洞知识库 · 服务暴露面自查台</title><link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header><div class="brand"><span class="mark">P</span><div>PHP 安全自查台<small>漏洞机理、利用链与防守复核</small></div></div><nav class="topnav"><a href="/">扫描页</a><a href="/admin">管理员</a></nav></header>
+<header><div class="brand"><span class="mark">S</span><div>服务暴露面自查台<small>服务漏洞与防守复核</small></div></div><nav class="topnav"><a href="/">扫描页</a><a href="/admin">管理员</a></nav></header>
 <main class="knowledge">
-  <section class="card hero"><p class="eyebrow">CVE-2026-109618 / CVE-2026-109619 / CVE-2026-114938</p><h1>PHP2Shell / Java4Shell 漏洞知识库</h1>
+  <section class="card hero"><p class="eyebrow">PHP2Shell / Java4Shell / Nginx2Root / Apache2Root</p><h1>服务漏洞知识库</h1>
     <p>本页把社区研究中的内存破坏、跨请求状态和会话上传进度链路，整理成适合开发、安全和运维共同复核的知识。利用链按前置条件、数据流、观测点和处置说明，不提供可执行载荷。</p>
     <div class="knowledge-callout warning"><strong>证据边界</strong><p>社区研究的复现结论、在野情报和补丁分析需要分别核验。版本响应头、会话 Cookie、HTTP 500/502、响应时间或错误文本都不能单独确认漏洞、利用成功或修复完成。</p></div>
   </section>
@@ -81,4 +81,6 @@
     <li><a href="https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w" target="_blank" rel="noreferrer">PHP 官方 GHSA：CVE-2026-109618</a></li>
     <li><a href="https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp" target="_blank" rel="noreferrer">PHP 官方 GHSA：CVE-2026-109619</a></li>
   </ul><p class="fine">社区文档中的在野事件、补丁缺口和相关 CVE 属于来源作者的跟踪结论，本项目没有逐条独立验证。官方公告和发行版厂商通告应优先于本页。页面随程序版本发布，不会追溯重写历史扫描结果。</p></section>
+<section class="card wide"><h2>Nginx2Root</h2><p>逐项核对五个 NGINX CVE 的版本、运行映像和相关配置线索。SCTP 内核问题单独记录。</p><p><a href="https://nginx.org/en/security_advisories.html" rel="noopener noreferrer">NGINX 官方公告</a></p></section>
+<section class="card wide"><h2>Apache2Root · CVE-2026-119618</h2><p>Apache HTTP Server 2.4.55–2.4.70 处于上游披露范围，2.4.71 发布修复。独立 mod_h2 2.0.8–2.0.42 也在披露范围。</p><p>核对运行中 httpd 的版本、mod_http2 映射与站点实际启用的 h2/h2c。单次 HTTP/1.1 响应只能说明该次连接使用的协议。</p><p><a href="https://httpd.apache.org/security/vulnerabilities_24#CVE-2026-119618" rel="noopener noreferrer">Apache 官方公告</a></p></section>
 </main></body></html>

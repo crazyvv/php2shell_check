@@ -7,7 +7,7 @@ use php_selfcheck::{
 };
 use std::{collections::BTreeMap, net::IpAddr, path::PathBuf};
 #[derive(Parser)]
-#[command(version, about = "PHP 安全自查台 · Rust 版")]
+#[command(version, about = "服务暴露面自查台 · Rust 版")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
