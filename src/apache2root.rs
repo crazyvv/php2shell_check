@@ -82,7 +82,7 @@ pub(crate) fn remote(headers: &[(String, String)], blocked: bool) -> Value {
 }
 
 #[cfg(target_os = "linux")]
-fn installed_config() -> Value {
+fn installed_config(explicit: &[std::path::PathBuf]) -> Value {
     use std::{fs, io::Read, path::PathBuf};
     let mut paths: Vec<PathBuf> = [
         "/etc/apache2/apache2.conf",
@@ -92,27 +92,34 @@ fn installed_config() -> Value {
     .into_iter()
     .map(PathBuf::from)
     .collect();
-    for root in [
-        "/etc/apache2/mods-enabled",
-        "/etc/apache2/conf-enabled",
-        "/etc/apache2/sites-enabled",
-        "/etc/httpd/conf.d",
-        "/etc/httpd/conf.modules.d",
-    ] {
-        paths.extend(
-            fs::read_dir(root)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .take(65)
-                .map(|entry| entry.path())
-                .filter(|p| p.extension().is_some_and(|e| e == "conf" || e == "load")),
-        );
+    if explicit.is_empty() {
+        for root in [
+            "/etc/apache2/mods-enabled",
+            "/etc/apache2/conf-enabled",
+            "/etc/apache2/sites-enabled",
+            "/etc/httpd/conf.d",
+            "/etc/httpd/conf.modules.d",
+        ] {
+            paths.extend(
+                fs::read_dir(root)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .take(65)
+                    .map(|entry| entry.path())
+                    .filter(|p| p.extension().is_some_and(|e| e == "conf" || e == "load")),
+            );
+        }
+    } else {
+        paths = explicit.to_vec();
     }
     let (mut files, mut skipped, mut h2, mut h2c, mut h1, mut module) =
         (0, 0, false, false, false, false);
+    let (mut inside_h2, mut outside_h2, mut direct, mut upgrade, mut include) =
+        (false, false, false, false, false);
     for path in paths {
         if !path.is_file() {
+            skipped += usize::from(!explicit.is_empty());
             continue;
         }
         if files + skipped >= 64 {
@@ -128,6 +135,7 @@ fn installed_config() -> Value {
             continue;
         }
         files += 1;
+        let mut virtual_host = false;
         for line in text.lines() {
             let mut words = line.split_whitespace().map(|s| s.trim_matches('"'));
             match words
@@ -136,8 +144,20 @@ fn installed_config() -> Value {
                 .to_ascii_lowercase()
                 .as_str()
             {
+                "<virtualhost" => virtual_host = true,
+                "</virtualhost>" => virtual_host = false,
+                "include" | "includeoptional" => include = true,
+                "h2direct" => direct |= words.next().is_some_and(|v| v.eq_ignore_ascii_case("on")),
+                "h2upgrade" => {
+                    upgrade |= words.next().is_some_and(|v| v.eq_ignore_ascii_case("on"))
+                }
                 "protocols" => {
                     let protocols: Vec<_> = words.take_while(|s| !s.starts_with('#')).collect();
+                    let http2 = protocols
+                        .iter()
+                        .any(|v| v.eq_ignore_ascii_case("h2") || v.eq_ignore_ascii_case("h2c"));
+                    inside_h2 |= virtual_host && http2;
+                    outside_h2 |= !virtual_host && http2;
                     h2 |= protocols.iter().any(|v| v.eq_ignore_ascii_case("h2"));
                     h2c |= protocols.iter().any(|v| v.eq_ignore_ascii_case("h2c"));
                     h1 |= protocols.len() == 1 && protocols[0].eq_ignore_ascii_case("http/1.1");
@@ -151,7 +171,7 @@ fn installed_config() -> Value {
             }
         }
     }
-    json!({"scope":"disk_directive_hints","files_examined":files,"skipped":skipped,"h2":h2,"h2c":h2c,"http1_only_directive":h1,"load_module":module})
+    json!({"scope":"disk_directive_hints","files_examined":files,"skipped":skipped,"h2":h2,"h2c":h2c,"http1_only_directive":h1,"load_module":module,"h2_in_virtualhost":inside_h2,"h2_outside_virtualhost":outside_h2,"h2_direct_on":direct,"h2_upgrade_on":upgrade,"include_observed":include})
 }
 
 #[cfg(target_os = "linux")]
@@ -183,7 +203,11 @@ fn elf_version(path: &std::path::Path, module: bool) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub(crate) fn collect(enabled: bool) -> Value {
+pub(crate) fn collect(
+    enabled: bool,
+    explicit: Option<&std::path::Path>,
+    configs: &[std::path::PathBuf],
+) -> Value {
     if !enabled {
         return evidence("disabled");
     }
@@ -207,6 +231,9 @@ pub(crate) fn collect(enabled: bool) -> Value {
         let paths: BTreeSet<_> = paths
             .into_iter()
             .map(PathBuf::from)
+            .chain(
+                explicit.map(|path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())),
+            )
             .chain(
                 ["apache2", "httpd"]
                     .into_iter()
@@ -288,12 +315,15 @@ pub(crate) fn collect(enabled: bool) -> Value {
         out["running_processes"] = json!(running);
         out["installations"] = json!(installations);
         out["module_installations"] = json!(modules);
-        out["configuration"] = installed_config();
+        out["configuration"] = installed_config(configs);
         out["coverage"] = json!({"proc_available":proc_available,"truncated":truncated});
         out
     }
     #[cfg(not(target_os = "linux"))]
-    evidence("unknown")
+    {
+        let _ = (explicit, configs);
+        evidence("unknown")
+    }
 }
 
 pub(crate) fn sanitize_host(raw: &Value) -> Value {
@@ -314,6 +344,15 @@ pub(crate) fn sanitize_host(raw: &Value) -> Value {
     out["configuration"] = json!({"scope":"disk_directive_hints","files_examined":cfg["files_examined"].as_u64(),
         "skipped":cfg["skipped"].as_u64(),"h2":cfg["h2"].as_bool(),"h2c":cfg["h2c"].as_bool(),
         "http1_only_directive":cfg["http1_only_directive"].as_bool(),"load_module":cfg["load_module"].as_bool()});
+    for key in [
+        "h2_in_virtualhost",
+        "h2_outside_virtualhost",
+        "h2_direct_on",
+        "h2_upgrade_on",
+        "include_observed",
+    ] {
+        out["configuration"][key] = json!(cfg[key].as_bool());
+    }
     out["coverage"] = json!({"proc_available":raw["coverage"]["proc_available"].as_bool(),"truncated":raw["coverage"]["truncated"].as_bool()});
     out
 }

@@ -375,6 +375,17 @@ Rust `--java-command` 保留 CLI 默认值采集，并增加当前节点的 CPUI
 
 Nginx2Root 检查项参考了研究披露、官方公告和两个只读检查器。版本边界以 NGINX 官方公告为准。[Xint 研究](https://xint.io/blog/nginx2root-remote-code-execution) · [The DevOps Daily 检查器](https://github.com/The-DevOps-Daily/nginx2root-check) · [TimTheBeastNL 检查器](https://github.com/TimTheBeastNL/nginx2root)
 
+### Rust 三专项批量采集
+
+```bash
+x2shell-check collect --all > host-report.json
+x2shell-check collect --all --fail-on-risk > host-report.json
+```
+
+两条命令都先输出 Rust 主机报告。启用 `--fail-on-risk` 后，版本门禁命中返回 1，仅有证据不足返回 3。可同时查看 `audit.risk_gate_hit`、`audit.evidence_incomplete` 和各专项 `audit.exit_codes`。配置未归属或未读全有独立字段。
+
+Rust 主机采集支持重复指定 `--nginx-config` 和 `--apache-config`，并支持 `--apache-path`。Java 运行时盘点可用 `--java-root`、`--java-root-depth`、`--java-pid`、`--java-processes-only` 或 `--java-no-processes` 控制范围。
+
 ### Apache2Root（CVE-2026-119618）
 
 ```bash

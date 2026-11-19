@@ -384,8 +384,17 @@ fn installation(scope: &Path, lib: &Path, id: FileId) -> Option<Installation> {
     })
 }
 
-fn installations() -> (BTreeMap<PathBuf, Installation>, bool, usize) {
-    let mut queue: VecDeque<_> = ROOTS.into_iter().map(|p| (PathBuf::from(p), 0)).collect();
+fn installations(
+    extra: &[PathBuf],
+    max_depth: usize,
+) -> (BTreeMap<PathBuf, Installation>, bool, usize, usize) {
+    let mut queue: VecDeque<_> = extra
+        .iter()
+        .cloned()
+        .map(|p| (p, 0, true))
+        .chain(ROOTS.into_iter().map(|p| (PathBuf::from(p), 0, false)))
+        .collect();
+    let mut depth_boundaries = 0;
     let mut seen = BTreeSet::new();
     let mut found = BTreeMap::new();
     let mut unreadable = 0;
@@ -398,15 +407,16 @@ fn installations() -> (BTreeMap<PathBuf, Installation>, bool, usize) {
                 .and_then(|p| Some(p.parent()?.parent()?.to_path_buf())),
         )
     {
-        queue.push_front((home, 0));
+        queue.push_front((home, 0, false));
     }
     let mut budget = 30000;
-    while let Some((path, depth)) = queue.pop_front() {
+    while let Some((path, depth, explicit)) = queue.pop_front() {
         if budget == 0 || found.len() >= 256 {
-            return (found, true, unreadable);
+            return (found, true, unreadable, depth_boundaries);
         }
         budget -= 1;
         let Ok(path) = path.canonicalize() else {
+            unreadable += usize::from(explicit);
             continue;
         };
         if !seen.insert(path.clone()) {
@@ -421,7 +431,7 @@ fn installations() -> (BTreeMap<PathBuf, Installation>, bool, usize) {
         };
         for entry in entries {
             if budget == 0 || found.len() >= 256 {
-                return (found, true, unreadable);
+                return (found, true, unreadable, depth_boundaries);
             }
             budget -= 1;
             let Ok(entry) = entry else {
@@ -440,12 +450,16 @@ fn installations() -> (BTreeMap<PathBuf, Installation>, bool, usize) {
                 {
                     found.insert(lib, item);
                 }
-            } else if depth < 8 && kind.is_dir() {
-                queue.push_back((entry.path(), depth + 1));
+            } else if kind.is_dir() {
+                if depth < max_depth {
+                    queue.push_back((entry.path(), depth + 1, explicit));
+                } else if explicit {
+                    depth_boundaries += 1;
+                }
             }
         }
     }
-    (found, false, unreadable)
+    (found, false, unreadable, depth_boundaries)
 }
 
 type Features = [bool; 4];
@@ -555,7 +569,8 @@ fn decision(build: BuildStatus, cpu: Option<bool>, flags: &Flags) -> (&'static s
     ("unknown", "incomplete_or_conflicting_evidence")
 }
 
-pub(crate) async fn collect(attach: bool) -> Value {
+pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value {
+    let attach = options.java_attach;
     let (cpu, evidence) = cpu_evidence(
         cpuid(),
         fs::read_to_string("/proc/cpuinfo")
@@ -565,7 +580,13 @@ pub(crate) async fn collect(attach: bool) -> Value {
             .unwrap_or_default(),
         cfg!(target_arch = "x86_64"),
     );
-    let (disk, disk_budget_exhausted, unreadable_directories) = installations();
+    let depth = options.java_root_depth.unwrap_or(8);
+    let (disk, disk_budget_exhausted, unreadable_directories, depth_boundaries) =
+        if options.java_processes_only {
+            (BTreeMap::new(), false, 0, 0)
+        } else {
+            installations(&options.java_root, depth)
+        };
     let jcmd = attach.then(|| which("jcmd")).flatten();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     let mut processes = vec![];
@@ -573,23 +594,32 @@ pub(crate) async fn collect(attach: bool) -> Value {
     let mut unreadable_maps = 0;
     let mut unstable_snapshots = 0;
     let owner = fs::metadata("/proc/self").ok().map(|m| m.uid());
-    let entries = fs::read_dir("/proc");
-    let proc_available = entries.is_ok();
-    for entry in entries.into_iter().flatten().flatten() {
+    let entries =
+        (!options.java_no_processes && options.java_pid.is_empty()).then(|| fs::read_dir("/proc"));
+    let proc_available = options.java_no_processes
+        || !options.java_pid.is_empty()
+        || entries.as_ref().is_some_and(Result::is_ok);
+    let targets = options.java_pid.iter().copied().chain(
+        entries
+            .into_iter()
+            .flatten()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok()),
+    );
+    for pid in targets {
         if processes.len() >= 128 {
             break;
         }
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|n| n.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        let proc_dir = entry.path();
+        let proc_dir = PathBuf::from(format!("/proc/{pid}"));
         let started = start_time(&proc_dir);
         let maps = match mappings(&proc_dir) {
-            Ok(maps) if maps.is_empty() => continue,
+            Ok(maps) if maps.is_empty() => {
+                if !options.java_pid.is_empty() {
+                    processes.push(json!({"pid":pid,"status":"unknown","reason":"no_jvm_mapping"}));
+                }
+                continue;
+            }
             Ok(maps) => maps,
             Err(error) => {
                 unreadable_maps += 1;
@@ -597,7 +627,7 @@ pub(crate) async fn collect(attach: bool) -> Value {
                     .is_ok_and(|name| name.trim() == "java")
                     || fs::read_link(proc_dir.join("exe"))
                         .is_ok_and(|exe| exe.file_name().is_some_and(|name| name == "java"));
-                if named_java {
+                if named_java || !options.java_pid.is_empty() {
                     processes.push(
                         json!({"pid":pid,"status":"unknown","reason":"maps_unavailable",
                         "maps_error":error.kind().to_string(),"effective_flags":Flags::default()}),
@@ -780,7 +810,7 @@ pub(crate) async fn collect(attach: bool) -> Value {
             "https://alas.aws.amazon.com/AL2023/ALAS2023-2026-3480.html",
             "https://alas.aws.amazon.com/AL2027/ALAS2027-2026-374.html"],
         "coverage":{"proc_available":proc_available,"unreadable_maps":unreadable_maps,
-            "unstable_snapshots":unstable_snapshots,"process_limit_reached":processes.len() >= 128,"disk_roots":ROOTS,"disk_max_depth":8,
+            "unstable_snapshots":unstable_snapshots,"process_limit_reached":processes.len() >= 128,"disk_roots":ROOTS,"disk_max_depth":depth,"root_depth_truncated":depth_boundaries,"process_scan_enabled":!options.java_no_processes,
             "disk_budget_exhausted":disk_budget_exhausted,"unreadable_directories":unreadable_directories},
     })
 }

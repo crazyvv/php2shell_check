@@ -267,12 +267,19 @@ async fn main() -> Result<()> {
             std::process::exit(code.into());
         }
         Command::Collect(args) => {
+            let fail_on_risk = args.fail_on_risk;
             let options = args.resolve()?;
             ensure!(cfg!(target_os = "linux"), "主机采集目前仅支持 Linux");
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&collector::collect_with_options(&options).await)?
-            );
+            let report = collector::collect_with_options(&options).await;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if fail_on_risk {
+                if report["audit"]["risk_gate_hit"] == true {
+                    std::process::exit(1);
+                }
+                if report["audit"]["evidence_incomplete"] == true {
+                    std::process::exit(3);
+                }
+            }
         }
         Command::OfflinePoc { json: as_json } => {
             let result = evidence_lab::offline_poc()?;

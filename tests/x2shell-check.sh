@@ -309,13 +309,13 @@ NGINX
     [[ $nginx_rc == 1 ]]
     grep -Fq '"configuration_entry_source":"installation_layout"' "$fixture/layout.json"
     refs=$(nginx2root_reference 1.31.8 '' nginx)
-    [[ $refs == *'"config_evidence":"configuration_not_attributed","missing_disk_hints":null'* ]]
+    [[ $refs == *'"config_evidence":"configuration_not_attributed","missing_disk_hints":[]'* ]]
     refs=$(nginx2root_reference '' '' plus 37.3.0.1)
-    [[ $refs == *'"reference":"https://docs.nginx.com/nginx/releases/"'* ]]
+    [[ $refs == *'"vendor_reference":"https://docs.nginx.com/nginx/releases/"'* ]]
     nginx_rc=0
     "$scanner" --nginx2root --nginx-path "$fixture/openresty/nginx/sbin/nginx" --nginx-config "$fixture/missing" --json > "$fixture/incomplete.json" || nginx_rc=$?
     [[ $nginx_rc == 1 ]]
-    grep -Fq '"evidence_incomplete":true},"summary":{"risk_gate_hit":true' "$fixture/incomplete.json"
+    grep -Fq '"evidence_incomplete":true,"configuration_incomplete":true},"summary":{"risk_gate_hit":true' "$fixture/incomplete.json"
     web_coverage_incomplete false 0 '{"skipped":1}'
     ! web_coverage_incomplete false 0 '{"skipped":0}'
     (

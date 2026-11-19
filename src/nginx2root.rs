@@ -44,7 +44,7 @@ fn reference(raw: Option<&str>) -> Vec<Value> {
                 Some(v) if v <= [1, 31, 8] => "potential",
                 _ => "unknown",
             };
-            json!({"cve":cve,"status":status,"feature":feature})
+            json!({"cve":cve,"status":status,"feature":feature,"reference":format!("https://www.cve.org/CVERecord?id={cve}"),"upstream_advisory":ADVISORY,"upstream_fixed_versions":["1.30.7","1.31.9"]})
         })
         .collect()
 }
@@ -99,6 +99,7 @@ struct Product {
     version: Option<String>,
     core: Option<String>,
     plus: Option<String>,
+    module_hints: Vec<String>,
 }
 
 impl Product {
@@ -134,9 +135,12 @@ impl Product {
                 let vendor_reference = matches!(release, Some("37.0.8.1" | "37.3.0.1"))
                     || (row["cve"] == "CVE-2026-123633"
                         && matches!(release, Some("37.0.7.1" | "37.2.0.1")));
-                if vendor_reference {
-                    row["reference"] = json!(PLUS_RELEASES);
-                }
+                row["vendor_reference"] = json!(PLUS_RELEASES);
+                row["vendor_fixed_versions"] = if row["cve"] == "CVE-2026-123633" {
+                    json!(["37.0.7.1", "37.2.0.1"])
+                } else {
+                    json!(["37.0.8.1", "37.3.0.1"])
+                };
                 row["status"] = json!(if vendor_reference {
                     "meets_vendor_reference"
                 } else if affected {
@@ -154,7 +158,7 @@ impl Product {
         json!({"flavor":flavor,"product_version":self.version,"embedded_nginx_version":core,
             "version":if flavor=="nginx" {core} else {self.version.as_deref()},
             "plus_release":self.plus,"plus_release_unresolved":flavor=="plus" && self.plus.is_none(),
-            "patch_status":"unverified","cves":cves})
+            "patch_status":"unverified","binary_module_hints":self.module_hints,"cves":cves})
     }
 
     fn from_report(row: &Value) -> Self {
@@ -181,6 +185,17 @@ impl Product {
                 .as_str()
                 .filter(|v| valid_product_version(v))
                 .map(str::to_owned),
+            module_hints: row["binary_module_hints"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .filter(|hint| {
+                    matches!(*hint, "http_v2" | "http_v3" | "http_mirror" | "mail_proxy")
+                })
+                .take(4)
+                .map(str::to_owned)
+                .collect(),
             plus: row["plus_release"]
                 .as_str()
                 .filter(|v| v.len() <= 40 && plus_version(v).is_some())
@@ -204,6 +219,7 @@ fn banner_product(banner: &str) -> Option<Product> {
         .strip_prefix("nginx-plus-r")
         .unwrap_or(raw.trim_start_matches(['R', 'r']));
     Some(Product {
+        module_hints: vec![],
         flavor: Some(flavor),
         core: (flavor == "nginx" && version(raw).is_some()).then(|| raw.to_owned()),
         version: (flavor != "nginx" && flavor != "plus" && valid_product_version(raw))
@@ -238,7 +254,7 @@ pub(crate) fn remote(headers: &[(String, String)], blocked: bool) -> Value {
     report
 }
 
-const CONFIG_HINTS: [&str; 12] = [
+const CONFIG_HINTS: [&str; 14] = [
     "http2_on",
     "http2_off",
     "http3_or_quic",
@@ -251,6 +267,8 @@ const CONFIG_HINTS: [&str; 12] = [
     "mail",
     "mail_proxy",
     "auth_http",
+    "proxy_http_version_2",
+    "grpc_upstream",
 ];
 
 #[cfg(target_os = "linux")]
@@ -457,7 +475,12 @@ fn config_hints(files: impl IntoIterator<Item = std::path::PathBuf>) -> Value {
                         }
                         "upstream"
                     }
-                    ("grpc_pass" | "fastcgi_pass" | "uwsgi_pass" | "scgi_pass", _) => "upstream",
+                    ("grpc_pass", _) => {
+                        record("grpc_upstream");
+                        "upstream"
+                    }
+                    ("proxy_http_version", "2") => "proxy_http_version_2",
+                    ("fastcgi_pass" | "uwsgi_pass" | "scgi_pass", _) => "upstream",
                     ("resolver", _) if !first.is_empty() => "resolver",
                     ("mirror", _) if !first.is_empty() && first != "off" => "mirror",
                     ("mirror_request_body", "off") => "mirror_request_body_off",
@@ -602,6 +625,25 @@ fn binary_evidence(path: &std::path::Path) -> Option<(std::fs::Metadata, Product
             .ok()
             .filter(|v| v.len() <= 40 && plus_version(v).is_some())
     }));
+    let module_hints = [
+        (
+            "http_v2",
+            marker(b"ngx_http_v2_module") || marker(b"--with-http_v2_module"),
+        ),
+        (
+            "http_v3",
+            marker(b"ngx_http_v3_module") || marker(b"--with-http_v3_module"),
+        ),
+        ("http_mirror", marker(b"ngx_http_mirror_module")),
+        (
+            "mail_proxy",
+            marker(b"ngx_mail_proxy_module") || marker(b"--with-mail"),
+        ),
+    ]
+    .into_iter()
+    .filter(|(_, present)| *present)
+    .map(|(name, _)| name.to_owned())
+    .collect();
     Some((
         meta,
         Product {
@@ -609,11 +651,57 @@ fn binary_evidence(path: &std::path::Path) -> Option<(std::fs::Metadata, Product
             version,
             core,
             plus,
+            module_hints,
         },
     ))
 }
 
-pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Value {
+fn annotate_config(row: &mut Value) {
+    let config = row["configuration"].clone();
+    for cve in row["cves"].as_array_mut().into_iter().flatten() {
+        let keys: &[&str] = match cve["feature"].as_str() {
+            Some("http2") => &["http2_on"],
+            Some("http2_upstream") => &["http2_on", "upstream"],
+            Some("http3_upstream") => &["http3_or_quic", "upstream"],
+            Some("resolver_proxy_mirror") => &[
+                "resolver",
+                "dynamic_proxy_pass",
+                "mirror",
+                "mirror_request_body_off",
+            ],
+            Some("mail_proxy_auth_http") => &["mail_proxy", "auth_http"],
+            _ => &[],
+        };
+        let mut missing = keys
+            .iter()
+            .copied()
+            .filter(|key| config[*key] != true)
+            .collect::<Vec<_>>();
+        let status = if config["files_examined"].as_u64().unwrap_or(0) == 0 {
+            "configuration_not_attributed"
+        } else if config["skipped"].as_u64().unwrap_or(0) > 0 {
+            "configuration_incomplete"
+        } else if missing.is_empty() {
+            "disk_hints_present"
+        } else {
+            "condition_not_observed"
+        };
+        if matches!(
+            status,
+            "configuration_not_attributed" | "configuration_incomplete"
+        ) {
+            missing.clear();
+        }
+        cve["config_evidence"] = json!(status);
+        cve["missing_disk_hints"] = json!(missing);
+    }
+}
+
+pub(crate) fn collect(
+    enabled: bool,
+    explicit: Option<&std::path::Path>,
+    configs: &[std::path::PathBuf],
+) -> Value {
     if !enabled {
         return json!({"status":"disabled"});
     }
@@ -625,6 +713,14 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
             os::unix::fs::MetadataExt,
             path::Path,
         };
+        let explicit_config = (!configs.is_empty()).then(|| {
+            let mut config = config_hints(configs.iter().cloned());
+            config["skipped"] = json!(
+                config["skipped"].as_u64().unwrap_or(0)
+                    + configs.iter().filter(|path| !path.is_file()).count() as u64
+            );
+            config
+        });
         let mut paths = BTreeSet::new();
         paths.extend(
             explicit.map(|path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())),
@@ -710,7 +806,10 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
             row["path"] = json!(path);
             row["disk_identity_matched"] = json!(disk_match);
             row["host_package_eligible"] = json!(host_package_eligible);
-            if host_package_eligible
+            if let Some(config) = &explicit_config {
+                row["configuration"] = config.clone();
+                row["configuration_entry_source"] = json!("explicit");
+            } else if host_package_eligible
                 && fs::metadata(dir.join("root"))
                     .ok()
                     .zip(fs::metadata("/proc/self/root").ok())
@@ -722,6 +821,7 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
                 row["configuration"] = configuration;
                 row["configuration_entry_source"] = json!("process_argument");
             }
+            annotate_config(&mut row);
             running.push(row);
         }
         let installations: Vec<_> = paths
@@ -744,7 +844,10 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
                 } else {
                     layout_config(path)
                 };
-                if let Some(config) = config {
+                if let Some(config) = &explicit_config {
+                    row["configuration"] = config.clone();
+                    row["configuration_entry_source"] = json!("explicit");
+                } else if let Some(config) = config {
                     row["configuration_entry"] = json!(config);
                     row["configuration"] = config_hints([config]);
                     row["configuration_entry_source"] = json!(if system {
@@ -753,20 +856,78 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
                         "installation_layout"
                     });
                 }
+                annotate_config(&mut row);
                 Some(row)
             })
             .collect();
+        let mut config_counts = std::collections::BTreeMap::from([
+            ("configuration_not_attributed", 0),
+            ("configuration_incomplete", 0),
+            ("potential_condition_not_observed", 0),
+            ("unknown_condition_not_observed", 0),
+            ("condition_not_observed", 0),
+        ]);
+        let mut unmapped = BTreeSet::new();
+        for row in running.iter().chain(&installations) {
+            if row["embedded_nginx_version"].is_null()
+                && matches!(row["flavor"].as_str(), Some("openresty" | "tengine"))
+                && let Some(version) = row["product_version"].as_str()
+            {
+                unmapped.insert(format!(
+                    "{}/{version}",
+                    row["flavor"].as_str().unwrap_or_default()
+                ));
+            }
+            for cve in row["cves"].as_array().into_iter().flatten() {
+                if let Some(count) =
+                    config_counts.get_mut(cve["config_evidence"].as_str().unwrap_or_default())
+                {
+                    *count += 1;
+                }
+                if cve["config_evidence"] == "condition_not_observed" {
+                    match cve["status"].as_str() {
+                        Some("potential") => {
+                            *config_counts
+                                .entry("potential_condition_not_observed")
+                                .or_default() += 1
+                        }
+                        Some("unknown") => {
+                            *config_counts
+                                .entry("unknown_condition_not_observed")
+                                .or_default() += 1
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let config_incomplete = config_counts["configuration_incomplete"] > 0
+            || config_counts["configuration_not_attributed"] > 0;
+        let mut summary = json!(config_counts);
+        summary["unmapped_product_versions"] = json!(unmapped);
         let kernel_release = fs::read_to_string("/proc/sys/kernel/osrelease")
             .ok()
             .map(|v| v.trim().to_owned());
+        let associations = fs::File::open("/proc/net/sctp/assocs")
+            .ok()
+            .and_then(|file| {
+                use std::io::{BufRead, BufReader, Read};
+                let mut lines = BufReader::new(file.take(65_537)).lines();
+                lines.next()?.ok()?;
+                match lines.next() {
+                    Some(Ok(line)) if !line.trim().is_empty() => Some(true),
+                    None => Some(false),
+                    _ => None,
+                }
+            });
         json!({"status":"collected","source":"local_binary_inventory","running_processes":running,
-            "installations":installations,"configuration":local_config(),"coverage":{"proc_available":proc_available,"truncated":truncated},
-            "sctp":{"kernel_release":kernel_release,"module_visible":Path::new("/sys/module/sctp").exists(),"modprobe_install_block_hint":sctp_block_hint(),"patch_status":"unknown"},
+            "installations":installations,"configuration":explicit_config.unwrap_or_else(local_config),"coverage":{"proc_available":proc_available,"truncated":truncated,"configuration_incomplete":config_incomplete},"summary":summary,
+            "sctp":{"kernel_release":kernel_release,"module_visible":Path::new("/sys/module/sctp").exists(),"associations_visible":associations,"modprobe_install_block_hint":sctp_block_hint(),"patch_status":"unknown"},
             "patch_verified":false,"exploitability_confirmed":false,"sources":SOURCES})
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = explicit;
+        let _ = (explicit, configs);
         json!({"status":"unknown","reason":"linux_required"})
     }
 }
@@ -847,10 +1008,11 @@ pub(crate) fn sanitize_host(raw: &Value) -> Value {
             row["disk_identity_matched"] = json!(item["disk_identity_matched"].as_bool());
             row["configuration_entry"] = json!(item["configuration_entry"].as_str().map(|p|p.chars().take(400).collect::<String>()));
             row["configuration_entry_source"] = json!(item["configuration_entry_source"].as_str()
-                .filter(|source| matches!(*source, "system_layout" | "installation_layout" | "process_argument")));
+                .filter(|source| matches!(*source, "system_layout" | "installation_layout" | "process_argument" | "explicit")));
             if item["configuration"].is_object() {
                 row["configuration"] = sanitize_configuration(&item["configuration"]);
             }
+            annotate_config(&mut row);
             row["package_evidence"] = json!({
                 "manager":item["package_evidence"]["manager"].as_str().filter(|v| matches!(*v,"dpkg"|"rpm")),
                 "name":item["package_evidence"]["name"].as_str().map(|v|v.chars().take(100).collect::<String>()),
@@ -864,7 +1026,7 @@ pub(crate) fn sanitize_host(raw: &Value) -> Value {
     json!({"status":"unverified","running_processes":rows("running_processes"),"installations":rows("installations"),"configuration":configuration,
         "coverage":{"proc_available":raw["coverage"]["proc_available"].as_bool(),"truncated":raw["coverage"]["truncated"].as_bool()},
         "sctp":{"kernel_release":raw["sctp"]["kernel_release"].as_str().map(|v| v.chars().take(128).collect::<String>()),
-            "module_visible":raw["sctp"]["module_visible"].as_bool(),"modprobe_install_block_hint":raw["sctp"]["modprobe_install_block_hint"].as_bool(),"patch_status":"unknown"},
+            "module_visible":raw["sctp"]["module_visible"].as_bool(),"associations_visible":raw["sctp"]["associations_visible"].as_bool(),"modprobe_install_block_hint":raw["sctp"]["modprobe_install_block_hint"].as_bool(),"patch_status":"unknown"},
         "patch_verified":false,"exploitability_confirmed":false,"sources":SOURCES})
 }
 
