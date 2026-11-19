@@ -37,6 +37,13 @@ tempfile = "3"
 strip = true
 lto = "thin"
 
+[profile.release-small]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
 [profile.dev.package.sha2]
 opt-level = 3
 [profile.dev.package.pbkdf2]

@@ -46,6 +46,15 @@ cargo build --release --locked -j 4
 ./target/release/x2shell-check serve
 ```
 
+需要更小的可执行文件时，可以使用体积优化配置：
+
+```bash
+cargo build --profile release-small --locked -j 4
+./target/release-small/x2shell-check --version
+```
+
+该配置沿用 Release 的符号裁剪，启用体积优化和完整 LTO，编译可能更慢。遇到 Rust panic 时进程会直接退出。Windows 产物位于 `target/release-small/x2shell-check.exe`。
+
 默认监听 `127.0.0.1:8080`。默认普通账号通过 Basic 认证登录；启用免密码后使用浏览器独立会话。管理员入口始终使用独立账号密码。`init` 不覆盖已有配置；配置权限为 600，密码使用 PBKDF2-SHA256（260000 次迭代），不存明文密码。不要将配置、报告和数据库提交到 Git。
 
 初始化的 `allowed_networks` 为空，默认拒绝全部扫描。修改配置时保留 `users`、`database` 等其他字段。例如：
