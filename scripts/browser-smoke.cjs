@@ -62,7 +62,23 @@ async function main(){
       await page.locator(href.slice(href.indexOf('#'))).waitFor();
       await page.goto(base);
     }
-    await page.getByRole('link', {name: '主机工具', exact: true}).click();
+    await page.getByRole('link', {name: 'Bash 主机巡检', exact: true}).click();
+    await page.getByRole('heading', {name: 'Bash 主机巡检', exact: true}).waitFor();
+    await context.grantPermissions(['clipboard-read','clipboard-write']);
+    await page.getByRole('button', {name: '复制默认巡检命令'}).click();
+    await page.getByText('命令已复制。', {exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>navigator.clipboard.readText()), 'bash x2shell-check.sh');
+    await page.getByRole('button', {name: '复制批量巡检命令'}).click();
+    await page.locator('#batch-copy-status').filter({hasText:'命令已复制。'}).waitFor();
+    assert.equal(await page.evaluate(()=>navigator.clipboard.readText()), await page.locator('#batch-command').textContent());
+    const mobile = await context.newPage();
+    await mobile.setViewportSize({width:390,height:844});
+    await mobile.goto(base+'/tools/');
+    assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth),390);
+    await mobile.getByText('只检查一个组件', {exact:true}).click();
+    assert(await mobile.getByText('bash x2shell-check.sh --java4shell --json', {exact:false}).isVisible());
+    await mobile.screenshot({path:path.join(output,'bash-tools-mobile.png'),fullPage:true});
+    await mobile.close();
     const [download] = await Promise.all([
       page.waitForEvent('download'),
       page.getByRole('link', {name: '下载 x2shell-check.sh', exact: true}).click(),

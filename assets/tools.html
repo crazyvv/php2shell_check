@@ -1,34 +1,98 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="tools-document">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>主机工具 · X2Shell Check</title><link rel="stylesheet" href="/style.css">
+  <title>Bash 主机巡检 · X2Shell Check</title>
+  <link rel="stylesheet" href="/style.css"><script src="/tools.js" defer></script>
 </head>
 <body>
 <header>
-  <div class="brand"><span class="mark">S</span><div>X2Shell Check<small>服务暴露面自查台</small></div></div>
-  <nav class="topnav"><a href="/">扫描页</a><a href="/knowledge">漏洞知识库</a><a href="/tools" aria-current="page">主机工具</a></nav>
+  <div class="brand">X2Shell Check</div>
+  <nav class="topnav"><a href="/">扫描页</a><a href="/knowledge">漏洞知识库</a><a href="/tools" aria-current="page">Bash 主机巡检</a></nav>
 </header>
-<main class="knowledge">
-  <section class="card hero">
-    <h1>主机工具与下载</h1>
-    <p>将 Bash 脚本分发到目标主机执行。默认检查 Java4Shell、Nginx2Root 和 Apache2Root，无需指定目标或安装 Python。</p>
-    <div class="scan-links"><a href="/downloads/x2shell-check.sh" download>下载 x2shell-check.sh</a></div>
+<main class="tools-page">
+  <section class="tools-hero card">
+    <div>
+      <h1>Bash 主机巡检</h1>
+      <p>同一脚本分发到多台主机。直接运行即可检查 Java、NGINX 和 Apache，无需预先知道主机运行了哪些服务。</p>
+      <a class="primary tool-download" href="/downloads/x2shell-check.sh" download>下载 x2shell-check.sh</a>
+      <p class="fine">随当前服务版本提供 · 单文件 · 无需 Python</p>
+    </div>
+    <div class="tools-start">
+      <h2>在目标主机运行</h2>
+      <p>下载后将文件放到目标主机，在文件所在目录执行。</p>
+      <div class="tool-command">
+        <pre class="command-line"><code id="quick-command">bash x2shell-check.sh</code></pre>
+        <button type="button" class="secondary" data-copy-command="quick-command" aria-describedby="quick-copy-status" aria-label="复制默认巡检命令" hidden>复制</button>
+      </div>
+      <p id="quick-copy-status" class="fine tool-copy-status" role="status"></p>
+      <p class="fine">结果输出到终端。默认不联网，JVM 诊断附加默认关闭。</p>
+    </div>
   </section>
-  <section class="card">
-    <h2>Bash 批量巡检</h2>
-    <p>在每台目标主机运行，直接查看文本结果。</p>
-    <pre class="command-line"><code>bash x2shell-check.sh</code></pre>
-    <p>批量执行时可保存结构化结果。</p>
-    <pre class="command-line"><code>bash x2shell-check.sh --all --json &gt; host-audit.json</code></pre>
-    <p>可通过 <code>--java4shell</code>、<code>--nginx2root</code> 或 <code>--apache2root</code> 单独检查。<code>--all --jcmd</code> 显式启用 JVM 诊断附加。</p>
-    <p>在 Linux 上可使用 /proc 核对运行实例。权限不足、容器隔离或系统缺少 /proc 时，可用证据会减少。</p>
+
+  <nav class="scan-links tools-nav" aria-label="巡检说明">
+    <a href="#coverage">检查覆盖</a><a href="#batch">批量执行</a><a href="#results">结果判读</a><a href="#options">专项参数</a>
+  </nav>
+
+  <section id="coverage" class="card">
+    <h2>检查覆盖</h2>
+    <p>Linux 能提供进程和文件映射证据。macOS 可盘点可见的 Java 安装和启动器线索，NGINX 与 Apache 主机专项会标记为不可采集。</p>
+    <div class="tools-coverage">
+      <article><h3><a href="/knowledge#java4shell">Java / JVM</a></h3><p>核对运行中的 JVM、磁盘 JDK、构建号、CPU 特性与缓解参数线索。生效参数可选诊断附加。</p></article>
+      <article><h3><a href="/knowledge#nginx2root">NGINX</a></h3><p>核对运行映像、版本、五项 CVE 的上游范围，以及磁盘配置与 SCTP 线索。</p></article>
+      <article><h3><a href="/knowledge#apache2root">Apache HTTP Server</a></h3><p>核对 httpd、mod_http2、独立模块版本，以及 HTTP/2 配置线索。</p></article>
+    </div>
   </section>
-  <section class="card">
-    <h2>Rust 主机报告</h2>
-    <p>需要核验 PHP 或上传主机报告时，在扫描页选择采集项，复制生成的命令到目标主机执行，再关联业务 URL 并导入 JSON。</p>
-    <pre class="command-line"><code>x2shell-check collect &gt; host-report.json</code></pre>
-    <p>Bash 的 <code>host-audit.json</code> 供批量巡检留档。扫描页接受 Rust 采集生成的主机报告。</p>
+
+  <div class="tools-columns">
+    <section id="batch" class="card">
+      <h2>批量执行与留档</h2>
+      <p>在每台主机各执行一次。回收时将主机标识、执行时间、报告文件和退出码一并留档。</p>
+      <div class="tool-command">
+        <pre class="command-line"><code id="batch-command">status=0
+bash x2shell-check.sh --all --json &gt; host-audit.json || status=$?
+printf 'exit_code=%s\n' "$status"</code></pre>
+        <button type="button" class="secondary" data-copy-command="batch-command" aria-describedby="batch-copy-status" aria-label="复制批量巡检命令" hidden>复制</button>
+      </div>
+      <p id="batch-copy-status" class="fine tool-copy-status" role="status"></p>
+      <p>批量平台直接执行扫描命令即可收到脚本退出码。上方示例会保留报告并打印退出码，便于人工查看。</p>
+      <p class="fine">批量 JSON 的 <code>exit_codes</code> 记录各专项的返回值。报告包含主机路径和进程线索，适合在内部巡检流程中留存。</p>
+    </section>
+
+    <section id="results" class="card">
+      <h2>结果判读</h2>
+      <dl class="tool-exit-codes">
+        <dt><code>0</code></dt><dd>扫描范围内未命中风险门禁。仍应查看各专项的观察范围。</dd>
+        <dt><code>1</code></dt><dd>至少一项命中风险门禁。复核对应组件的版本、运行实例与厂商回补。</dd>
+        <dt><code>2</code></dt><dd>出现参数或采集错误。查看错误输出并检查报告是否完整。</dd>
+        <dt><code>3</code></dt><dd>证据不足或覆盖不完整。检查权限、容器视图或平台支持。</dd>
+      </dl>
+      <p class="fine">同时出现多个状态时，批量模式优先返回 2，其次 1，再其次 3。请结合各专项退出码阅读报告。</p>
+    </section>
+  </div>
+
+  <section id="options" class="card">
+    <h2>专项参数</h2>
+    <p>常规巡检无需追加参数。需要缩小范围或补取证据时再选择以下命令。</p>
+    <details class="scan-options"><summary>只检查一个组件</summary>
+      <pre class="command-line"><code>bash x2shell-check.sh --java4shell --json
+bash x2shell-check.sh --nginx2root --json
+bash x2shell-check.sh --apache2root --json</code></pre>
+    </details>
+    <details class="scan-options"><summary>补查嵌入式 JDK 或非标准 NGINX 路径</summary>
+      <pre class="command-line"><code>bash x2shell-check.sh --java4shell --root /opt/my-service
+bash x2shell-check.sh --nginx2root --nginx-path /opt/nginx/sbin/nginx --nginx-config /opt/nginx/conf/nginx.conf</code></pre>
+      <p class="fine">将示例路径换成目标主机上的实际路径。达到递归深度上限时，Java 报告会记录覆盖缺口。</p>
+    </details>
+    <details class="scan-options"><summary>读取运行中 JVM 的生效参数</summary>
+      <pre class="command-line"><code>bash x2shell-check.sh --all --jcmd</code></pre>
+      <p class="fine">诊断附加需要已有 <code>jcmd</code>，仅尝试同用户 JVM，可能启动诊断监听器或短暂停顿 JVM。</p>
+    </details>
+  </section>
+
+  <section class="card tools-report">
+    <h2>核验 PHP 或导入扫描页</h2>
+    <p>Bash 报告供批量巡检留档。核验 PHP 或需要在网页关联业务 URL 时，使用 Rust <code>collect</code> 生成可导入的主机报告。</p>
     <div class="scan-links"><a href="/#host-report">返回扫描页采集报告</a><a href="https://github.com/crazyvv/x2shell-check/releases">Rust 发布包</a></div>
   </section>
 </main>

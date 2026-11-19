@@ -330,3 +330,33 @@ pre.command-line, pre.command-line code { white-space: pre-wrap; overflow-wrap: 
 .php-analysis > summary { cursor: pointer; color: var(--accent-strong); font-weight: 650; }
 .knowledge-detail-grid { margin-top: 12px; }
 .chain-grid h4 { margin: 2px 0 7px; font-size: 15px; }
+
+.tools-document { min-width: 0; }
+.tools-page { max-width: 1120px; }
+.tools-hero, .tools-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.tools-hero { background: var(--surface); align-items: center; padding: 26px; margin-bottom: 0; }
+.tools-hero h1 { font-size: clamp(25px, 4vw, 36px); }
+.tools-hero p { max-width: 42ch; }
+.tools-start { padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+.tool-download { display: inline-block; margin-top: 8px; padding: 9px 14px; border-radius: 7px; font-weight: 700; text-decoration: none; }
+.tool-download:hover { text-decoration: none; }
+.tool-copy-status { min-height: 1.55em; margin: 4px 0 0; }
+.tools-nav { margin: 8px 0 16px; }
+.tools-coverage { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.tools-coverage article { padding: 12px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; }
+.tools-coverage p { margin-bottom: 0; }
+.tools-columns { align-items: stretch; }
+.tools-columns > section, .tools-start { min-width: 0; }
+.tool-command { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0; }
+.tool-command pre { flex: 1; min-width: 0; margin: 0; }
+.tool-command button { flex: none; }
+.tool-exit-codes { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; }
+.tool-exit-codes dt, .tool-exit-codes dd { margin: 0; }
+.tool-exit-codes code { display: inline-block; padding: 2px 7px; border-radius: 5px; background: var(--accent-soft); font-weight: 700; }
+@media (max-width: 760px) {
+  .tools-document header { gap: 8px; flex-wrap: wrap; padding-inline: 16px; }
+  .tools-page { padding-inline: 12px; }
+  .tools-hero, .tools-columns, .tools-coverage { grid-template-columns: minmax(0, 1fr); }
+  .tools-hero { padding: 16px; }
+  .tools-columns { gap: 0; }
+}

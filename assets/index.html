@@ -1,11 +1,11 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>扫描工作台 · X2Shell Check</title><link rel="stylesheet" href="/style.css"><script src="/shared.js" defer></script><script src="/ui.js" defer></script></head>
-<body><header><div class="brand"><div>X2Shell Check</div></div><nav class="topnav"><span id="account">正在连接…</span><a href="/knowledge">漏洞知识库</a><a href="/tools">主机工具</a><a href="/admin">管理员入口</a></nav></header>
+<body><header><div class="brand"><div>X2Shell Check</div></div><nav class="topnav"><span id="account">正在连接…</span><a href="/knowledge">漏洞知识库</a><a href="/tools">Bash 主机巡检</a><a href="/admin">管理员入口</a></nav></header>
 <main>
 <section class="intro">
   <h1>服务暴露面扫描</h1>
   <p>批量检查业务入口，再用主机证据核对实际运行实例。</p>
-  <div class="scan-links"><a href="/tools">下载 Bash 脚本</a></div>
+  <div class="scan-links"><a href="/tools">获取 Bash 巡检脚本</a></div>
 </section>
 <div id="notice" role="status" aria-live="polite"></div>
 <section class="workspace"><article class="card input"><div class="cardtitle"><h2>批量扫描业务入口</h2></div><label for="targets">域名、IP 或完整 URL · 每行一个，最多 50 个</label><textarea id="targets" rows="7" spellcheck="false" placeholder="https://业务域名.example.com/&#10;http://业务IP:8080/"></textarea><p class="hint">不带协议默认 HTTPS。IP 多站点请使用业务域名；有权限限制时可提交真实业务路径。请求不携带你的登录凭据。</p><p class="toggle-row"><label><input id="headersOnly" type="checkbox"> 仅检查响应头（不读取页面、不跟随跳转）</label></p><details class="scan-options"><summary>PHP 专项可选检查</summary><p class="toggle-row"><label><input id="probeMultipart" type="checkbox" disabled> 小型 multipart 可达性检查（需要管理员允许，不上传文件）</label></p><p class="toggle-row"><label><input id="probeProgress" type="checkbox" disabled> 上传进度基础观察（需管理员允许；提交普通 .txt 文件，可能产生业务写入）</label></p></details><button id="scan" class="primary">开始自查 <span>→</span></button><p class="fine">不执行命令、不触发内存耗尽、不发送漏洞利用载荷。</p></article>

@@ -223,6 +223,10 @@ async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response> {
                 include_str!("../assets/shared.js"),
                 "text/javascript; charset=utf-8",
             )),
+            "/tools.js" => Some((
+                include_str!("../assets/tools.js"),
+                "text/javascript; charset=utf-8",
+            )),
             "/ui.js" => Some((
                 include_str!("../assets/ui.js"),
                 "text/javascript; charset=utf-8",
