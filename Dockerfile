@@ -4,6 +4,7 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src ./src
 COPY assets ./assets
 COPY rules ./rules
+COPY scripts/x2shell-check.sh ./scripts/x2shell-check.sh
 RUN cargo build --release --locked -j 4
 
 FROM debian:bookworm-slim

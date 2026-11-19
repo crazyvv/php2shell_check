@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>主机工具 · X2Shell Check</title><link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="mark">S</span><div>X2Shell Check<small>服务暴露面自查台</small></div></div>
+  <nav class="topnav"><a href="/">扫描页</a><a href="/knowledge">漏洞知识库</a><a href="/tools" aria-current="page">主机工具</a></nav>
+</header>
+<main class="knowledge">
+  <section class="card hero">
+    <h1>主机工具与下载</h1>
+    <p>将 Bash 脚本分发到目标主机执行。默认检查 Java4Shell、Nginx2Root 和 Apache2Root，无需指定目标或安装 Python。</p>
+    <div class="scan-links"><a href="/downloads/x2shell-check.sh" download>下载 x2shell-check.sh</a></div>
+  </section>
+  <section class="card">
+    <h2>Bash 批量巡检</h2>
+    <p>在每台目标主机运行，直接查看文本结果。</p>
+    <pre class="command-line"><code>bash x2shell-check.sh</code></pre>
+    <p>批量执行时可保存结构化结果。</p>
+    <pre class="command-line"><code>bash x2shell-check.sh --all --json &gt; host-audit.json</code></pre>
+    <p>可通过 <code>--java4shell</code>、<code>--nginx2root</code> 或 <code>--apache2root</code> 单独检查。<code>--all --jcmd</code> 显式启用 JVM 诊断附加。</p>
+    <p>在 Linux 上可使用 /proc 核对运行实例。权限不足、容器隔离或系统缺少 /proc 时，可用证据会减少。</p>
+  </section>
+  <section class="card">
+    <h2>Rust 主机报告</h2>
+    <p>需要核验 PHP 或上传主机报告时，在扫描页选择采集项，复制生成的命令到目标主机执行，再关联业务 URL 并导入 JSON。</p>
+    <pre class="command-line"><code>x2shell-check collect &gt; host-report.json</code></pre>
+    <p>Bash 的 <code>host-audit.json</code> 供批量巡检留档。扫描页接受 Rust 采集生成的主机报告。</p>
+    <div class="scan-links"><a href="/#host-report">返回扫描页采集报告</a><a href="https://github.com/crazyvv/x2shell-check/releases">Rust 发布包</a></div>
+  </section>
+</main>
+</body>
+</html>

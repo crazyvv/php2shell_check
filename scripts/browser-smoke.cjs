@@ -44,6 +44,25 @@ async function main(){
     await page.locator('#jobs').screenshot({path:path.join(output,'evidence.png')});
     await page.screenshot({path:path.join(output,'developer-page.png'),fullPage:true});
     await page.goto(base+'/knowledge');await page.locator('.chain-grid article').first().waitFor();assert.equal(await page.locator('.chain-grid article').count(),5);assert.equal(await page.locator('.chain-matrix tbody tr').count(),5);assert.equal(await page.locator('.evidence-rules>div').count(),6);assert.equal(await page.locator('.sources a').count(),8);for(const name of ['ANALYSIS.md','EXPLOITATION.md','PATCH_ANALYSIS.md'])assert(await page.getByRole('link',{name,exact:true}).isVisible());const knowledgeText=await page.locator('main').textContent();assert(knowledgeText.includes('不提供可执行载荷'));assert(knowledgeText.includes('Web／CLI 运行时'));assert(knowledgeText.includes('网络请求'));const runtimeBox=await page.locator('.runtime-card').boundingBox(),pocBox=await page.locator('.poc-card').boundingBox();assert(runtimeBox && pocBox);assert(Math.abs(runtimeBox.y-pocBox.y)<2);assert(pocBox.x>runtimeBox.x);await page.screenshot({path:path.join(output,'knowledge.png'),fullPage:true});
+    await page.goto(base);
+    const modules = page.locator('.module-grid a');
+    assert.equal(await modules.count(), 4);
+    for (const link of await modules.all()) {
+      const href = await link.getAttribute('href');
+      await link.click();
+      await page.locator(href.slice(href.indexOf('#'))).waitFor();
+      await page.goto(base);
+    }
+    await page.getByRole('link', {name: '主机工具', exact: true}).click();
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('link', {name: '下载 x2shell-check.sh', exact: true}).click(),
+    ]);
+    assert.equal(download.suggestedFilename(), 'x2shell-check.sh');
+    const script = fs.readFileSync(await download.path());
+    assert.deepEqual(script, fs.readFileSync(path.join(__dirname, 'x2shell-check.sh')));
+    await page.getByRole('link', {name: '返回扫描页采集报告'}).click();
+    await page.locator('#host-report').waitFor();
     await page.goto(base+'/admin');await page.locator('#adminUser').fill('admin');await page.locator('#adminPassword').fill(password);await page.locator('#loginButton').click();
     await page.waitForFunction(()=>document.getElementById('rulesMeta').textContent.includes('修订 0'));
     await page.locator('#rulesVersion').fill('browser-ui-1');await page.locator('#rulesVersion').press('Tab');await page.locator('#ruleSelect').selectOption('wordpress');await page.locator('#ruleToggle').click();
@@ -86,7 +105,7 @@ async function main(){
     await page.screenshot({path:path.join(output,'administrator-dashboard.png'),fullPage:true});
     const developer=await context.newPage();await developer.goto(base);await developer.waitForFunction(()=>!document.getElementById('probeProgress').disabled);assert(!(await developer.locator('#probeProgress').isChecked()));assert(!(await developer.locator('#probeMultipart').isDisabled()));assert(await developer.locator('#collectPhpCommand').isChecked());assert(await developer.locator('#collectJavaCommand').isChecked());await developer.close();
     await page.locator('#logout').click();await page.locator('#loginPanel').waitFor();assert.equal(await page.locator('#rulesDocument').inputValue(),'');assert.equal(await page.locator('#settingsDocument').inputValue(),'');
-    assert.deepEqual(errors,[]);fs.writeFileSync(path.join(output,'browser-result.json'),JSON.stringify({state:'passed',checks:['java4shell-passive-and-host-evidence','desktop-density-and-palette','desktop-knowledge-grid','evidence-fonts-colors','text-only-rendering','knowledge-page-attribution','runtime-report-comparison','rule-edit-validation-save','live-activation','conflict-preserves-draft','logout-cleanup','passive-surface-clues','settings-import-validation-save','settings-live-policy','settings-conflict-preserves-draft','progress-permissions-and-defaults'],evidence_style:style},null,2));console.log('Browser smoke passed: Java4Shell evidence, desktop layout, knowledge page, rule editor, settings and policy checks.');
+    assert.deepEqual(errors,[]);fs.writeFileSync(path.join(output,'browser-result.json'),JSON.stringify({state:'passed',checks:['java4shell-passive-and-host-evidence','desktop-density-and-palette','desktop-knowledge-grid','module-links-and-script-download','evidence-fonts-colors','text-only-rendering','knowledge-page-attribution','runtime-report-comparison','rule-edit-validation-save','live-activation','conflict-preserves-draft','logout-cleanup','passive-surface-clues','settings-import-validation-save','settings-live-policy','settings-conflict-preserves-draft','progress-permissions-and-defaults'],evidence_style:style},null,2));console.log('Browser smoke passed: Java4Shell evidence, desktop layout, knowledge page, rule editor, settings and policy checks.');
   }finally{
     if(browser)await browser.close();
     if(processHandle && processHandle.exitCode===null){processHandle.kill('SIGTERM');await Promise.race([new Promise(resolve=>processHandle.once('exit',resolve)),sleep(5000)]);if(processHandle.exitCode===null)processHandle.kill('SIGKILL');}

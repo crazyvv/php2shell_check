@@ -1709,3 +1709,38 @@ async fn knowledge_page_is_public_attributed_and_non_operational() {
         assert!(!body.contains("system()"));
     }
 }
+
+#[tokio::test]
+async fn host_tools_page_serves_the_bundled_bash_scanner() {
+    let p = Portal::new().await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for path in ["/tools", "/tools/"] {
+        let page = client
+            .get(format!("{}{path}", p.base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(page.status(), 200);
+        assert!(
+            page.text()
+                .await
+                .unwrap()
+                .contains("/downloads/x2shell-check.sh")
+        );
+    }
+    let script = client
+        .get(format!("{}/downloads/x2shell-check.sh", p.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(script.status(), 200);
+    assert_eq!(script.headers()["content-type"], "application/octet-stream");
+    assert_eq!(
+        script.headers()["content-disposition"],
+        "attachment; filename=\"x2shell-check.sh\""
+    );
+    assert_eq!(
+        script.bytes().await.unwrap().as_ref(),
+        include_bytes!("../scripts/x2shell-check.sh").as_slice()
+    );
+}

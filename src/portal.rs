@@ -198,7 +198,23 @@ async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response> {
         return Ok(error(403, "Host 不在允许范围"));
     }
     if req.method() == axum::http::Method::GET {
+        if req.uri().path() == "/downloads/x2shell-check.sh" {
+            let mut download = response(
+                200,
+                include_bytes!("../scripts/x2shell-check.sh").as_slice(),
+                "application/octet-stream",
+            );
+            download.headers_mut().insert(
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"x2shell-check.sh\"".parse()?,
+            );
+            return Ok(download);
+        }
         let asset = match req.uri().path() {
+            "/tools" | "/tools/" => Some((
+                include_str!("../assets/tools.html"),
+                "text/html; charset=utf-8",
+            )),
             "/knowledge" | "/knowledge/" => Some((
                 include_str!("../assets/knowledge.html"),
                 "text/html; charset=utf-8",

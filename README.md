@@ -15,6 +15,8 @@
 
 ## 下载与运行
 
+Web 服务启动后，在扫描页打开「主机工具」（`/tools`）即可下载随当前服务打包的 `x2shell-check.sh`。无参执行默认巡检 Java4Shell、Nginx2Root 和 Apache2Root。PHP 核验及网页导入使用 Rust 生成的主机报告。
+
 从 [GitHub Releases](https://github.com/crazyvv/x2shell-check/releases) 下载与系统匹配的程序包：Windows x86_64 使用 ZIP，Linux x86_64 使用 musl 静态构建的 tar.gz。解压后阅读 `START-HERE.txt`，使用同一 Release 的 `SHA256SUMS` 校验文件。
 
 Windows 在 PowerShell 中执行 `./x2shell-check.exe`，Linux 执行 `./x2shell-check`。两者都支持 Web 服务和 URL 检查，`collect` 主机采集仅支持 Linux。Linux 的 HTTPS 请求需要系统 CA 证书；Windows 如提示缺少运行库，安装微软官方 Visual C++ 2015–2022 Redistributable x64。

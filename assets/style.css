@@ -67,20 +67,10 @@ a { color: var(--accent-strong); text-decoration: none; }
 a:hover { text-decoration: underline; }
 code { font: 12px/1.55 ui-monospace, "Cascadia Code", Consolas, monospace; }
 
-.intro {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(250px, auto);
-  grid-template-rows: auto auto auto;
-  column-gap: 34px;
-  align-items: end;
-  padding: 5px 2px 20px;
-}
-.intro .eyebrow, .intro h1, .intro > p { grid-column: 1; }
+.intro { padding: 5px 2px 20px; }
 .intro h1 { margin: 5px 0 3px; }
 .intro > p { max-width: 720px; margin: 3px 0; color: var(--muted); }
 .eyebrow { color: var(--accent); font: 750 10px/1.4 ui-monospace, "Cascadia Code", Consolas, monospace; letter-spacing: 1.4px; text-transform: uppercase; }
-.chips { grid-column: 2; grid-row: 1 / 4; display: flex; justify-content: flex-end; align-content: center; flex-wrap: wrap; gap: 6px; max-width: 380px; }
-.chips span { padding: 4px 9px; border: 1px solid #d8e2f5; border-radius: 999px; background: var(--accent-soft); color: #344b80; font-size: 11px; white-space: nowrap; }
 
 .workspace { display: grid; grid-template-columns: minmax(0, 1.32fr) minmax(340px, .68fr); gap: 16px; }
 .card {
@@ -288,4 +278,32 @@ footer { display: flex; justify-content: space-between; gap: 20px; padding: 2px 
   .card { break-inside: avoid; box-shadow: none; }
   .evidence-summary, .technology-proof, .next-step { border-left-width: 4px; }
   .evidence-mark { font-weight: 900; text-decoration: underline; }
+}
+
+.module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+}
+.module-grid .card { margin: 0; color: var(--ink); }
+.module-grid .card:hover { border-color: var(--accent); text-decoration: none; }
+.module-grid h2 { margin: 0 0 6px; font-size: 17px; }
+.module-grid p { margin: 0; color: var(--muted); }
+.scan-links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.scan-links a {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 650;
+}
+.scan-links span { color: var(--muted); font-size: 12px; }
+.scan-options { margin: 12px 0; }
+.scan-options summary { cursor: pointer; color: var(--accent-strong); font-weight: 650; }
+pre.command-line, pre.command-line code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.topnav { flex-wrap: wrap; }
+
+@media (max-width: 720px) {
+  .workspace, .knowledge { grid-template-columns: minmax(0, 1fr); }
 }
