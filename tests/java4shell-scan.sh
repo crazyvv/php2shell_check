@@ -173,6 +173,7 @@ if [[ $OS == Linux ]]; then
         jcmd_flags() { printf 'true 3'; }
         jcmd_version() { printf '%s' "${fixture_runtime_version:-21.0.13.1+4}"; }
         container_hint() { return 0; }
+        declare -f emit_finding > "$fixture/emit-finding"
         emit_finding() { printf '%s %s %s\n' "$1" "$3" "$8"; }
         scan_processes > "$fixture/pid-report"
         grep -Fxq "pid:$$ not_affected 21.0.13.1+4" "$fixture/pid-report"
@@ -209,5 +210,27 @@ if [[ $OS == Linux ]]; then
         fixture_flags='-XX:UseAVX=2'
         scan_processes > "$fixture/pid-report"
         grep -q '^mitigated false .*显式信任' "$fixture/pid-report"
+
+        source "$fixture/emit-finding"
+        PID_ARGS=("$second")
+        FIND_FILE="$fixture/weak-findings"
+        WARN_FILE="$fixture/weak-warnings"
+        APP_FILE="$fixture/weak-apps"
+        MODE_NAME=processes-only
+        : > "$FIND_FILE"; : > "$WARN_FILE"; : > "$APP_FILE"; : > "$ACTIVE_FILE"
+        scan_processes
+        [[ ! -s $ACTIVE_FILE ]]
+        report_json > "$fixture/weak.json"
+        grep -Fq '"kind": "process", "status": "potential"' "$fixture/weak.json"
+        grep -Fq '"version": "", "java_home":' "$fixture/weak.json"
+        grep -Fq '"identity_confidence": "weak"' "$fixture/weak.json"
+        grep -Fq '"disk_evidence": {"version": "21.0.13+9", "vendor": "OpenJDK", "product": "OpenJDK", "build_assessment": "unfixed"}' "$fixture/weak.json"
+        grep -Fq '发现受影响的磁盘构建' "$fixture/weak.json"
+        report_csv > "$fixture/weak.csv"
+        grep -Fq 'identity_confidence,disk_version,disk_vendor,disk_product,disk_build_assessment' "$fixture/weak.csv"
+        grep -Fq '"weak","21.0.13+9","OpenJDK","OpenJDK","unfixed"' "$fixture/weak.csv"
+        DETAILS=1
+        report_txt > "$fixture/weak.txt"
+        grep -Fq '21.0.13+9 · OpenJDK / OpenJDK' "$fixture/weak.txt"
     )
 fi

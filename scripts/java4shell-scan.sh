@@ -749,10 +749,11 @@ make_reason() {
 }
 
 # ---------------------------------------------------------------------------
-# 资产记录：写入 FIND_FILE（17 列，tab 分隔）
+# 资产记录：写入 FIND_FILE（以 ASCII 单元分隔符分隔）
 #  1 id 2 kind 3 status 4 reason 5 build 6 build_evidence 7 cpu
 #  8 version 9 java_home 10 vendor 11 product 12 vm 13 arch
 #  14 flags 15 flags_effective 16 container 17 notes
+#  18 identity_confidence 19 disk_version 20 disk_vendor 21 disk_product 22 disk_build
 # ---------------------------------------------------------------------------
 emit_finding() {
     local id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes
@@ -773,10 +774,17 @@ emit_finding() {
     feff=$(san_field "${15:-}")
     container=$(san_field "${16:-}")
     notes=$(san_field "${17:-}")
+    local identity_confidence disk_hint_version disk_hint_vendor disk_hint_product disk_hint_build
+    identity_confidence=$(san_field "${18:-}")
+    disk_hint_version=$(san_field "${19:-}")
+    disk_hint_vendor=$(san_field "${20:-}")
+    disk_hint_product=$(san_field "${21:-}")
+    disk_hint_build=$(san_field "${22:-}")
 
-    printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\n' \
+    printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\n' \
         "$id" "$kind" "$status" "$reason" "$build" "$bevid" "$cpu" "$version" \
         "$jhome" "$vendor" "$product" "$vm" "$arch" "$flags" "$feff" "$container" "$notes" \
+        "$identity_confidence" "$disk_hint_version" "$disk_hint_vendor" "$disk_hint_product" "$disk_hint_build" \
         >> "$FIND_FILE"
 }
 
@@ -1081,6 +1089,7 @@ scan_processes() {
     local measured_state assumed_state b64 eavx reported_version
     local bevid_and_build verify_problem libmeta2 libmeta3 jc jcf vmname vmtext
     local runtime_version disk_version version_conflict weak_identity
+    local identity_confidence disk_hint_version disk_hint_vendor disk_hint_product disk_hint_build
 
     local pidlist
     if [ ${#PID_ARGS[@]} -gt 0 ]; then
@@ -1328,6 +1337,16 @@ scan_processes() {
                     fi
                 fi ;;
         esac
+        identity_confidence=strong
+        [ "$weak_identity" -eq 0 ] || identity_confidence=weak
+        disk_hint_version="" disk_hint_vendor="" disk_hint_product="" disk_hint_build=""
+        if [ "$weak_identity" -eq 1 ] || [ "$version_conflict" -eq 1 ]; then
+            disk_hint_version=$disk_version
+            disk_hint_vendor=$vendor
+            disk_hint_product=$product
+            disk_hint_build=$build
+        fi
+
         if [ "$version_conflict" -eq 1 ]; then
             status=unknown
             reason="jcmd 自报运行构建与磁盘 release 不一致"
@@ -1338,6 +1357,9 @@ scan_processes() {
         elif [ "$weak_identity" -eq 1 ]; then
             status=potential
             reason="运行库身份未核实：inode 相同、设备号不同，磁盘构建仅供参考"
+            if [ "$disk_hint_build" = unfixed ]; then
+                reason="$reason；发现受影响的磁盘构建"
+            fi
             build=candidate
             bevid=$reason
             version=$runtime_version
@@ -1359,7 +1381,8 @@ scan_processes() {
 
         emit_finding "pid:$pid" "process" "$status" "$reason" "$build" "$bevid" \
             "$cpu" "$version" "$root_disp" "$vendor" "$product" "$vm" "$arch" \
-            "$flags" "$feff" "$container" "$NOTES"
+            "$flags" "$feff" "$container" "$NOTES" \
+            "$identity_confidence" "$disk_hint_version" "$disk_hint_vendor" "$disk_hint_product" "$disk_hint_build"
     done <<< "$pidlist"
 }
 
@@ -1607,7 +1630,7 @@ txt_header() {
 
 report_txt() {
     local total affected potential mitigated notaffected unknown
-    local id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes
+    local id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes identity_confidence disk_hint_version disk_hint_vendor disk_hint_product disk_hint_build
 
     total=$(total_count)
     affected=$(status_count affected)
@@ -1637,7 +1660,7 @@ report_txt() {
     fi
 
     if [ "$DETAILS" -eq 0 ]; then
-        while IFS=$'\037' read -r id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes; do
+        while IFS=$'\037' read -r id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes identity_confidence disk_hint_version disk_hint_vendor disk_hint_product disk_hint_build; do
             case $status in
                 affected|potential|unknown)
                     printf '  %s  %s\n' "$(status_label "$status")" "$(brief_name "$id" "$kind" "$version")" ;;
@@ -1656,13 +1679,17 @@ report_txt() {
     fi
 
     # ---- 详细模式 ----
-    while IFS=$'\037' read -r id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes; do
+    while IFS=$'\037' read -r id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes identity_confidence disk_hint_version disk_hint_vendor disk_hint_product disk_hint_build; do
         printf '\n=== %s [%s]\n' "$id" "$kind"
         printf '  状态      : %s（构建判定: %s；CPU: %s）\n' "$(status_label "$status")" "$(build_label "$build")" "$cpu"
         printf '  版本      : %s\n' "${version:-未知}"
         printf '  厂商/产品 : %s / %s\n' "${vendor:-未知}" "${product:-未知}"
         printf '  VM/架构   : %s / %s\n' "${vm:-未知}" "${arch:-未知}"
         printf '  Java Home : %s\n' "${jhome:-—}"
+        if [ -n "$disk_hint_build" ]; then
+            printf '  磁盘证据  : %s · %s / %s · %s（仅供参考）\n' \
+                "${disk_hint_version:-未知}" "${disk_hint_vendor:-未知}" "${disk_hint_product:-未知}" "$(build_label "$disk_hint_build")"
+        fi
         [ -n "$flags" ] && printf '  启动参数  : %s（有效率: %s）\n' "$flags" "$feff"
         [ -n "$container" ] && printf '  容器线索  : %s\n' "$container"
         printf '  依据      : %s\n' "${reason:-—}"
@@ -1712,7 +1739,7 @@ json_notes() {
 }
 
 report_json() {
-    local id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes
+    local id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes identity_confidence disk_hint_version disk_hint_vendor disk_hint_product disk_hint_build
     local first=1 total affected potential mitigated notaffected unknown apps
 
     total=$(total_count)
@@ -1747,7 +1774,7 @@ report_json() {
 
     printf '  "findings": [\n'
     first=1
-    while IFS=$'\037' read -r id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes; do
+    while IFS=$'\037' read -r id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes identity_confidence disk_hint_version disk_hint_vendor disk_hint_product disk_hint_build; do
         [ -n "$id" ] || continue
         [ "$first" -eq 1 ] || printf ',\n'
         first=0
@@ -1757,8 +1784,17 @@ report_json() {
             "$(jstr "$build")" "$(jstr "$bevid")" "$(jstr "$cpu")"
         printf '"version": %s, "java_home": %s, "vendor": %s, "product": %s, "vm": %s, "arch": %s, ' \
             "$(jstr "$version")" "$(jstr "$jhome")" "$(jstr "$vendor")" "$(jstr "$product")" "$(jstr "$vm")" "$(jstr "$arch")"
-        printf '"flags": %s, "flags_effective": %s, "container": %s, "notes": %s}' \
+        printf '"flags": %s, "flags_effective": %s, "container": %s, "notes": %s' \
             "$(jstr "$flags")" "${feff:-false}" "$(jstr "$container")" "$(json_notes "$notes")"
+        if [ -n "$identity_confidence" ]; then
+            printf ', "identity_confidence": %s' "$(jstr "$identity_confidence")"
+        fi
+        if [ -n "$disk_hint_build" ]; then
+            printf ', "disk_evidence": {"version": %s, "vendor": %s, "product": %s, "build_assessment": %s}' \
+                "$(jstr "$disk_hint_version")" "$(jstr "$disk_hint_vendor")" \
+                "$(jstr "$disk_hint_product")" "$(jstr "$disk_hint_build")"
+        fi
+        printf '}'
     done < "$FIND_FILE"
     printf '\n  ],\n'
 
@@ -1793,13 +1829,14 @@ csv_line() {
 }
 
 report_csv() {
-    local id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes
-    printf '%s\n' "cve,rules_as_of,mode,id,kind,status,reason,build_assessment,build_evidence,cpu_assessment,version,java_home,vendor,product,vm,arch,cpu_state,cpu_source,patch,patch_ref,flags,flags_effective,container,notes"
-    while IFS=$'\037' read -r id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes; do
+    local id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes identity_confidence disk_hint_version disk_hint_vendor disk_hint_product disk_hint_build
+    printf '%s\n' "cve,rules_as_of,mode,id,kind,status,reason,build_assessment,build_evidence,cpu_assessment,version,java_home,vendor,product,vm,arch,cpu_state,cpu_source,patch,patch_ref,flags,flags_effective,container,notes,identity_confidence,disk_version,disk_vendor,disk_product,disk_build_assessment"
+    while IFS=$'\037' read -r id kind status reason build bevid cpu version jhome vendor product vm arch flags feff container notes identity_confidence disk_hint_version disk_hint_vendor disk_hint_product disk_hint_build; do
         [ -n "$id" ] || continue
         csv_line "$CVE" "$RULES_AS_OF" "$MODE_NAME" "$id" "$kind" "$status" "$reason" \
             "$build" "$bevid" "$cpu" "$version" "$jhome" "$vendor" "$product" "$vm" "$arch" \
-            "$CPU_STATE" "$CPU_SOURCE" "" "" "$flags" "$feff" "$container" "$notes"
+            "$CPU_STATE" "$CPU_SOURCE" "" "" "$flags" "$feff" "$container" "$notes" \
+            "$identity_confidence" "$disk_hint_version" "$disk_hint_vendor" "$disk_hint_product" "$disk_hint_build"
         printf '\n'
     done < "$FIND_FILE"
 }
@@ -1808,7 +1845,7 @@ report_apps_csv() {
     local id kind path
     while IFS=$'\037' read -r id kind path; do
         [ -n "$id" ] || continue
-        csv_line "$CVE" "$RULES_AS_OF" "$MODE_NAME" "$path" "app" "inventory" "$kind" "-" "-" "-" "" "$path" "" "" "" "" "$CPU_STATE" "$CPU_SOURCE" "" "" "" "false" "" "$id"
+        csv_line "$CVE" "$RULES_AS_OF" "$MODE_NAME" "$path" "app" "inventory" "$kind" "-" "-" "-" "" "$path" "" "" "" "" "$CPU_STATE" "$CPU_SOURCE" "" "" "" "false" "" "$id" "" "" "" "" ""
         printf '\n'
     done < "$APP_FILE"
 }
