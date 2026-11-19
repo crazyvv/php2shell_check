@@ -54,7 +54,8 @@ const TENGINE: &str = "https://github.com/alibaba/tengine/blob/3.2.0-rc5/src/cor
 const INGRESS: &str = "https://docs.nginx.com/nginx-ingress-controller/releases/";
 const PLUS_RELEASES: &str = "https://docs.nginx.com/nginx/releases/";
 const OPENRESTY_125: &str = "https://openresty.org/en/changelog-1025003.html";
-const SOURCES: [&str; 7] = [
+const OPENRESTY_127: &str = "https://openresty.org/en/changelog-1027001.html";
+const SOURCES: [&str; 8] = [
     ADVISORY,
     CERT,
     OPENRESTY,
@@ -62,6 +63,7 @@ const SOURCES: [&str; 7] = [
     INGRESS,
     PLUS_RELEASES,
     OPENRESTY_125,
+    OPENRESTY_127,
 ];
 
 fn plus_version(value: &str) -> Option<[u32; 4]> {
@@ -108,6 +110,7 @@ impl Product {
             .or_else(|| match (flavor, self.version.as_deref()) {
                 ("openresty", Some("1.31.8.1")) => Some("1.31.8"),
                 ("openresty", Some("1.25.3.1")) => Some("1.25.3"),
+                ("openresty", Some("1.27.1.2")) => Some("1.27.1"),
                 ("tengine", Some("3.2.0-rc5")) => Some("1.31.5"),
                 _ => None,
             });
@@ -131,6 +134,9 @@ impl Product {
                 let vendor_reference = matches!(release, Some("37.0.8.1" | "37.3.0.1"))
                     || (row["cve"] == "CVE-2026-123633"
                         && matches!(release, Some("37.0.7.1" | "37.2.0.1")));
+                if vendor_reference {
+                    row["reference"] = json!(PLUS_RELEASES);
+                }
                 row["status"] = json!(if vendor_reference {
                     "meets_vendor_reference"
                 } else if affected {
@@ -344,7 +350,6 @@ fn config_from_words<'a>(
 
 #[cfg(target_os = "linux")]
 fn layout_config(binary: &std::path::Path) -> Option<std::path::PathBuf> {
-    use std::path::Path;
     if !binary.is_absolute() {
         return None;
     }
@@ -353,9 +358,6 @@ fn layout_config(binary: &std::path::Path) -> Option<std::path::PathBuf> {
         return None;
     }
     let prefix = directory.parent()?;
-    if prefix == Path::new("/usr") || prefix == Path::new("/usr/local") {
-        return None;
-    }
     let config = prefix.join("conf/nginx.conf");
     config.is_file().then_some(config)
 }
@@ -624,7 +626,9 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
             path::Path,
         };
         let mut paths = BTreeSet::new();
-        paths.extend(explicit.map(std::path::Path::to_path_buf));
+        paths.extend(
+            explicit.map(|path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())),
+        );
         paths.extend(
             ["nginx", "openresty", "tengine"]
                 .into_iter()
@@ -732,10 +736,22 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
                 }
                 let mut row = product.report();
                 row["path"] = json!(path);
-                if let Some(config) = layout_config(path) {
+                let system = path == Path::new("/usr/sbin/nginx")
+                    && product.flavor == Some("nginx")
+                    && Path::new("/etc/nginx/nginx.conf").is_file();
+                let config = if system {
+                    Some("/etc/nginx/nginx.conf".into())
+                } else {
+                    layout_config(path)
+                };
+                if let Some(config) = config {
                     row["configuration_entry"] = json!(config);
                     row["configuration"] = config_hints([config]);
-                    row["configuration_entry_source"] = json!("installation_layout");
+                    row["configuration_entry_source"] = json!(if system {
+                        "system_layout"
+                    } else {
+                        "installation_layout"
+                    });
                 }
                 Some(row)
             })
@@ -831,7 +847,7 @@ pub(crate) fn sanitize_host(raw: &Value) -> Value {
             row["disk_identity_matched"] = json!(item["disk_identity_matched"].as_bool());
             row["configuration_entry"] = json!(item["configuration_entry"].as_str().map(|p|p.chars().take(400).collect::<String>()));
             row["configuration_entry_source"] = json!(item["configuration_entry_source"].as_str()
-                .filter(|source| matches!(*source, "installation_layout" | "process_argument")));
+                .filter(|source| matches!(*source, "system_layout" | "installation_layout" | "process_argument")));
             if item["configuration"].is_object() {
                 row["configuration"] = sanitize_configuration(&item["configuration"]);
             }

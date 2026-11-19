@@ -98,7 +98,7 @@ function nginx2rootView(n) {
     const core = row.embedded_nginx_version && row.embedded_nginx_version !== release ? ' · 内嵌 NGINX '+row.embedded_nginx_version : '';
     box.append(node('p',`${row.pid ? 'PID '+row.pid+' · ' : ''}${product} ${release}${core}${row.path ? ' · '+row.path : ''}`,'fine'));
     if(row.package_evidence?.version)box.append(node('p',`软件包 ${row.package_evidence.name || ''} ${row.package_evidence.version} · 回补待核验`,'fine'));
-    if(row.configuration_entry)box.append(node('p',(row.configuration_entry_source==='installation_layout'?'安装布局配置入口 · ':'进程配置入口 · ')+row.configuration_entry,'fine'));
+    if(row.configuration_entry)box.append(node('p',(row.configuration_entry_source!=='process_argument'?'安装布局配置入口 · ':'进程配置入口 · ')+row.configuration_entry,'fine'));
     for(const item of (row.configuration?.evidence || []).slice(0,8)){
       box.append(node('p',`${item.hint} · ${item.file}:${item.line}`,'fine'));
     }

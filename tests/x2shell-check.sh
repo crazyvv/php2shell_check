@@ -289,7 +289,7 @@ NGINX
         > "$fixture/nginx-plus.json" || nginx_rc=$?
     [[ $nginx_rc == 1 || $nginx_rc == 3 ]]
     grep -Fq '"flavor":"plus","plus_release":"","plus_release_unresolved":true' "$fixture/nginx-plus.json"
-    grep -Eq '"unknown_condition_not_observed":([5-9]|[1-9][0-9]+)}' "$fixture/nginx-plus.json"
+    grep -Eq '"unknown_condition_not_observed":([5-9]|[1-9][0-9]+),' "$fixture/nginx-plus.json"
     mkdir "$fixture/sites"
     printf '%s\n' 'include sites/*.conf;' 'include missing.conf;' > "$fixture/entry.conf"
     printf '%s\n' '# header' 'http2 on;' 'include entry.conf;' > "$fixture/sites/site.conf"
@@ -305,9 +305,13 @@ NGINX
     printf '\177ELF openresty/1.31.8.1' > "$fixture/openresty/nginx/sbin/nginx"
     printf 'http2 on;\n' > "$fixture/openresty/nginx/conf/nginx.conf"
     nginx_rc=0
-    "$scanner" --nginx2root --nginx-path "$fixture/openresty/nginx/sbin/nginx" --json > "$fixture/layout.json" || nginx_rc=$?
+    (cd "$fixture" && "$scanner" --nginx2root --nginx-path ./openresty/nginx/sbin/nginx --json) > "$fixture/layout.json" || nginx_rc=$?
     [[ $nginx_rc == 1 ]]
     grep -Fq '"configuration_entry_source":"installation_layout"' "$fixture/layout.json"
+    refs=$(nginx2root_reference 1.31.8 '' nginx)
+    [[ $refs == *'"config_evidence":"configuration_not_attributed","missing_disk_hints":null'* ]]
+    refs=$(nginx2root_reference '' '' plus 37.3.0.1)
+    [[ $refs == *'"reference":"https://docs.nginx.com/nginx/releases/"'* ]]
     nginx_rc=0
     "$scanner" --nginx2root --nginx-path "$fixture/openresty/nginx/sbin/nginx" --nginx-config "$fixture/missing" --json > "$fixture/incomplete.json" || nginx_rc=$?
     [[ $nginx_rc == 1 ]]
