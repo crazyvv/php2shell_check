@@ -1956,8 +1956,10 @@ nginx_config_evidence() {
 
 nginx_plus_reference() {
     local version=$1
+    [[ $version =~ ^[0-9]+([.][0-9]+){0,3}(-p[0-9]+)?$ ]] || { printf unknown; return; }
+    version=${version%%-p*}
     case $version in
-        34|35|36) printf potential; return ;;
+        34|35|36|37) printf potential; return ;;
         37.*)
             if { vge "$version" 37.0.0 && vle "$version" 37.0.7.1; } ||
                { vge "$version" 37.1.0 && vle "$version" 37.2.0.1; }; then
@@ -2389,7 +2391,7 @@ nginx2root_scan() {
     local format=txt explicit="" installed path proc pid id current raw matched
     local seen=' ' rows=0 comma= gate=0 unknown=0 total=0 config_report sctp_report package_hint
     local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root metadata flavor plus
-    local index package_count=0
+    local index package_count=0 condition_not_observed=0
     local -a package_ids=() package_values=()
     local -a config_paths=()
     while (($#)); do
@@ -2423,18 +2425,22 @@ nginx2root_scan() {
 
     nginx2root_row() {
         local kind=$1 pid=$2 path=$3 raw=$4 matched=$5 package_hint=${6:-null} image_state=$7
-        local references
+        local references missing_count plus_unresolved=false
         references=$(nginx2root_reference "$raw" "$config_report" "$flavor" "$plus")
+        [[ $flavor != plus || -n $plus ]] || plus_unresolved=true
+        missing_count=$(awk -F '}' '{for (i=1;i<=NF;i++) if ($i ~ /"status":"potential"/ && $i ~ /"config_evidence":"condition_not_observed"/) n++} END {print n+0}' <<< "$references")
+        condition_not_observed=$((condition_not_observed + missing_count))
         case $references in *'"status":"potential"'*) gate=1 ;; esac
         case $references in *'"status":"unknown"'*) unknown=1 ;; esac
         total=$((total + 1))
         if [ "$format" = json ]; then
-            printf '%s{"kind":"%s","pid":%s,"path":%s,"version":%s,"disk_identity_matched":%s,"disk_identity_status":"%s","flavor":"%s","plus_release":%s,"cves":' \
-                "$comma" "$kind" "$(jstr "$pid")" "$(jstr "$(san_field "$path")")" "$(jstr "$raw")" "$matched" "$image_state" "$flavor" "$(jstr "$plus")"
+            printf '%s{"kind":"%s","pid":%s,"path":%s,"version":%s,"disk_identity_matched":%s,"disk_identity_status":"%s","flavor":"%s","plus_release":%s,"plus_release_unresolved":%s,"cves":' \
+                "$comma" "$kind" "$(jstr "$pid")" "$(jstr "$(san_field "$path")")" "$(jstr "$raw")" "$matched" "$image_state" "$flavor" "$(jstr "$plus")" "$plus_unresolved"
             printf '%s,"package_evidence":%s}' "$references" "$package_hint"
             comma=,
         else
             printf '%s %s %q · NGINX %s · 磁盘身份 %s\n' "$kind" "$pid" "$path" "${raw:-未知}" "$image_state"
+            if [[ $flavor == plus ]]; then printf 'NGINX Plus 发行标识 · %s\n' "${plus:-未解析}"; fi
             printf '%s\n' "$references"
             [ "$package_hint" = null ] || printf '软件包线索: %s\n' "$package_hint"
         fi
@@ -2492,9 +2498,10 @@ nginx2root_scan() {
         nginx2root_row installation "" "$path" "$raw" null "${package_hint:-null}" not_applicable
     done
     if [ "$format" = json ]; then
-        printf '],"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d}}\n' "$proc_limit" "$unresolved"
+        printf '],"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d},"summary":{"condition_not_observed":%d}}\n' "$proc_limit" "$unresolved" "$condition_not_observed"
     else
         printf '进程覆盖 · 达到上限 %s · 证据不完整 %s\n' "$proc_limit" "$unresolved"
+        printf '版本命中但缺少必要磁盘线索 · %d 项（按发现行和 CVE 计）\n' "$condition_not_observed"
     fi
     if [ "$gate" -eq 1 ]; then return 1; fi
     if [ "$unknown" -eq 1 ] || [ "$total" -eq 0 ] || web_coverage_incomplete "$proc_limit" "$unresolved" "$config_report"; then return 3; fi

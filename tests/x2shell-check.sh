@@ -264,11 +264,22 @@ NGINX
     [[ $(nginx2root_binary_metadata "$fixture/nginx-elf") == '1.27.4|plus|37.0.7.1' ]]
     printf '\177ELF nginx/1.27.4 nginx/1.27.5 openresty' > "$fixture/nginx-elf"
     [[ $(nginx2root_binary_metadata "$fixture/nginx-elf") == '|openresty|' ]]
-    [[ $(nginx_plus_reference 37.2.0.1) == potential ]]
+    for plus_release in 36-p1 37-p1 37 37.0.7.1-p2 37.2.0.1; do
+        [[ $(nginx_plus_reference "$plus_release") == potential ]]
+    done
+    [[ $(nginx_plus_reference 37.2.0.2-p1) == unknown ]]
+    [[ $(nginx_plus_reference 37-pbad) == unknown ]]
     [[ $(nginx_plus_reference 37.2.0.2) == unknown ]]
     refs=$(nginx2root_reference 1.25.0 '{"http2_on":true}')
     [[ $refs == *'"feature":"http2","config_evidence":"disk_hints_present","missing_disk_hints":[]'* ]]
     [[ $refs == *'"feature":"http2_upstream","config_evidence":"condition_not_observed","missing_disk_hints":["upstream"]'* ]]
+    printf '\177ELF nginx/1.27.4 nginx-plus' > "$fixture/nginx-elf"
+    nginx_rc=0
+    "$scanner" --nginx2root --nginx-path "$fixture/nginx-elf" --nginx-config "$fixture/nginx.conf" --json \
+        > "$fixture/nginx-plus.json" || nginx_rc=$?
+    [[ $nginx_rc == 1 || $nginx_rc == 3 ]]
+    grep -Fq '"flavor":"plus","plus_release":"","plus_release_unresolved":true' "$fixture/nginx-plus.json"
+    grep -Fq '"summary":{"condition_not_observed":' "$fixture/nginx-plus.json"
     web_coverage_incomplete false 0 '{"skipped":1}'
     ! web_coverage_incomplete false 0 '{"skipped":0}'
     (
