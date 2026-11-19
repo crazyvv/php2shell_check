@@ -56,7 +56,9 @@ NGINX 和 Apache 的 Bash 检查补充了运行映像身份、配置线索与覆
 
 Rust 主机采集新增 `collect --all --fail-on-risk` 批量门禁、NGINX 和 Apache 自定义配置入口，以及 Java 指定启动器版本门禁、内置演示、离线 CPU 文件和 CSV/文本报告。运行版本门禁前请确认指定的 Java 启动器来源可信。
 
-本版更新 NGINX 后续 1.x 版本参考与 Plus 逐 CVE 公告链接，修正独立 Apache mod_h2 和已识别的普通 Java 8 构建的范围判定。Bash 报告同时显示配置覆盖缺口与 JVM 参数取证来源。Rust 和 Bash 扩充了标准 OpenJDK 8 发行商识别，并显式标记独立 Apache 模块的 httpd 归属待核验。
+本版在 Apache、NGINX、Java/JVM 和 PHP 的漏洞知识库中补充临时缓解措施、安全版本升级指引与升级后复核步骤。请按所用厂商或发行版的安全公告升级到已修复版本，并复核实际运行的组件。
+
+源码提供可选的体积优化构建，执行 `cargo build --profile release-small --locked -j 4` 即可。下方平台附件使用标准 Release 配置。
 """, encoding="utf-8")
     existing = command("gh", "release", "view", tag, "--repo", repository,
                        "--json", "url,isDraft,assets,tagName", check=False)
