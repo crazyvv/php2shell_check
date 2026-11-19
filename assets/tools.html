@@ -79,9 +79,10 @@ printf 'exit_code=%s\n' "$status"</code></pre>
 bash x2shell-check.sh --nginx2root --json
 bash x2shell-check.sh --apache2root --json</code></pre>
     </details>
-    <details class="scan-options"><summary>补查嵌入式 JDK 或非标准 NGINX 路径</summary>
+    <details class="scan-options"><summary>补查嵌入式 JDK 或非标准 Web 服务路径</summary>
       <pre class="command-line"><code>bash x2shell-check.sh --java4shell --root /opt/my-service
-bash x2shell-check.sh --nginx2root --nginx-path /opt/nginx/sbin/nginx --nginx-config /opt/nginx/conf/nginx.conf</code></pre>
+bash x2shell-check.sh --nginx2root --nginx-path /opt/nginx/sbin/nginx --nginx-config /opt/nginx/conf/nginx.conf
+bash x2shell-check.sh --apache2root --apache-path /opt/httpd/bin/httpd --apache-config /opt/httpd/conf/httpd.conf</code></pre>
       <p class="fine">将示例路径换成目标主机上的实际路径。达到递归深度上限时，Java 报告会记录覆盖缺口。</p>
     </details>
     <details class="scan-options"><summary>读取运行中 JVM 的生效参数</summary>

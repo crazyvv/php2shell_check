@@ -243,13 +243,25 @@ server {
     listen 443 quic;
     resolver 192.0.2.53;
     proxy_pass http://$upstream;
+    proxy_http_version 2;
 }
 mail { proxy on; auth_http localhost; }
+include /etc/nginx/another.conf;
 NGINX
     flags=$(nginx2root_config "$fixture/nginx.conf")
     [[ $flags == *'"http2_on":false,"http2_off":true,"http3_or_quic":true'* ]]
     [[ $flags == *'"resolver":true,"dynamic_proxy_pass":true'* ]]
     [[ $flags == *'"mail_proxy":true,"auth_http":true'* ]]
+    [[ $flags == *'"include_observed":true,"proxy_http_version_2":true,"grpc_upstream":false'* ]]
+    printf '%s\n' 'Protocols h2 http/1.1' 'H2Direct on' 'H2Upgrade on' 'IncludeOptional conf.d/*.conf' > "$fixture/apache.conf"
+    flags=$(apache_config_hints "$fixture/apache.conf")
+    [[ $flags == *'"h2":true'*'"h2_direct_on":true,"h2_upgrade_on":true,"include_observed":true'* ]]
+    [[ $(web_disk_identity /proc/self "$fixture/apache.conf" "$(file_id "$fixture/apache.conf")") == matched ]]
+    [[ $(web_disk_identity /proc/self "$fixture/apache.conf" '0 1 2') == mismatch ]]
+    [[ $(web_disk_identity /proc/self '/tmp/sample (deleted)' '0 1 2') == deleted ]]
+    [[ $(web_disk_identity /proc/self "$fixture/missing" '0 1 2') == unverified ]]
+    web_coverage_incomplete false 0 '{"skipped":1}'
+    ! web_coverage_incomplete false 0 '{"skipped":0}'
     (
         java4shell_main() { printf '{"status":"fixture"}'; return 0; }
         nginx2root_scan() { printf '{"status":"fixture"}'; return 0; }

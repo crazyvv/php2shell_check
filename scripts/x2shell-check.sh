@@ -3,7 +3,15 @@
 #  x2shell-check.sh — Java、NGINX 与 Apache 主机暴露面自查
 #  单文件 · 只读 · 无 Python/Go 依赖（仅 bash + coreutils/grep/awk）
 #
-#  这是三个开源检测脚本的合并增强版：
+#  无参同时执行三个专项，报告上游版本参考和可见的本地主机证据。
+#    Java4Shell (CVE-2026-114938)：JVM 构建、CPU 和 Base64 intrinsic 缓解。
+#    Nginx2Root：CVE-2026-123007 / 123633 / 123634 / 121810 / 113425，
+#       检查 HTTP/2、HTTP/3、解析器、邮件代理与独立的 SCTP 内核线索。
+#       https://nginx.org/en/security_advisories.html
+#    Apache2Root (CVE-2026-119618)：httpd、mod_http2 映射和 h2/h2c 线索。
+#       https://httpd.apache.org/security/vulnerabilities_24#CVE-2026-119618
+#
+#  Java 专项参考以下开源检查器：
 #    1) ubitquity/cve-2026-114938-java4shell-remediation
 #       scripts/check-java4shell.sh        —— 架构/CPU 特性/运行时进程 + 缓解参数
 #    2) Mahgal/java4shell-check
@@ -14,13 +22,13 @@
 #                                             进程内 libjvm.so 设备号/inode 校验、
 #                                             容器线索、厂商/产品补丁规则、CSV/JSON 报告
 #
-#  设计原则（沿用三个上游的共同承诺）：
+#  判定原则：版本、磁盘配置与运行证据分别报告，厂商回补需独立核验。
 #    * 只读：不发送检测载荷，不联网，默认仅写临时报告数据；
 #    * 只采集证据、不猜：证据不足时给出 unknown，而不是猜 affected / safe；
 #    * 明确的退出码，可直接当 CI / 基线核查的门禁。
 #
 #  退出码：0 未命中失败级别；1 命中 --fail-on（默认 affected,potential）；
-#          2 参数/IO 错误；3 无失败项但存在无法判断的资产。
+#          2 参数/IO 错误；3 无门禁命中且证据不足或覆盖不完整。
 # =============================================================================
 
 set -u
@@ -82,17 +90,19 @@ AUTH_APPS="kafka solr elasticsearch gerrit spinnaker"
 # ---------------------------------------------------------------------------
 usage() {
 cat <<EOF
-$NICKNAME · $CVE 主机暴露面检测（$PROG v$SCRIPT_VERSION）
+Java4Shell / Nginx2Root / Apache2Root 主机暴露面检测（$PROG v$SCRIPT_VERSION）
 
 用法:
   $PROG                         # 同时盘点 Java、NGINX 和 Apache
-  $PROG --all [--json] [--jcmd]
+  $PROG --all [--json] [--jcmd] [--nginx-config FILE] [--apache-config FILE]
   $PROG --java4shell [选项]
-  $PROG --apache2root [--json]
+  $PROG --apache2root [--json] [--apache-path PATH] [--apache-config FILE]
   $PROG --nginx2root [--json] [--nginx-path PATH] [--nginx-config FILE]
 
-  默认行为：发现本机 JDK 安装 + 检查运行中的 JVM 进程 + 探测 CPU 条件，
-  输出中文结论；默认不修改被检查的运行时，不联网。
+  默认行为：核查 Java、NGINX 和 Apache 的本机证据，不联网。
+  NGINX：五项 CVE 的上游版本参考、配置和 SCTP 线索。
+  Apache：CVE-2026-119618 的 httpd / mod_http2 版本、映射与协议线索。
+  Web 服务专项的版本命中仅作为风险门禁，配置线索不代表已生效。
 
 选项:
   --jdk PATH            指定 JDK Home（可重复）；指定后不再自动发现安装目录
@@ -1995,6 +2005,9 @@ nginx2root_config() {
             if ($0 ~ /(^|[;{}[:space:]])http2[[:space:]]+off([[:space:]]|;)/) h2off=1
             if ($0 ~ /(^|[;{}[:space:]])http3[[:space:]]+on([[:space:]]|;)/ ||
                 $0 ~ /(^|[;{}[:space:]])listen[[:space:]]+[^;]*[[:space:]]quic([[:space:]]|;)/) h3=1
+            if ($0 ~ /(^|[;{}[:space:]])include[[:space:]]+/) includes=1
+            if ($0 ~ /(^|[;{}[:space:]])proxy_http_version[[:space:]]+2([[:space:]]|;)/) upstream_h2=1
+            if ($0 ~ /(^|[;{}[:space:]])grpc_pass[[:space:]]+/) grpc=1
             if ($0 ~ /(^|[;{}[:space:]])resolver[[:space:]]+/) resolver=1
             if ($0 ~ /(^|[;{}[:space:]])(proxy_pass|grpc_pass|fastcgi_pass|uwsgi_pass|scgi_pass)[[:space:]]+/) upstream=1
             if ($0 ~ /(^|[;{}[:space:]])proxy_pass[[:space:]]+[^;]*\$/) dynamic=1
@@ -2011,7 +2024,8 @@ nginx2root_config() {
             printf "\"http2_on\":%s,\"http2_off\":%s,\"http3_or_quic\":%s,", b(h2), b(h2off), b(h3)
             printf "\"upstream\":%s,\"resolver\":%s,\"dynamic_proxy_pass\":%s,", b(upstream), b(resolver), b(dynamic)
             printf "\"mirror\":%s,\"mirror_request_body_off\":%s,\"ssi\":%s,", b(mirror), b(mirror_off), b(ssi)
-            printf "\"mail\":%s,\"mail_proxy\":%s,\"auth_http\":%s}", b(mail), b(mail_proxy), b(auth)
+            printf "\"mail\":%s,\"mail_proxy\":%s,\"auth_http\":%s,", b(mail), b(mail_proxy), b(auth)
+            printf "\"include_observed\":%s,\"proxy_http_version_2\":%s,\"grpc_upstream\":%s}", b(includes), b(upstream_h2), b(grpc)
         }'
 }
 
@@ -2048,10 +2062,12 @@ apache_reference() {
 
 apache_config_hints() {
     local file size count=0
+    local -a configs=()
+    configs=("$@" /etc/apache2/apache2.conf /etc/apache2/{mods,conf,sites}-enabled/*.conf
+             /etc/apache2/mods-enabled/*.load /etc/httpd/conf/httpd.conf /etc/httpd/conf.d/*.conf
+             /etc/httpd/conf.modules.d/*.conf /usr/local/apache2/conf/httpd.conf)
     (
-        for file in /etc/apache2/apache2.conf /etc/apache2/{mods,conf,sites}-enabled/*.conf \
-                    /etc/apache2/mods-enabled/*.load /etc/httpd/conf/httpd.conf /etc/httpd/conf.d/*.conf \
-                    /etc/httpd/conf.modules.d/*.conf /usr/local/apache2/conf/httpd.conf; do
+        for file in "${configs[@]}"; do
             [ -f "$file" ] || continue
             count=$((count + 1))
             [ "$count" -le 64 ] || { printf '@skipped\n'; break; }
@@ -2066,6 +2082,9 @@ apache_config_hints() {
         /^@skipped$/ {skipped++; next}
         { sub(/#.*/, ""); gsub(/"/, ""); $0=tolower($0) }
         $1 == "loadmodule" && $2 == "http2_module" {mod=1}
+        $1 == "include" || $1 == "includeoptional" {includes=1}
+        $1 == "h2direct" && $2 == "on" {direct=1}
+        $1 == "h2upgrade" && $2 == "on" {upgrade=1}
         $1 == "protocols" {
             if (NF == 2 && $2 == "http/1.1") h1=1
             for (i=2; i<=NF; i++) {
@@ -2076,7 +2095,7 @@ apache_config_hints() {
         function b(v) { return v ? "true" : "false" }
         END {
             printf "{\"scope\":\"disk_directive_hints\",\"files_examined\":%d,\"skipped\":%d,", files, skipped
-            printf "\"h2\":%s,\"h2c\":%s,\"http1_only_directive\":%s,\"load_module\":%s}", b(h2),b(h2c),b(h1),b(mod)
+            printf "\"h2\":%s,\"h2c\":%s,\"http1_only_directive\":%s,\"load_module\":%s,\"h2_direct_on\":%s,\"h2_upgrade_on\":%s,\"include_observed\":%s}", b(h2),b(h2c),b(h1),b(mod),b(direct),b(upgrade),b(includes)
         }'
 }
 
@@ -2103,43 +2122,64 @@ linux_inventory_unavailable() {
 }
 
 apache_inventory() {
-    local format=$1 proc name pid path id start row= seen=' ' rows=0 disk=0 comma= version reference mapped config
-    local gate=0 modules=0 unknown=0
+    local format=txt proc name pid path id start row= seen=' ' rows=0 disk=0 comma= version reference mapped config
+    local gate=0 modules=0 unknown=0 explicit= proc_limit=false unresolved=0 image_state match package_hint
+    local -a configs=()
+    while (($#)); do
+        case $1 in
+            --json) format=json ;;
+            --apache-path)
+                (($# > 1)) && [ -f "$2" ] || die "--apache-path 需要存在的文件"
+                explicit=$2; shift ;;
+            --apache-config)
+                (($# > 1)) && [ -f "$2" ] || die "--apache-config 需要存在的文件"
+                configs+=("$2"); shift ;;
+            --help|-h)
+                printf '用法: %s --apache2root [--json] [--apache-path PATH] [--apache-config FILE]\n' "$PROG"
+                return ;;
+            *) die "未知 Apache2Root 选项: $1" ;;
+        esac
+        shift
+    done
     if [ "$OS" != Linux ]; then
         linux_inventory_unavailable "$format" Apache CVE-2026-119618
         return $?
     fi
-    config=$(apache_config_hints)
+    config=$(apache_config_hints ${configs[@]+"${configs[@]}"})
     for proc in /proc/[0-9]*; do
         [ -r "$proc/comm" ] || continue
         IFS= read -r name < "$proc/comm" 2>/dev/null || continue
         case $name in apache2|httpd) ;; *) continue ;; esac
-        ((rows < 24)) || break
+        ((rows < 24)) || { proc_limit=true; break; }
         pid=${proc##*/}
         start=$(java_process_start "$pid")
         path=$(readlink "$proc/exe" 2>/dev/null || :)
         id=$(file_id "$proc/exe" || :)
         version=$(apache_version "$proc/exe" httpd)
         mapped=$(apache_mapped_http2 "$proc/maps")
+        image_state=$(web_disk_identity "$proc" "$path" "$id")
         if [[ -z $id || -z $start || $(file_id "$proc/exe") != "$id" ||
               $(java_process_start "$pid") != "$start" ]]; then
             version=
             mapped=null
-        elif [[ $path == /* && $(file_id "$proc/root$path") == "$id" ]]; then
-            seen+="$id "
+            image_state=unverified
+        fi
+        match=$(web_identity_boolean "$image_state")
+        if [[ $image_state != matched || $mapped == null ]]; then
+            unresolved=$((unresolved + 1))
         fi
         reference=$(apache_reference "$version")
         [[ $reference != potential ]] || gate=1
         [[ $reference != unknown ]] || unknown=1
         if [ "$format" = json ]; then
-            row+="$comma{\"kind\":\"process\",\"pid\":$pid,\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"mod_http2_mapped\":$mapped}"
+            row+="$comma{\"kind\":\"process\",\"pid\":$pid,\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"mod_http2_mapped\":$mapped,\"disk_identity_matched\":$match,\"disk_identity_status\":\"$image_state\"}"
             comma=,
         else
-            printf 'Apache PID %s · %q · %s · %s · mod_http2 映射 %s\n' "$pid" "$path" "${version:-版本未知}" "$reference" "$mapped"
+            printf 'Apache PID %s · %q · %s · %s · mod_http2 映射 %s · 磁盘身份 %s\n' "$pid" "$path" "${version:-版本未知}" "$reference" "$mapped" "$image_state"
         fi
         rows=$((rows + 1))
     done
-    for path in "$(type -P apache2 || :)" "$(type -P httpd || :)" /usr/sbin/apache2 /usr/sbin/httpd /usr/local/apache2/bin/httpd; do
+    for path in "$explicit" "$(type -P apache2 || :)" "$(type -P httpd || :)" /usr/sbin/apache2 /usr/sbin/httpd /usr/local/apache2/bin/httpd; do
         [ -n "$path" ] && [ -f "$path" ] || continue
         id=$(file_id "$path") || continue
         [[ $seen != *" $id "* ]] || continue
@@ -2148,12 +2188,14 @@ apache_inventory() {
         reference=$(apache_reference "$version")
         [[ $reference != potential ]] || gate=1
         [[ $reference != unknown ]] || unknown=1
+        package_hint=$(web_package_hint "$path")
         if [ "$format" = json ]; then
-            row+="$comma{\"kind\":\"installation\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference")}"
+            row+="$comma{\"kind\":\"installation\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"package_evidence\":${package_hint:-null}}"
             comma=,
         else
             printf 'Apache 磁盘安装 · %q · %s · %s\n' "$path" "${version:-版本未知}" "$reference"
         fi
+        if [[ $format != json && -n $package_hint ]]; then printf '软件包线索: %s\n' "$package_hint"; fi
         disk=$((disk + 1))
     done
     for path in /usr/lib/apache2/modules/mod_http2.so /usr/lib64/httpd/modules/mod_http2.so /usr/lib/httpd/modules/mod_http2.so /usr/local/apache2/modules/mod_http2.so; do
@@ -2165,25 +2207,28 @@ apache_inventory() {
         reference=$(apache_reference "$version" module)
         [[ $reference != potential ]] || gate=1
         [[ $reference != unknown ]] || unknown=1
+        package_hint=$(web_package_hint "$path")
         if [ "$format" = json ]; then
-            row+="$comma{\"kind\":\"module_installation\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference")}"
+            row+="$comma{\"kind\":\"module_installation\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"package_evidence\":${package_hint:-null}}"
             comma=,
         else
             printf 'Apache 磁盘模块 · %q · %s · %s\n' "$path" "${version:-版本未知}" "$reference"
         fi
+        if [[ $format != json && -n $package_hint ]]; then printf '软件包线索: %s\n' "$package_hint"; fi
         modules=$((modules + 1))
     done
     local status=observed
     ((rows + disk + modules > 0)) || status=not_observed
     if [ "$format" = json ]; then
-        printf '{"status":"%s","cve":"CVE-2026-119618","patch_verified":false,"configuration":%s,"proc_limit_reached":%s,"findings":[%s]}' \
-            "$status" "$config" "$([ "$rows" -ge 24 ] && printf true || printf false)" "$row"
+        printf '{"status":"%s","cve":"CVE-2026-119618","patch_verified":false,"configuration":%s,"proc_limit_reached":%s,"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d},"findings":[%s]}' \
+            "$status" "$config" "$proc_limit" "$proc_limit" "$unresolved" "$row"
     else
         if [ "$status" = not_observed ]; then printf 'Apache · 当前范围未观察到安装或进程\n'; fi
         printf 'Apache CVE-2026-119618 · 磁盘配置线索: %s\n' "$config"
+        printf '进程覆盖 · 达到上限 %s · 证据不完整 %s\n' "$proc_limit" "$unresolved"
     fi
     if [ "$gate" -eq 1 ]; then return 1; fi
-    if [ "$unknown" -eq 1 ] || [ "$rows" -ge 24 ]; then return 3; fi
+    if web_coverage_incomplete "$proc_limit" "$unresolved" "$config" || [ "$unknown" -eq 1 ]; then return 3; fi
     return 0
 }
 
@@ -2202,7 +2247,7 @@ apache_version() {
 
 audit_all() {
     local format=txt rc_java=0 rc_nginx=0 rc_apache=0 java_report nginx_report apache_report
-    local -a java_args=(--quiet) nginx_args=()
+    local -a java_args=(--quiet) nginx_args=() apache_args=()
     while (($#)); do
         case $1 in
             --json) format=json ;;
@@ -2210,6 +2255,9 @@ audit_all() {
             --nginx-path|--nginx-config)
                 (($# >= 2)) || die "$1 需要一个路径"
                 nginx_args+=("$1" "$2"); shift ;;
+            --apache-path|--apache-config)
+                (($# >= 2)) || die "$1 需要一个路径"
+                apache_args+=("$1" "$2"); shift ;;
             *) die "未知批量检查选项: $1" ;;
         esac
         shift
@@ -2217,7 +2265,7 @@ audit_all() {
     if [ "$format" = json ]; then
         java_report=$(java4shell_main "${java_args[@]}" --json) || rc_java=$?
         nginx_report=$(nginx2root_scan ${nginx_args[@]+"${nginx_args[@]}"} --json) || rc_nginx=$?
-        apache_report=$(apache_inventory json) || rc_apache=$?
+        apache_report=$(apache_inventory --json ${apache_args[@]+"${apache_args[@]}"}) || rc_apache=$?
         printf '{"scope":"local_read_only_inventory","java4shell":%s,"nginx2root":%s,"apache":%s,"exit_codes":{"java4shell":%s,"nginx2root":%s,"apache2root":%s}}\n' \
             "${java_report:-null}" "${nginx_report:-null}" "${apache_report:-null}" "$rc_java" "$rc_nginx" "$rc_apache"
     else
@@ -2226,7 +2274,7 @@ audit_all() {
         printf '\n=== Nginx2Root ===\n'
         (nginx2root_scan ${nginx_args[@]+"${nginx_args[@]}"}) || rc_nginx=$?
         printf '\n=== Apache HTTP Server ===\n'
-        apache_inventory txt || rc_apache=$?
+        apache_inventory ${apache_args[@]+"${apache_args[@]}"} || rc_apache=$?
     fi
     if ((rc_java == 2 || rc_nginx == 2 || rc_apache == 2)); then return 2; fi
     if ((rc_java == 1 || rc_nginx == 1 || rc_apache == 1)); then return 1; fi
@@ -2234,7 +2282,26 @@ audit_all() {
     return 0
 }
 
-nginx_package_hint() {
+web_disk_identity() {
+    local proc=$1 path=$2 image_id=$3 disk_id
+    if [[ $path == *" (deleted)" ]]; then printf deleted
+    elif [[ -z $image_id || $path != /* ]]; then printf unverified
+    elif ! disk_id=$(file_id "$proc/root$path"); then printf unverified
+    elif [[ $disk_id == "$image_id" ]]; then printf matched
+    else printf mismatch
+    fi
+}
+
+web_identity_boolean() {
+    case $1 in matched) printf true ;; mismatch|deleted) printf false ;; *) printf null ;; esac
+}
+
+web_coverage_incomplete() {
+    local limit=$1 unresolved=$2 config=$3
+    [[ $limit == true || $unresolved -gt 0 || $config =~ \"skipped\":[1-9] ]]
+}
+
+web_package_hint() {
     local path=$1 owner manager result
     have timeout || return 0
     [[ $path == /* ]] || return 0
@@ -2258,6 +2325,7 @@ nginx_package_hint() {
 nginx2root_scan() {
     local format=txt explicit="" installed path proc pid id current raw matched
     local seen=' ' rows=0 comma= gate=0 unknown=0 total=0 config_report sctp_report package_hint
+    local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root
     local index package_count=0
     local -a package_ids=() package_values=()
     local -a config_paths=()
@@ -2291,53 +2359,61 @@ nginx2root_scan() {
     fi
 
     nginx2root_row() {
-        local kind=$1 pid=$2 path=$3 raw=$4 matched=$5 package_hint=${6:-null}
+        local kind=$1 pid=$2 path=$3 raw=$4 matched=$5 package_hint=${6:-null} image_state=$7
         local references
         references=$(nginx2root_reference "$raw")
         case $references in *'"status":"potential"'*) gate=1 ;; esac
         case $references in *'"status":"unknown"'*) unknown=1 ;; esac
         total=$((total + 1))
         if [ "$format" = json ]; then
-            printf '%s{"kind":"%s","pid":%s,"path":%s,"version":%s,"disk_identity_matched":%s,"cves":' \
-                "$comma" "$kind" "$(jstr "$pid")" "$(jstr "$(san_field "$path")")" "$(jstr "$raw")" "$matched"
+            printf '%s{"kind":"%s","pid":%s,"path":%s,"version":%s,"disk_identity_matched":%s,"disk_identity_status":"%s","cves":' \
+                "$comma" "$kind" "$(jstr "$pid")" "$(jstr "$(san_field "$path")")" "$(jstr "$raw")" "$matched" "$image_state"
             printf '%s,"package_evidence":%s}' "$references" "$package_hint"
             comma=,
         else
-            printf '%s %s %q · NGINX %s · 磁盘身份匹配 %s\n' "$kind" "$pid" "$path" "${raw:-未知}" "$matched"
+            printf '%s %s %q · NGINX %s · 磁盘身份 %s\n' "$kind" "$pid" "$path" "${raw:-未知}" "$image_state"
             printf '%s\n' "$references"
             [ "$package_hint" = null ] || printf '软件包线索: %s\n' "$package_hint"
         fi
     }
 
+    self_ns=$(readlink /proc/self/ns/mnt 2>/dev/null || :)
+    self_root=$(file_id /proc/self/root || :)
     for proc in /proc/[0-9]*; do
         [ -r "$proc/comm" ] || continue
         IFS= read -r current < "$proc/comm" 2>/dev/null || continue
         [ "$current" = nginx ] || continue
-        ((rows < 24)) || break
+        ((rows < 24)) || { proc_limit=true; break; }
         pid=${proc##*/}
+        start=$(java_process_start "$pid")
         path=$(readlink "$proc/exe" 2>/dev/null || :)
         id=$(file_id "$proc/exe" || :)
         raw=$(nginx2root_version "$proc/exe")
-        matched=false
-        if [[ -z $id || $(file_id "$proc/exe") != "$id" ]]; then
+        image_state=$(web_disk_identity "$proc" "$path" "$id")
+        process_ns=$(readlink "$proc/ns/mnt" 2>/dev/null || :)
+        if [[ -z $id || -z $start || $(file_id "$proc/exe") != "$id" ||
+              $(java_process_start "$pid") != "$start" ]]; then
             raw=
-        elif [[ $path == /* && $(file_id "$proc/root$path") == "$id" ]]; then
-            matched=true
+            image_state=unverified
+        elif [[ $image_state == matched ]]; then
             seen+="$id "
         fi
+        matched=$(web_identity_boolean "$image_state")
+        [[ $image_state == matched ]] || unresolved=$((unresolved + 1))
         package_hint=null
-        if [[ $matched == true && $(file_id "$path") == "$id" ]]; then
+        if [[ $matched == true && -n $self_ns && $process_ns == "$self_ns" &&
+              -n $self_root && $(file_id "$proc/root") == "$self_root" && $(file_id "$path") == "$id" ]]; then
             for ((index=0; index<package_count; index++)); do
                 [ "${package_ids[index]}" != "$id" ] || break
             done
             if [ "$index" -eq "$package_count" ]; then
                 package_ids[index]=$id
-                package_values[index]=$(nginx_package_hint "$path")
+                package_values[index]=$(web_package_hint "$path")
                 package_count=$((package_count + 1))
             fi
             package_hint=${package_values[index]:-null}
         fi
-        nginx2root_row process "$pid" "$path" "$raw" "$matched" "$package_hint"
+        nginx2root_row process "$pid" "$path" "$raw" "$matched" "$package_hint" "$image_state"
         rows=$((rows + 1))
     done
     installed=$(type -P nginx || :)
@@ -2347,14 +2423,16 @@ nginx2root_scan() {
         [[ $seen != *" $id "* ]] || continue
         raw=$(nginx2root_version "$path")
         seen+="$id "
-        package_hint=$(nginx_package_hint "$path")
-        nginx2root_row installation "" "$path" "$raw" null "${package_hint:-null}"
+        package_hint=$(web_package_hint "$path")
+        nginx2root_row installation "" "$path" "$raw" null "${package_hint:-null}" not_applicable
     done
     if [ "$format" = json ]; then
-        printf '],"coverage":{"proc_limit_reached":%s}}\n' "$([ "$rows" -ge 24 ] && printf true || printf false)"
+        printf '],"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d}}\n' "$proc_limit" "$unresolved"
+    else
+        printf '进程覆盖 · 达到上限 %s · 证据不完整 %s\n' "$proc_limit" "$unresolved"
     fi
     if [ "$gate" -eq 1 ]; then return 1; fi
-    if [ "$unknown" -eq 1 ] || [ "$total" -eq 0 ] || [ "$rows" -ge 24 ]; then return 3; fi
+    if [ "$unknown" -eq 1 ] || [ "$total" -eq 0 ] || web_coverage_incomplete "$proc_limit" "$unresolved" "$config_report"; then return 3; fi
     return 0
 }
 
@@ -2515,13 +2593,7 @@ main() {
     case $1 in
         --all) shift; audit_all "$@" ;;
         --nginx2root) shift; nginx2root_scan "$@" ;;
-        --apache2root)
-            shift
-            case "${1:-}:$#" in
-                :0) apache_inventory txt ;;
-                --json:1) apache_inventory json ;;
-                *) die "--apache2root 只接受 --json" ;;
-            esac ;;
+        --apache2root) shift; apache_inventory "$@" ;;
         --java4shell) shift; java4shell_main "$@" ;;
         *) java4shell_main "$@" ;;
     esac
