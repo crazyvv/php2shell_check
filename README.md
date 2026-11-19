@@ -528,9 +528,9 @@ docker run -d --name x2shell-check --restart unless-stopped \
 
 ## 漏洞知识库
 
-访问 `/knowledge` 可查看面向开发、安全和运维的独立知识页面。页面整理五类利用链的前置条件、传播阶段、防守观测点与缺失证据矩阵，也说明 Web／CLI 范围、修复前后报告、补丁覆盖、证据升级和在野 IOC。来源链接包括 PHP 官方 GHSA，以及固定提交的 ikow/php2shell-poc、murrez/php2shell、spcaeo/php2shell-check。
+访问 `/knowledge` 可按 Apache HTTP Server、NGINX、Java/JVM 和 PHP 查找 CVE。组件索引可直达各漏洞的影响范围和主机复核依据。PHP 的链路、补丁覆盖、修复前后证据和来源放在该组件的深入分析内。
 
-知识页无需登录，方便团队成员查看；不读取数据库或展示扫描结果。每节区分官方基线、社区研究结论和本项目判据，标注来源仓库快照。页面省略可执行载荷、内存地址推导、命令执行与故障注入步骤。版本化的详细复核说明仍保存在 [ikow 检测逻辑复核](docs/ikow-detection-review.md)。
+知识页无需登录，内容随服务发布。更详细的 PHP 复核说明见 [检测逻辑复核](docs/ikow-detection-review.md)。
 
 ## 离线证据 PoC 与报告对比
 

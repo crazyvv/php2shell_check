@@ -307,3 +307,26 @@ pre.command-line, pre.command-line code { white-space: pre-wrap; overflow-wrap: 
 @media (max-width: 720px) {
   .workspace, .knowledge { grid-template-columns: minmax(0, 1fr); }
 }
+
+.guidance .module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 14px 0; }
+.guidance .module-grid .card { padding: 12px; background: var(--surface-soft); }
+.guidance .module-grid h2 { font-size: 14px; }
+.guidance .module-grid p { font-size: 12px; }
+.target-result { border-top: 1px solid var(--line); padding: 16px 0; }
+.target-heading h3 { overflow-wrap: anywhere; }
+.result-modules { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 10px; }
+.result-module { border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; overflow-wrap: anywhere; }
+.result-module h4, .result-host h4 { margin: 0 0 6px; }
+.result-module .badge { white-space: normal; }
+.result-module details, .result-supplement, .result-host { margin-top: 10px; }
+.result-module summary, .result-supplement summary { cursor: pointer; }
+.knowledge-index { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 8px; margin: 14px 0; }
+.knowledge-index > div { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 10px; }
+.component-link { color: var(--ink); font-weight: 700; }
+.cve-links { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; font-size: 12px; }
+.knowledge [id]:target { scroll-margin-top: 75px; }
+.knowledge tr:target, .knowledge h3:target { background: var(--accent-soft); }
+.php-analysis { margin-top: 12px; }
+.php-analysis > summary { cursor: pointer; color: var(--accent-strong); font-weight: 650; }
+.knowledge-detail-grid { margin-top: 12px; }
+.chain-grid h4 { margin: 2px 0 7px; font-size: 15px; }

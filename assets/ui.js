@@ -6,7 +6,7 @@ async function refresh() {
   try {
     const job=await api('/api/jobs/'+encodeURIComponent(requested));
     if(currentJob!==requested) return;
-    renderJobs([job]);busy=['queued','running'].includes(job.state);
+    renderJobs([job],'/api/jobs',false,{overview:true});busy=['queued','running'].includes(job.state);
   }catch(e){
     if(currentJob!==requested) return;
     if(e.status===404){currentJob=null;busy=false;try{sessionStorage.removeItem('php-selfcheck-current-job');}catch(_){}renderJobs([]);return;}

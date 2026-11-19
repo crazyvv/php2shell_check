@@ -273,7 +273,12 @@ impl Portal {
 async fn portal_auth_isolation_exports_and_imports() {
     let p = Portal::new().await;
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-    assert_eq!(client.get(&p.base).send().await.unwrap().status(), 401);
+    let unauthenticated = client.get(&p.base).send().await.unwrap();
+    assert_eq!(unauthenticated.status(), 401);
+    assert_eq!(
+        unauthenticated.headers()["www-authenticate"],
+        "Basic realm=\"X2Shell Check\", charset=\"UTF-8\""
+    );
     for path in ["/", "/ui.js", "/style.css"] {
         let r = p.request(path, "alice").send().await.unwrap();
         assert_eq!(r.status(), 200);

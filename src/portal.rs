@@ -319,7 +319,7 @@ async fn dispatch(state: Arc<State>, req: Request<Body>) -> Result<Response> {
         let mut r = error(401, "请输入管理员分配的个人账号和密码");
         r.headers_mut().insert(
             header::WWW_AUTHENTICATE,
-            "Basic realm=\"PHP SelfCheck\", charset=\"UTF-8\"".parse()?,
+            "Basic realm=\"X2Shell Check\", charset=\"UTF-8\"".parse()?,
         );
         return Ok(r);
     };

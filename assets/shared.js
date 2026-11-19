@@ -8,7 +8,7 @@ async function api(path, body) {
   const data = await r.json(); if (!r.ok) {const error=new Error(data.error || '请求失败');error.status=r.status;throw error;} return data;
 }
 const states = {queued:'排队中',running:'检测中',done:'已完成',failed:'任务异常',interrupted:'服务重启中断，请复测'};
-function badge(verdict) { return node('span', verdict, 'badge ' + (verdict === '疑似受影响' ? 'risk' : /待核验|未知|疑似使用/.test(verdict) ? 'pending' : '')); }
+function badge(verdict) { return node('span', verdict, 'badge ' + (verdict === '疑似受影响' ? 'risk' : /待核验|未知|疑似使用|受影响范围|证据受限/.test(verdict) ? 'pending' : '')); }
 function details(label, data) { const d = node('details'); d.append(node('summary',label),node('pre',JSON.stringify(data,null,2))); return d; }
 const statusNames = {session_cookie_hint:'观测到会话 Cookie，配置仍未知',unknown:'未知',header_claim:'响应头声明',form_hint:'页面表单线索',field_hint:'页面字段线索',responded:'收到响应，未确认 PHP 解析',rejected:'当前请求被拒绝',below_upstream_fix:'低于上游修复基线',meets_upstream_fix:'达到上游基线，待核验',eol:'停止上游维护，补丁未知',supported_branch:'上游支持分支',enabled:'开启（提交材料声明）',disabled:'关闭（提交材料声明）',fixed_claimed:'已修复（提交材料声明）',missing_claimed:'未修复（提交材料声明）'};
 const sourceNames={minimal_upload_progress_observation:'普通文本文件 POST',response_header:'HTTP 响应头',page_reference:'页面线索',not_observed:'未观测到',not_tested:'未进行主动检查',minimal_multipart_control:'小型表单请求'};
@@ -218,6 +218,61 @@ function hostComparisonView(c) {
   wrap.append(node('p','该对比不确认漏洞利用，也不把提交声明升级为已验证修复。','fine'));
   return wrap;
 }
+function overviewResult(r) {
+  const result=node('article',undefined,'target-result');
+  const header=node('div',undefined,'target-heading');
+  const blocked=r.verdict==='无法完成检测';
+  header.append(node('h3',r.target),node('p',[
+    blocked?'HTTP 检测受阻':'HTTP 观测',
+    r.http_status || '状态未知',r.connected_ip
+  ].filter(Boolean).join(' · '),'fine'));
+  if(blocked && r.reason)header.append(node('p',r.reason,'hint'));
+  result.append(header);
+
+  const grid=node('div',undefined,'result-modules');
+  const apache=r.apache2root;
+  const nginx=r.nginx2root;
+  const java=r.java4shell;
+  const phpVerdict=r.verdict?.includes('Java4Shell')?'未观测到 PHP 线索':r.verdict;
+  const modules=[
+    ['Apache HTTP Server','apache2root',apache?.status==='apache_hint',
+      apache?.version_status==='potential'?'版本命中受影响范围':'观察到 Apache 线索',()=>apache2rootView(apache)],
+    ['NGINX','nginx2root',nginx?.status==='nginx_hint',
+      nginx?.cves?.some(cve=>cve.status==='potential')?'版本命中受影响范围':'观察到 NGINX 线索',()=>nginx2rootView(nginx)],
+    ['Java / JVM','java4shell',java?.status==='java_product_hint',
+      '观察到 Java 产品线索',()=>java4shellView(java)],
+    ['PHP','php2shell',Boolean(phpVerdict && !phpVerdict.startsWith('未')),phpVerdict,()=>{
+      const content=node('div');
+      content.append(evidenceSummary(r),assessmentView(r.assessment),nextStep(r));
+      if(r.version_warnings?.length) content.append(node('p','需复核的 PHP 版本声明：'+r.version_warnings.join('、'),'fine'));
+      return content;
+    }],
+  ];
+  for(const [name,anchor,observed,label,view] of modules){
+    const card=node('section',undefined,'result-module');
+    const link=node('a',name);link.href='/knowledge#'+anchor;
+    const title=node('h4');title.append(link);
+    card.append(title,badge(blocked?'证据受限':observed?label:'未观测到线索'));
+    if(observed && (!blocked || anchor!=='php2shell')){
+      const detail=node('details');detail.append(node('summary','查看专项证据'),view());
+      card.append(detail);
+    }
+    grid.append(card);
+  }
+  result.append(grid);
+
+  const supplemental=node('details',undefined,'result-supplement');
+  supplemental.append(node('summary','技术指纹与完整检测记录'),fingerprintsView(r.fingerprints),details('查看完整检测依据',r));
+  result.append(supplemental);
+  if(r.host_comparison || r.host_evidence?.length){
+    const host=node('section',undefined,'result-host');
+    host.append(node('h4','关联主机材料'));
+    if(r.host_comparison)host.append(hostComparisonView(r.host_comparison));
+    for(const h of r.host_evidence || [])host.append(hostEvidenceView(h.assessment));
+    result.append(host);
+  }
+  return result;
+}
 function renderJobs(jobs, endpoint='/api/jobs', showOwners=false, options={}) {
   $('jobs').replaceChildren();
   if (!jobs.length) { $('jobs').append(node('p','当前没有扫描结果。提交业务地址开始自查。','empty')); return; }
@@ -232,7 +287,9 @@ function renderJobs(jobs, endpoint='/api/jobs', showOwners=false, options={}) {
       remove.onclick=()=>options.deleteJob(j);links.append(remove);
     }
     head.append(links); block.append(head);
-    if (j.results.length) {
+    if (options.overview) {
+      for(const result of j.results)block.append(overviewResult(result));
+    } else if (j.results.length) {
       const table = node('table'), tr = node('tr'), thead = node('thead');
       ['目标 / 连接 IP','结论','证据与下一步'].forEach(t=>tr.append(node('th',t))); thead.append(tr); table.append(thead);
       const tbody = node('tbody');

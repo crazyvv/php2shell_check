@@ -5,16 +5,22 @@
   <title>漏洞知识库 · 服务暴露面自查台</title><link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header><div class="brand"><span class="mark">S</span><div>服务暴露面自查台<small>服务漏洞与防守复核</small></div></div><nav class="topnav"><a href="/">扫描页</a><a href="/tools">主机工具</a><a href="/admin">管理员</a></nav></header>
+<header><div class="brand"><div>X2Shell Check</div></div><nav class="topnav"><a href="/">扫描页</a><a href="/tools">主机工具</a><a href="/admin">管理员</a></nav></header>
 <main class="knowledge">
   <section class="card hero"><h1>服务漏洞知识库</h1>
-    <p>按专项查看网页线索、主机核验与厂商公告。PHP 专项另有链路与补丁分析，不提供可执行载荷。</p>
-    <nav class="scan-links" aria-label="专项索引"><a href="#apache2root">Apache2Root</a><a href="#nginx2root">Nginx2Root</a><a href="#java4shell">Java4Shell</a><a href="#php2shell">PHP2Shell</a></nav>
+    <p>按组件查找 CVE、影响范围和主机复核依据。本文不提供可执行载荷。</p>
+    <nav class="knowledge-index" aria-label="组件与漏洞索引">
+      <div><a class="component-link" href="#apache2root">Apache HTTP Server</a><div class="cve-links"><a href="#cve-2026-119618">CVE-2026-119618</a></div></div>
+      <div><a class="component-link" href="#nginx2root">NGINX</a><div class="cve-links"><a href="#cve-2026-123007">CVE-2026-123007</a> <a href="#cve-2026-123633">CVE-2026-123633</a> <a href="#cve-2026-123634">CVE-2026-123634</a> <a href="#cve-2026-121810">CVE-2026-121810</a> <a href="#cve-2026-113425">CVE-2026-113425</a></div></div>
+      <div><a class="component-link" href="#java4shell">Java / JVM</a><div class="cve-links"><a href="#cve-2026-114938">CVE-2026-114938</a></div></div>
+      <div><a class="component-link" href="#php2shell">PHP</a><div class="cve-links"><a href="#cve-2026-109618">CVE-2026-109618</a> <a href="#cve-2026-109619">CVE-2026-109619</a></div></div>
+    </nav>
     <div class="knowledge-callout warning"><strong>证据边界</strong><p>社区研究的复现结论、在野情报和补丁分析需要分别核验。版本响应头、会话 Cookie、HTTP 500/502、响应时间或错误文本都不能单独确认漏洞、利用成功或修复完成。</p></div>
   </section>
 
   <section id="apache2root" class="card wide">
-    <h2>Apache2Root · CVE-2026-119618</h2>
+    <h2>Apache HTTP Server</h2>
+    <h3 id="cve-2026-119618">CVE-2026-119618 · mod_http2 堆内存破坏</h3>
     <p>Apache 于 2026 年 11 月 11 日披露，<code>mod_http2</code> 的 <code>assign_headers()</code> 在处理共享资源时同步不足，可导致堆内存破坏。外部流量能够到达受影响的 HTTP/2 处理路径时，可能造成进程崩溃或以 httpd 服务进程的权限执行代码。</p>
     <h3>受影响范围</h3>
     <p>上游 Apache HTTP Server 2.4.55–2.4.70 受影响，2.4.71 发布修复。独立发布的 <code>mod_h2</code> 2.0.8–2.0.42 也受影响。独立安装模块的实例应分别核对 httpd 和实际加载的模块版本，发行版回补以对应公告为准。</p>
@@ -28,16 +34,16 @@
   </section>
 
   <section id="nginx2root" class="card wide">
-    <h2>Nginx2Root · 五项 NGINX 漏洞</h2>
+    <h2>NGINX</h2>
     <p>当前专项按 CVE 分别评估。HTTP/2 流量控制问题会破坏内存，其余四项涉及释放后使用，即对象释放后仍被访问。是否暴露取决于运行构建和具体功能路径，某项命中只说明该项需要复核。</p>
     <div class="knowledge-table"><table>
       <thead><tr><th scope="col">CVE</th><th scope="col">公告描述</th><th scope="col">上游范围</th><th scope="col">主机复核重点</th></tr></thead>
       <tbody>
-        <tr><td>CVE-2026-123007</td><td>HTTP/2 流量控制中的内存破坏</td><td>1.9.5–1.31.8</td><td>确认 NGINX 本身是否处理对外的 HTTP/2 流量。</td></tr>
-        <tr><td>CVE-2026-123633</td><td>HTTP/2 释放后使用</td><td>1.19.7–1.31.8</td><td>核对实际配置中的 HTTP/2 上游路径。前端协商结果无法说明上游协议。</td></tr>
-        <tr><td>CVE-2026-123634</td><td>解析器处理响应时释放后使用</td><td>0.6.18–1.31.8</td><td>核对运行时 DNS 解析器及引用它的代理配置。镜像等指令仅作为关联线索。</td></tr>
-        <tr><td>CVE-2026-121810</td><td>HTTP/3 释放后使用</td><td>1.25.0–1.31.8</td><td>核对 HTTP/3、QUIC 监听和相关代理路径。响应中的协议声明仅表示服务宣告。</td></tr>
-        <tr><td>CVE-2026-113425</td><td>邮件代理模块释放后使用</td><td>0.5.33–1.31.8</td><td>核对邮件代理监听、模块和 HTTP 认证服务配置。普通网页入口无法覆盖邮件服务。</td></tr>
+        <tr id="cve-2026-123007"><th scope="row">CVE-2026-123007</th><td>HTTP/2 流量控制中的内存破坏</td><td>1.9.5–1.31.8</td><td>确认 NGINX 本身是否处理对外的 HTTP/2 流量。</td></tr>
+        <tr id="cve-2026-123633"><th scope="row">CVE-2026-123633</th><td>HTTP/2 释放后使用</td><td>1.19.7–1.31.8</td><td>核对实际配置中的 HTTP/2 上游路径。前端协商结果无法说明上游协议。</td></tr>
+        <tr id="cve-2026-123634"><th scope="row">CVE-2026-123634</th><td>解析器处理响应时释放后使用</td><td>0.6.18–1.31.8</td><td>核对运行时 DNS 解析器及引用它的代理配置。镜像等指令仅作为关联线索。</td></tr>
+        <tr id="cve-2026-121810"><th scope="row">CVE-2026-121810</th><td>HTTP/3 释放后使用</td><td>1.25.0–1.31.8</td><td>核对 HTTP/3、QUIC 监听和相关代理路径。响应中的协议声明仅表示服务宣告。</td></tr>
+        <tr id="cve-2026-113425"><th scope="row">CVE-2026-113425</th><td>邮件代理模块释放后使用</td><td>0.5.33–1.31.8</td><td>核对邮件代理监听、模块和 HTTP 认证服务配置。普通网页入口无法覆盖邮件服务。</td></tr>
       </tbody>
     </table></div>
     <p>官方列出的修复分支为 1.30.7+ 和 1.31.9+。表中范围采用公告写法，修复分支优先核对。现场应按正在运行的 NGINX 映像和软件包完整修订号核对回补，并把磁盘配置关联到实际加载的站点或监听。SCTP 属于独立的内核核验项，可见性或禁载线索无法确认内核已修复。</p>
@@ -45,7 +51,8 @@
   </section>
 
   <section id="java4shell" class="card wide">
-    <h2>Java4Shell · CVE-2026-114938</h2>
+    <h2>Java / JVM</h2>
+    <h3 id="cve-2026-114938">CVE-2026-114938 · HotSpot Base64 解码越界写</h3>
     <p>HotSpot 在 x86-64 上用于加速 Base64 解码的 AVX-512 intrinsic 存在边界检查缺陷，可造成堆缓冲区越界写。Oracle 记录的 CVSS 3.1 评分为 8.1。网络暴露还取决于应用是否把外部数据交给相关解码路径。Jenkins、Keycloak 等网页指纹只能提示可能使用 Java。</p>
     <h3>主机判据</h3>
     <ul>
@@ -59,11 +66,18 @@
   </section>
 
   <section id="php2shell" class="card wide">
-    <h2>PHP2Shell · CVE-2026-109618 / CVE-2026-109619</h2>
+    <h2>PHP</h2>
     <p>网页可观察 PHP 版本与可选的上传相关线索。主机核验应确认处理业务请求的 Web SAPI、会话上传进度配置及厂商补丁。PHP CLI 的配置与版本可能不同。</p>
-  </section>
+    <h3 id="cve-2026-109618">CVE-2026-109618 · 内存耗尽后的状态破坏</h3>
+    <p>PHP 在请求解析期间遭遇内存耗尽时，异常清理路径可能留下不一致的执行状态。实际影响须结合 Web SAPI、运行构建和发行版补丁核对。<a href="https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w">PHP 官方公告</a></p>
+    <h3 id="cve-2026-109619">CVE-2026-109619 · 陈旧的请求全局状态</h3>
+    <p>请求生命周期结束后仍保留的全局状态可能影响后续请求。复核时应关注复用 worker 的服务部署和实际运行的补丁版本。<a href="https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp">PHP 官方公告</a></p>
+    <details id="php-analysis" class="php-analysis">
+      <summary>展开 PHP 专项深入分析</summary>
+      <div class="knowledge knowledge-detail-grid">
 
-  <section class="card wide"><h2>请求在什么阶段进入风险路径</h2>
+
+  <section class="card wide"><h3>请求在什么阶段进入风险路径</h3>
     <div class="knowledge-flow" aria-label="请求处理顺序">
       <div><b>1. Web / SAPI 收到请求</b><span>mod_php、FPM、CGI 等运行模型不同</span></div><i>→</i>
       <div><b>2. multipart / rfc1867 解析</b><span>可能早于业务 PHP 代码和部分请求初始化</span></div><i>→</i>
@@ -73,15 +87,15 @@
     <p>研究的共同重点是：解析或错误处理被中断时，当前请求或复用 worker 中的状态是否仍被后续阶段使用。补丁因此不仅涉及会话功能，也涉及 OOM 处理、早期全局重置和 multipart 期间的对象行为。</p>
   </section>
 
-  <section class="card wide"><h2>五类利用链：前置条件、传播路径与防守点</h2><div class="chain-grid">
-    <article><span class="chain-id">A</span><h3>会话写入 + 应用 LFI</h3><p><b>前置：</b>上传进度路径可写入会话，应用另有本地文件包含缺陷。</p><p><b>传播：</b>上传元数据进入会话存储，应用随后包含相应会话文件。</p><p><b>防守：</b>修复 LFI，隔离会话存储，禁止会话目录被 Web/PHP include。关闭上传进度只能减少这条路径。</p></article>
-    <article><span class="chain-id">B</span><h3>反序列化清理重入</h3><p><b>前置：</b>攻击者能控制进入反序列化器的数据，并存在可触发的对象生命周期行为。</p><p><b>传播：</b>失败或清理阶段发生析构重入，已释放的内部条目再次被访问。</p><p><b>防守：</b>避免不可信反序列化，更新 PHP，审计对象析构与调用点；用 ASAN/崩溃栈复核，不能以普通 500 归因。</p></article>
-    <article><span class="chain-id">C</span><h3>会话序列化处理器不一致</h3><p><b>前置：</b>同一会话在不同路径或请求中使用不同 serialize_handler，并具备对象链条件。</p><p><b>传播：</b>一种格式写入的数据被另一种格式解释，失败清理仍可能触发对象生命周期。</p><p><b>防守：</b>统一全部池、目录和虚拟主机配置；核对实际 Web SAPI，不能用 CLI 配置替代 Web 配置。</p></article>
-    <article><span class="chain-id">D</span><h3>mod_php 解析期 OOM 与陈旧执行状态</h3><p><b>前置：</b>易受影响的 PHP 构建与 mod_php 生命周期，multipart 解析进入内存失败路径。</p><p><b>传播：</b>解析被非局部跳转中断，关闭阶段继续读取不完整的执行器全局状态。</p><p><b>防守：</b>安装完整补丁并重启全部 worker；关联 Apache/PHP 崩溃和请求日志。自查台不会主动制造 OOM。</p></article>
-    <article><span class="chain-id">E</span><h3>FPM 跨请求陈旧反序列化状态</h3><p><b>前置：</b>同一 FPM worker 被复用，前一请求在会话解码期间异常中止，后一请求较早进入上传解析。</p><p><b>传播：</b>后一请求在正常初始化前接触前一请求残留的反序列化状态。</p><p><b>防守：</b>更新并重启 FPM 池；关联 worker PID、两次请求和错误日志。单次响应无法证明命中同一 worker。</p></article>
+  <section class="card wide"><h3>五类利用链：前置条件、传播路径与防守点</h3><div class="chain-grid">
+    <article><span class="chain-id">A</span><h4>会话写入 + 应用 LFI</h4><p><b>前置：</b>上传进度路径可写入会话，应用另有本地文件包含缺陷。</p><p><b>传播：</b>上传元数据进入会话存储，应用随后包含相应会话文件。</p><p><b>防守：</b>修复 LFI，隔离会话存储，禁止会话目录被 Web/PHP include。关闭上传进度只能减少这条路径。</p></article>
+    <article><span class="chain-id">B</span><h4>反序列化清理重入</h4><p><b>前置：</b>攻击者能控制进入反序列化器的数据，并存在可触发的对象生命周期行为。</p><p><b>传播：</b>失败或清理阶段发生析构重入，已释放的内部条目再次被访问。</p><p><b>防守：</b>避免不可信反序列化，更新 PHP，审计对象析构与调用点；用 ASAN/崩溃栈复核，不能以普通 500 归因。</p></article>
+    <article><span class="chain-id">C</span><h4>会话序列化处理器不一致</h4><p><b>前置：</b>同一会话在不同路径或请求中使用不同 serialize_handler，并具备对象链条件。</p><p><b>传播：</b>一种格式写入的数据被另一种格式解释，失败清理仍可能触发对象生命周期。</p><p><b>防守：</b>统一全部池、目录和虚拟主机配置；核对实际 Web SAPI，不能用 CLI 配置替代 Web 配置。</p></article>
+    <article><span class="chain-id">D</span><h4>mod_php 解析期 OOM 与陈旧执行状态</h4><p><b>前置：</b>易受影响的 PHP 构建与 mod_php 生命周期，multipart 解析进入内存失败路径。</p><p><b>传播：</b>解析被非局部跳转中断，关闭阶段继续读取不完整的执行器全局状态。</p><p><b>防守：</b>安装完整补丁并重启全部 worker；关联 Apache/PHP 崩溃和请求日志。自查台不会主动制造 OOM。</p></article>
+    <article><span class="chain-id">E</span><h4>FPM 跨请求陈旧反序列化状态</h4><p><b>前置：</b>同一 FPM worker 被复用，前一请求在会话解码期间异常中止，后一请求较早进入上传解析。</p><p><b>传播：</b>后一请求在正常初始化前接触前一请求残留的反序列化状态。</p><p><b>防守：</b>更新并重启 FPM 池；关联 worker PID、两次请求和错误日志。单次响应无法证明命中同一 worker。</p></article>
   </div><p class="fine">链名称和根因模型来自下方 ikow 技术分析。页面省略载荷布局、内存地址推导、命令执行及故障注入步骤。</p></section>
 
-  <section class="card wide"><h2>五类链路的缺失证据矩阵</h2><p>矩阵用于阻止“单一线索升级成漏洞结论”。程序的结构化版本由 <code>evidence_lab::chain_matrix</code> 生成；任何一行仍有缺失证据时，状态保持 <b>incomplete</b>。</p><div class="knowledge-table chain-matrix"><table><thead><tr><th>链</th><th>必须同时具备</th><th>常见缺失证据</th><th>主要防守点</th></tr></thead><tbody>
+  <section class="card wide"><h3>五类链路的缺失证据矩阵</h3><p>矩阵用于阻止“单一线索升级成漏洞结论”。程序的结构化版本由 <code>evidence_lab::chain_matrix</code> 生成；任何一行仍有缺失证据时，状态保持 <b>incomplete</b>。</p><div class="knowledge-table chain-matrix"><table><thead><tr><th>链</th><th>必须同时具备</th><th>常见缺失证据</th><th>主要防守点</th></tr></thead><tbody>
     <tr><td><b>A</b></td><td>Web 上传进度写入、应用 LFI、会话存储可被包含</td><td>实际 Web 配置；LFI 代码审计；会话目录与包含路径关系</td><td>修复 LFI，隔离会话存储与可包含路径</td></tr>
     <tr><td><b>B</b></td><td>相关运行构建、受控反序列化输入、对象生命周期路径</td><td>不可信调用点审计；受控环境的崩溃栈或内存检测报告</td><td>升级 PHP，消除不可信反序列化</td></tr>
     <tr><td><b>C</b></td><td>处理器配置不一致、共享会话存储、对象生命周期证据</td><td>跨目录/池/虚拟主机配置对照；共享范围证据</td><td>统一 handler，隔离存储，重启全部 worker</td></tr>
@@ -89,7 +103,7 @@
     <tr><td><b>E</b></td><td>复用 FPM worker、前后请求同一 PID、异常中止与残留状态</td><td>worker PID 关联；连续请求日志；服务端异常状态证据</td><td>完整补丁，重启 FPM 池，逐后端复核</td></tr>
   </tbody></table></div><div class="knowledge-callout warning"><strong>判据</strong><p>响应头、Cookie、500/502、响应时间、错误关键词、单次上传响应或达到版本基线，都不能单独补齐任何一条链。</p></div></section>
 
-  <section class="card runtime-card"><h2>Web／CLI 运行时与修复前后报告</h2><div class="knowledge-table"><table><thead><tr><th>材料</th><th>能说明什么</th><th>不能替代什么</th></tr></thead><tbody>
+  <section class="card runtime-card"><h3>Web／CLI 运行时与修复前后报告</h3><div class="knowledge-table"><table><thead><tr><th>材料</th><th>能说明什么</th><th>不能替代什么</th></tr></thead><tbody>
     <tr><td>CLI：<code>php -r</code> / 本机采集器</td><td>该命令二进制的版本、CLI SAPI 和 CLI INI</td><td>不能代表 Web/FPM 使用的二进制、池配置、容器或 worker</td></tr>
     <tr><td>Web：受鉴权辅助脚本</td><td>本次请求命中的 Web SAPI、版本和选定 INI</td><td>不能代表全部负载均衡后端或所有 worker</td></tr>
     <tr><td>软件包与进程材料</td><td>安装修订、运行映像是否一致、是否需要重启</td><td>厂商回补范围仍须对照公告；提交材料仍未经独立核验</td></tr>
@@ -97,11 +111,11 @@
   <div class="before-after"><article><span>修复前示例</span><b>Web FPM · PHP 8.4.26</b><p>低于上游基线；CLI 即使为 8.5.12，也不能覆盖 Web 风险线索。</p></article><i>→</i><article><span>修复后示例</span><b>Web FPM · PHP 8.4.27</b><p>同时检查厂商公告、包修订、运行映像、worker 重启和全部后端；结论仍标为提交材料。</p></article></div>
   <p>同一目标导入至少两份主机材料后，扫描结果会自动展示最近两份报告的 Web 版本、SAPI、upload_progress、serialize_handler、CLI 版本和修复材料变化。也可离线运行 <code>x2shell-check compare-reports --before before.json --after after.json --json</code>。</p></section>
 
-  <section class="card poc-card"><h2>离线无害 PoC：六项证据规则</h2><p>运行 <code>x2shell-check offline-poc --json</code>。它只读取程序内置的两份合成 JSON，不解析目标地址，不打开套接字，不执行 PHP，也不生成 multipart、会话、LFI、OOM 或命令载荷。</p><div class="evidence-rules">
+  <section class="card poc-card"><h3>离线无害 PoC：六项证据规则</h3><p>运行 <code>x2shell-check offline-poc --json</code>。它只读取程序内置的两份合成 JSON，不解析目标地址，不打开套接字，不执行 PHP，也不生成 multipart、会话、LFI、OOM 或命令载荷。</p><div class="evidence-rules">
     <div><b>E1</b><span>CLI 与 Web 运行时严格分离</span></div><div><b>E2</b><span>版本只产生基线线索</span></div><div><b>E3</b><span>配置证据绑定运行时范围</span></div><div><b>E4</b><span>SAPI 只约束链路适用面</span></div><div><b>E5</b><span>五类链路必须列出缺失证据</span></div><div><b>E6</b><span>前后对比不升级为独立验证</span></div>
   </div><p class="fine">JSON 输出包含 <code>network_requests: 0</code>（网络请求为 0）、<code>target_connections: 0</code>、<code>exploit_payloads: 0</code>、六项规则逐项依据、前后报告对比和五链矩阵。该 PoC 验证的是本项目的证据判定器，不验证 PHP 漏洞。</p></section>
 
-  <section class="card wide"><h2>补丁覆盖什么，仍要核对什么</h2><div class="knowledge-table"><table><thead><tr><th>层面</th><th>补丁或控制目的</th><th>复核要点</th></tr></thead><tbody>
+  <section class="card wide"><h3>补丁覆盖什么，仍要核对什么</h3><div class="knowledge-table"><table><thead><tr><th>层面</th><th>补丁或控制目的</th><th>复核要点</th></tr></thead><tbody>
     <tr><td>OOM 处理</td><td>避免内存失败后继续使用不完整的执行状态</td><td>确认实际实例达到官方基线、包修订已安装、全部 worker 已重启</td></tr>
     <tr><td>早期全局重置</td><td>在 multipart 处理前清理序列化相关状态</td><td>逐个核对 FPM 池、容器和后端，避免仍有旧 worker</td></tr>
     <tr><td>rfc1867 对象约束</td><td>限制上传进度解析期间实例化对象和触发魔术方法</td><td>不等于应用 LFI、任意反序列化等独立缺陷已修复</td></tr>
@@ -110,17 +124,17 @@
     <tr><td>应用层</td><td>修复 LFI、危险反序列化和不安全上传</td><td>引擎补丁不自动修复应用缺陷；会话/上传目录要与可执行和可包含路径隔离</td></tr>
   </tbody></table></div><p>本项目使用已核对的上游基线：8.2.35、8.3.36、8.4.27、8.5.12。达到基线仍显示“待核验”，因为响应声明、发行版回补和实际运行进程不是同一份证据。</p></section>
 
-  <section class="card"><h2>扫描证据如何升级</h2><div class="evidence-ladder">
+  <section class="card"><h3>扫描证据如何升级</h3><div class="evidence-ladder">
     <div><b>低可信线索</b><span>版本/产品响应头、页面路径、上传表单、Cookie 名称、错误文本</span></div>
     <div><b>配置与实例材料</b><span>实际 Web SAPI、PHP 版本、INI、软件包修订、运行映像和 worker PID</span></div>
     <div><b>补丁证据</b><span>官方/厂商公告、安装包来源、运行映像一致、更新后的进程已重启</span></div>
     <div><b>事件复核</b><span>同一实例的访问日志、崩溃栈、进程与文件/网络遥测的时间关联</span></div>
   </div><p>可选“上传进度基础观察”只发送一次普通文本文件，不指定会话 ID、不回读文件。出现 PHPSESSID 也只记录为线索；没有 Cookie 也不能证明功能关闭。</p></section>
 
-  <section class="card"><h2>在野情报与 IOC 的使用方式</h2><p>EXPLOITATION.md 汇总时间线、公开研究、攻击模式、恶意软件活动、网络基础设施、文件哈希和请求特征。这些内容变化快，不能作为永久黑名单。应保留来源和观测时间，在 SIEM 中把异常 multipart、PHP/worker 错误、子进程、会话文件和出站连接关联起来；单个 IP、User-Agent 或默认字段名都可能被复用或修改。</p>
+  <section class="card"><h3>在野情报与 IOC 的使用方式</h3><p>EXPLOITATION.md 汇总时间线、公开研究、攻击模式、恶意软件活动、网络基础设施、文件哈希和请求特征。这些内容变化快，不能作为永久黑名单。应保留来源和观测时间，在 SIEM 中把异常 multipart、PHP/worker 错误、子进程、会话文件和出站连接关联起来；单个 IP、User-Agent 或默认字段名都可能被复用或修改。</p>
     <div class="knowledge-callout"><strong>本项目的处理</strong><p>不把社区 IOC 内置为漏洞判定，也不自动拦截。管理员可将已验证的规则部署到现有 WAF/IDS/SIEM；上线前应做语法校验、TLS 可见性检查、请求体截断测试和合法上传误报基线。</p></div></section>
 
-  <section class="card sources wide"><h2>来源与版本</h2><p>本页在 2026-10-29 固定阅读三个 MIT 项目快照，并以 PHP 官方 GHSA 为版本基线。项目独立实现证据模型，没有复制可执行载荷。</p><ul>
+  <section class="card sources wide"><h3>来源与版本</h3><p>本页在 2026-10-29 固定阅读三个 MIT 项目快照，并以 PHP 官方 GHSA 为版本基线。项目独立实现证据模型，没有复制可执行载荷。</p><ul>
     <li><a href="https://github.com/ikow/php2shell-poc" target="_blank" rel="noreferrer">ikow/php2shell-poc</a> · <code>caffb96b0a165eb3796828a9a1dc7445ec7ff77d</code>：五类链路、根因与补丁边界。</li>
     <li><a href="https://github.com/ikow/php2shell-poc/blob/main/docs/ANALYSIS.md" target="_blank" rel="noreferrer">ANALYSIS.md</a>：漏洞根因、五类利用链、版本矩阵、检测和缓解。</li>
     <li><a href="https://github.com/ikow/php2shell-poc/blob/main/docs/EXPLOITATION.md" target="_blank" rel="noreferrer">EXPLOITATION.md</a>：在野利用时间线、攻击模式、IOC 与公开研究跟踪。</li>
@@ -130,4 +144,7 @@
     <li><a href="https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w" target="_blank" rel="noreferrer">PHP 官方 GHSA：CVE-2026-109618</a></li>
     <li><a href="https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp" target="_blank" rel="noreferrer">PHP 官方 GHSA：CVE-2026-109619</a></li>
   </ul><p class="fine">社区文档中的在野事件、补丁缺口和相关 CVE 属于来源作者的跟踪结论，本项目没有逐条独立验证。官方公告和发行版厂商通告应优先于本页。页面随程序版本发布，不会追溯重写历史扫描结果。</p></section>
+      </div>
+    </details>
+  </section>
 </main></body></html>
