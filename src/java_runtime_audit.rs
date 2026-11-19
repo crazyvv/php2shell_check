@@ -782,6 +782,16 @@ mod tests {
             })
         };
         use BuildStatus::*;
+        assert_eq!(
+            status("Oracle Corporation", "1.8.0_441-b07", ""),
+            NotAffected
+        );
+        assert_eq!(status("OpenJDK", "8u441", ""), NotAffected);
+        assert_eq!(status("Oracle Corporation", "8u511", ""), Unknown);
+        assert_eq!(
+            status("Oracle Corporation", "1.8.0_511-perf-b33", ""),
+            Affected
+        );
         assert_eq!(status("Oracle Corporation", "17.0.5+9", ""), NotAffected);
         assert_eq!(status("Oracle Corporation", "17.0.6+9", ""), Unknown);
         assert_eq!(status("Oracle Corporation", "17.0.6+10", ""), Affected);

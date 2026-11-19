@@ -37,6 +37,11 @@ assert_build candidate 27.0.1.1+2 'Amazon.com Inc.' '' HotSpot Corretto-27.0.1.1
 assert_build fixed 27.0.1.1+4-FR 'Amazon.com Inc.' '' HotSpot Corretto-27.0.1.1.4
 assert_build candidate 21.0.13.1+2 'Eclipse Adoptium' '' HotSpot
 assert_build candidate 21.1.3+9 OpenJDK OpenJDK HotSpot
+assert_build outside_scope 1.8.0_441-b07 'Oracle Corporation' 'Oracle Java SE' HotSpot
+assert_build outside_scope 8u441 OpenJDK OpenJDK HotSpot
+assert_build unknown 8u511 'Oracle Corporation' 'Oracle Java SE' HotSpot
+[[ $(nginx2root_reference 1.32.0) == *'"status":"meets_upstream_reference"'* ]]
+[[ $(nginx2root_reference 2.0.0) == *'"status":"unknown"'* ]]
 assert_build unfixed 8u511b33-perf 'Oracle Corporation' 'Oracle Java SE' HotSpot
 assert_build unknown 8u511b33-perf-b32 'Oracle Corporation' 'Oracle Java SE' HotSpot
 assert_build unknown 1.8.0_511-perf-b32 'Oracle Corporation' 'Oracle Java SE' HotSpot
@@ -315,7 +320,7 @@ NGINX
     nginx_rc=0
     "$scanner" --nginx2root --nginx-path "$fixture/openresty/nginx/sbin/nginx" --nginx-config "$fixture/missing" --json > "$fixture/incomplete.json" || nginx_rc=$?
     [[ $nginx_rc == 1 ]]
-    grep -Fq '"evidence_incomplete":true,"configuration_incomplete":true},"summary":{"risk_gate_hit":true' "$fixture/incomplete.json"
+    grep -Fq '"evidence_incomplete":true,"configuration_evidence_incomplete":true,"configuration_incomplete":true},"summary":{"risk_gate_hit":true' "$fixture/incomplete.json"
     web_coverage_incomplete false 0 '{"skipped":1}'
     ! web_coverage_incomplete false 0 '{"skipped":0}'
     (
@@ -332,7 +337,7 @@ fi
 [[ $(apache_reference 2.4.70) == potential ]]
 [[ $(apache_reference 2.4.71) == meets_upstream_reference ]]
 [[ $(apache_reference 2.0.42 module) == potential ]]
-[[ $(apache_reference 2.0.43 module) == unknown ]]
+[[ $(apache_reference 2.0.43 module) == outside_upstream_range ]]
 printf '%s\n' '7f000000-7f008000 r-xp 0 00:2e 123 /usr/lib/httpd/modules/mod_http2.so (deleted)' > "$fixture/apache-maps"
 [[ $(apache_mapped_http2 "$fixture/apache-maps") == true ]]
 [[ $(apache_mapped_http2 "$fixture/missing") == null ]]

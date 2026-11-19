@@ -29,7 +29,7 @@ fn version_status(raw: Option<&str>, module: bool) -> &'static str {
     match v[2] {
         v if v < first => "outside_upstream_range",
         v if v <= last => "potential",
-        _ if module => "unknown",
+        _ if module => "outside_upstream_range",
         _ => "meets_upstream_reference",
     }
 }
@@ -374,7 +374,10 @@ mod tests {
             "meets_upstream_reference"
         );
         assert_eq!(version_status(Some("2.0.42"), true), "potential");
-        assert_eq!(version_status(Some("2.0.43"), true), "unknown");
+        assert_eq!(
+            version_status(Some("2.0.43"), true),
+            "outside_upstream_range"
+        );
         let headers = [
             ("Server".into(), "Apache/2.4.70".into()),
             ("Upgrade".into(), "h2c".into()),

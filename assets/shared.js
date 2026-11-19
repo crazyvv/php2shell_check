@@ -89,7 +89,7 @@ function nginx2rootView(n) {
   if(!n?.status || ['disabled','not_observed'].includes(n.status))return wrap;
   const box=node('div',undefined,'runtime-comparison java4shell-evidence');
   box.append(node('strong','Nginx2Root · '+(n.status==='nginx_hint'?'HTTP 响应线索':'主机提交证据')));
-  const status={potential:'命中披露版本范围',meets_vendor_reference:'达到厂商修复版本参考',meets_upstream_reference:'达到上游版本基线',outside_upstream_range:'低于披露范围',unknown:'未知'};
+  const status={potential:'命中披露版本范围',meets_vendor_reference:'达到厂商修复版本参考',meets_upstream_reference:'达到上游版本基线',outside_upstream_range:'不在上游披露范围',unknown:'未知'};
   const rows=[...(n.running_processes || []),...(n.installations || [])];
   if(n.status==='nginx_hint')rows.push(n);
   for(const row of rows.slice(0,24)){
@@ -122,7 +122,7 @@ function apache2rootView(report){
   if(!report?.status || ['disabled','not_observed'].includes(report.status))return wrap;
   const box=node('div',undefined,'runtime-comparison java4shell-evidence');
   box.append(node('strong','Apache2Root · CVE-2026-119618'));
-  const labels={potential:'上游受影响范围',outside_upstream_range:'早于披露范围',meets_upstream_reference:'达到上游修复基线',unknown:'版本证据不足'};
+  const labels={potential:'上游受影响范围',outside_upstream_range:'不在上游披露范围',meets_upstream_reference:'达到上游修复基线',unknown:'版本证据不足'};
   if(report.status==='apache_hint'){
     box.append(node('p',`响应版本 ${report.version || '未知'} · ${labels[report.version_status] || '未知'} · 本次协议 ${report.response_protocol || '未知'}`,'fine'));
     if(report.http2_advertised)box.append(node('p','响应声明支持 h2 或 h2c。','fine'));

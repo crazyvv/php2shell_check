@@ -367,6 +367,8 @@ x2shell-check collect --nginx2root --java-command --java-attach > host-report.js
 
 Nginx2Root 核验逐项给出五个 NGINX CVE 的上游版本参考。主机模式读取当前命名空间可见的 NGINX 进程映像和常见磁盘安装，输出版本、文件身份关联和 SCTP 可见性。SCTP 可见性不能确认内核补丁状态。Bash 模式返回 `1` 表示命中上游受影响范围，`3` 表示没有足够的版本或覆盖证据，`2` 表示参数错误。版本范围与已知修复分支来自 [NGINX 官方公告](https://nginx.org/en/security_advisories.html) 和 [CERT-EU 公告](https://cert.europa.eu/publications/security-advisories/2026-022/)。
 
+报告的版本参考仅适用于本专项五个 CVE。同批其他公告项目仍应单独核验，包括 CVE-2026-118899、CVE-2026-125283、CVE-2026-120967、CVE-2026-123640 和 CVE-2026-120993。配置覆盖布尔值使用 `coverage.configuration_evidence_incomplete`，旧字段 `coverage.configuration_incomplete` 保留为同义字段。`summary.configuration_incomplete` 统计配置读取不完整的 CVE 条目。
+
 Bash 和 Rust 都检查标准路径中的磁盘配置线索，包括 HTTP/2、HTTP/3/QUIC、上游代理、resolver、mirror/SSI 和邮件代理。磁盘指令可能尚未加载，多个文件的指令也可能属于不同站点。Bash 可用可重复的 `--nginx-config FILE` 检查非标准路径。SCTP 禁载配置只报告为线索。可用时 Bash 读取 dpkg/RPM 软件包元数据，Rust 在 `--package-audit` 下读取。软件包回补仍按对应发行版公告核对。
 
 Rust 的 `--middleware` 同时包含 Nginx2Root 和 Apache 等中间件盘点。网页扫描只使用现有 HTTP 响应的 `Server` 头，结果可能来自代理。上游版本参考不能确认发行版回补、NGINX Plus 或第三方构建的补丁状态，也不能确认相关模块配置或请求路径可达。

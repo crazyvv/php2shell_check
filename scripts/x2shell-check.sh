@@ -477,11 +477,11 @@ range_assess() {
     case $major in
         17) first="17.0.6";    last="17.0.21.0.3";  fixed="17.0.21.1"
             fixed_note="17.0.21.1（Oracle）/ 17.0.21.1.2（Corretto）" ;;
-        21) first="";          last="21.0.13.0.3";  fixed="21.0.13.1"
+        21) first="21.0.0";          last="21.0.13.0.3";  fixed="21.0.13.1"
             fixed_note="21.0.13.1（Oracle）/ 21.0.13.1.2（Corretto）" ;;
-        25) first="";          last="25.0.5.0.3";   fixed="25.0.5.1"
+        25) first="25.0.0";          last="25.0.5.0.3";   fixed="25.0.5.1"
             fixed_note="25.0.5.1（Oracle）/ 25.0.5.1.2（Corretto）" ;;
-        27) first="";          last="27.0.1.0.3";   fixed="27.0.1.1"
+        27) first="27.0.0";          last="27.0.1.0.3";   fixed="27.0.1.1"
             fixed_note="27.0.1.1（Oracle）/ 27.0.1.1.4（Corretto）" ;;
         8|11)
             printf 'outside_scope\tJava %s 标准版本不在 Oracle 公布的受影响构建列表内' "$major"
@@ -574,6 +574,14 @@ build_assess() {
                     printf 'fixed\tOracle Java SE 8u513-perf 修复构建'
                     return ;;
             esac
+        fi
+        local update legacy_update_pattern='^(1\.8\.0_|8u)([0-9]+)(-b[0-9]+|b[0-9]+)?$'
+        if [[ $v =~ $legacy_update_pattern ]]; then
+            update=${BASH_REMATCH[2]}
+            if [[ $vl == openjdk ]] || { [[ $vl == oracle || $vl == "oracle corporation" ]] && vlt "$update" 511; }; then
+                printf 'outside_scope\t已识别的标准 Java 8 构建不在本次披露范围内'
+                return
+            fi
         fi
         printf 'unknown\tJava 8 构建缺少适用的厂商规则'
         return
@@ -1812,6 +1820,10 @@ report_json() {
             "$(jstr "$version")" "$(jstr "$jhome")" "$(jstr "$vendor")" "$(jstr "$product")" "$(jstr "$vm")" "$(jstr "$arch")"
         printf '"flags": %s, "flags_effective": %s, "container": %s, "notes": %s' \
             "$(jstr "$flags")" "${feff:-false}" "$(jstr "$container")" "$(json_notes "$notes")"
+        case $reason in
+            按显式信任*) printf ', "flags_evidence_source": "startup_arguments_estimated"' ;;
+            *) if [ "$kind" = process ] && [ "$feff" = true ]; then printf ', "flags_evidence_source": "jcmd"'; fi ;;
+        esac
         if [ -n "$identity_confidence" ]; then
             printf ', "identity_confidence": %s' "$(jstr "$identity_confidence")"
         fi
@@ -1982,7 +1994,7 @@ nginx2root_reference() {
         if [[ $flavor == plus ]]; then
             status=$(nginx_plus_reference "$plus" "$cve")
         elif { [[ $raw == 1.30.* ]] && vge "$raw" 1.30.7; } ||
-           { [[ $raw == 1.31.* ]] && vge "$raw" 1.31.9; }; then
+           { [[ $raw =~ ^1\.[0-9]+\.[0-9]+$ ]] && vge "$raw" 1.31.9; }; then
             status=meets_upstream_reference
         elif [ -n "$raw" ]; then
             if vlt "$raw" "$minimum"; then status=outside_upstream_range
@@ -2013,9 +2025,16 @@ nginx2root_reference() {
         fi
         extra="$extra,\"reference\":\"https://www.cve.org/CVERecord?id=$cve\",\"upstream_advisory\":\"https://nginx.org/en/security_advisories.html\",\"upstream_fixed_versions\":[\"1.30.7\",\"1.31.9\"]"
         if [[ $flavor == plus ]]; then
-            local vendor_versions='["37.0.8.1","37.3.0.1"]'
+            local vendor_versions='["37.0.8.1","37.3.0.1"]' advisory
+            case $cve in
+                CVE-2026-123007) advisory=K000163926 ;;
+                CVE-2026-123633) advisory=K000163928 ;;
+                CVE-2026-123634) advisory=K000163925 ;;
+                CVE-2026-121810) advisory=K000163927 ;;
+                CVE-2026-113425) advisory=K000163931 ;;
+            esac
             if [[ $cve == CVE-2026-123633 ]]; then vendor_versions='["37.0.7.1","37.2.0.1"]'; fi
-            extra="$extra,\"vendor_reference\":\"https://docs.nginx.com/nginx/releases/\",\"vendor_fixed_versions\":$vendor_versions"
+            extra="$extra,\"vendor_reference\":\"https://docs.nginx.com/nginx/releases/\",\"vendor_fixed_versions\":$vendor_versions,\"vendor_advisory\":\"https://my.f5.com/manage/s/article/$advisory\""
         fi
         printf '%s{"cve":"%s","status":"%s","feature":"%s","config_evidence":"%s","missing_disk_hints":%s%s}' \
             "$comma" "$cve" "$status" "$feature" "$evidence" "$missing" "$extra"
@@ -2256,7 +2275,7 @@ apache_reference() {
         [[ $raw =~ ^2\.0\.[0-9]+$ ]] || { printf unknown; return; }
         if vlt "$raw" 2.0.8; then printf outside_upstream_range
         elif vle "$raw" 2.0.42; then printf potential
-        else printf unknown
+        else printf outside_upstream_range
         fi
     else
         [[ $raw =~ ^2\.4\.[0-9]+$ ]] || { printf unknown; return; }
@@ -2575,7 +2594,7 @@ nginx2root_scan() {
     if [ "$format" = json ]; then
         printf '{"status":"collected","source":"local_binary_inventory","patch_verified":false,"exploitability_confirmed":false,"sctp":%s,"configuration":%s,"sources":["https://nginx.org/en/security_advisories.html","https://cert.europa.eu/publications/security-advisories/2026-022/","https://openresty.org/en/ann-1031008001.html","https://openresty.org/en/changelog-1025003.html","https://openresty.org/en/changelog-1027001.html","https://github.com/alibaba/tengine/blob/3.2.0-rc5/src/core/nginx.h","https://docs.nginx.com/nginx-ingress-controller/releases/","https://docs.nginx.com/nginx/releases/"],"findings":[' "$sctp_report" "$config_report"
     else
-        printf 'NGINX 上游版本参考\n磁盘配置线索: %s\n内核 SCTP 线索: %s\n' "$config_report" "$sctp_report"
+        printf 'NGINX 上游版本参考 · 仅覆盖本专项五项 CVE\n磁盘配置线索: %s\n内核 SCTP 线索: %s\n' "$config_report" "$sctp_report"
     fi
 
     nginx2root_row() {
@@ -2664,7 +2683,7 @@ nginx2root_scan() {
         [[ $image_state == matched ]] || unresolved=$((unresolved + 1))
         package_hint=null
         config_entry= row_config= config_source=
-        if [ -n "${config_paths[0]:-}" ]; then row_config=$config_report; config_source=explicit; fi
+        if [ -n "${config_paths[0]:-}" ]; then row_config=$config_report; config_source=explicit; config_entry=${config_paths[0]}; fi
         if [[ $matched == true && -n $self_ns && $process_ns == "$self_ns" &&
               -n $self_root && $(file_id "$proc/root") == "$self_root" && $(file_id "$path") == "$id" ]]; then
             if [ -z "${config_paths[0]:-}" ]; then
@@ -2702,6 +2721,7 @@ nginx2root_scan() {
         if [ -n "${config_paths[0]:-}" ]; then
             row_config=$config_report
             config_source=explicit
+            config_entry=${config_paths[0]}
         elif config_entry=$(nginx_layout_config "$path" "$flavor") && [ -n "$config_entry" ]; then
             config_source=installation_layout
             if [[ $path == /usr/sbin/nginx && $config_entry == /etc/nginx/nginx.conf ]]; then config_source=system_layout; fi
@@ -2714,12 +2734,13 @@ nginx2root_scan() {
     if (( unattributed > 0 || incomplete_config > 0 )); then config_incomplete=true; fi
     if [ "$unknown" -eq 1 ] || [ "$total" -eq 0 ] || web_coverage_incomplete "$proc_limit" "$unresolved" "$config_report"; then incomplete=true; fi
     if [ "$format" = json ]; then
-        printf '],"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d,"evidence_incomplete":%s,"configuration_incomplete":%s},"summary":{"risk_gate_hit":%s,"condition_not_observed":%d,"potential_condition_not_observed":%d,"unknown_condition_not_observed":%d,"configuration_not_attributed":%d,"configuration_incomplete":%d,"unmapped_product_versions":[%s]}}\n' "$proc_limit" "$unresolved" "$incomplete" "$config_incomplete" "$gate_hit" "$condition_not_observed" "$potential_missing" "$unknown_missing" "$unattributed" "$incomplete_config" "$unmapped"
+        printf '],"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d,"evidence_incomplete":%s,"configuration_evidence_incomplete":%s,"configuration_incomplete":%s},"summary":{"risk_gate_hit":%s,"condition_not_observed":%d,"potential_condition_not_observed":%d,"unknown_condition_not_observed":%d,"configuration_not_attributed":%d,"configuration_incomplete":%d,"unmapped_product_versions":[%s]}}\n' "$proc_limit" "$unresolved" "$incomplete" "$config_incomplete" "$config_incomplete" "$gate_hit" "$condition_not_observed" "$potential_missing" "$unknown_missing" "$unattributed" "$incomplete_config" "$unmapped"
     else
         printf '进程覆盖 · 达到上限 %s · 证据不完整 %s\n' "$proc_limit" "$unresolved"
         printf '版本门禁命中 %s · 证据不完整 %s\n' "$gate_hit" "$incomplete"
         if [ -n "$unmapped" ]; then printf '未解析内核的衍生版本 · [%s]\n' "$unmapped"; fi
         printf '配置未归属 · %d 项（按发现行和 CVE 计）\n' "$unattributed"
+        printf '配置读取不完整 · %d 项（按发现行和 CVE 计）\n' "$incomplete_config"
         printf '缺少必要磁盘线索 · %d 项（版本命中 %d · 版本未知 %d，按发现行和 CVE 计）\n' "$condition_not_observed" "$potential_missing" "$unknown_missing"
     fi
     if [ "$gate" -eq 1 ]; then return 1; fi

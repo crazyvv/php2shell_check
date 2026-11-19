@@ -36,7 +36,7 @@ fn reference(raw: Option<&str>) -> Vec<Value> {
             let status = match version {
                 Some(v)
                     if (v[0] == 1 && v[1] == 30 && v[2] >= 7)
-                        || (v[0] == 1 && v[1] == 31 && v[2] >= 9) =>
+                        || (v[0] == 1 && v >= [1, 31, 9]) =>
                 {
                     "meets_upstream_reference"
                 }
@@ -136,6 +136,15 @@ impl Product {
                     || (row["cve"] == "CVE-2026-123633"
                         && matches!(release, Some("37.0.7.1" | "37.2.0.1")));
                 row["vendor_reference"] = json!(PLUS_RELEASES);
+                let advisory = match row["cve"].as_str() {
+                    Some("CVE-2026-123007") => "K000163926",
+                    Some("CVE-2026-123633") => "K000163928",
+                    Some("CVE-2026-123634") => "K000163925",
+                    Some("CVE-2026-121810") => "K000163927",
+                    _ => "K000163931",
+                };
+                row["vendor_advisory"] =
+                    json!(format!("https://my.f5.com/manage/s/article/{advisory}"));
                 row["vendor_fixed_versions"] = if row["cve"] == "CVE-2026-123633" {
                     json!(["37.0.7.1", "37.2.0.1"])
                 } else {
@@ -921,7 +930,7 @@ pub(crate) fn collect(
                 }
             });
         json!({"status":"collected","source":"local_binary_inventory","running_processes":running,
-            "installations":installations,"configuration":explicit_config.unwrap_or_else(local_config),"coverage":{"proc_available":proc_available,"truncated":truncated,"configuration_incomplete":config_incomplete},"summary":summary,
+            "installations":installations,"configuration":explicit_config.unwrap_or_else(local_config),"coverage":{"proc_available":proc_available,"truncated":truncated,"configuration_evidence_incomplete":config_incomplete,"configuration_incomplete":config_incomplete},"summary":summary,
             "sctp":{"kernel_release":kernel_release,"module_visible":Path::new("/sys/module/sctp").exists(),"associations_visible":associations,"modprobe_install_block_hint":sctp_block_hint(),"patch_status":"unknown"},
             "patch_verified":false,"exploitability_confirmed":false,"sources":SOURCES})
     }
@@ -1156,6 +1165,11 @@ mod tests {
             reference(Some("1.24.0"))[3]["status"],
             "outside_upstream_range"
         );
+        assert_eq!(
+            reference(Some("1.32.0"))[0]["status"],
+            "meets_upstream_reference"
+        );
+        assert_eq!(reference(Some("2.0.0"))[0]["status"], "unknown");
         let headers = [("Server".into(), "nginx/1.31.8".into())];
         assert_eq!(remote(&headers, false)["cves"][0]["status"], "potential");
         assert!(remote(&headers, true)["version"].is_null());
