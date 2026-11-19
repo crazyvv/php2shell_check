@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  java4shell-scan.sh —— CVE-2026-114938（Java4Shell）主机暴露面检测
+#  x2shell-check.sh — Java、NGINX 与 Apache 主机暴露面自查
 #  单文件 · 只读 · 无 Python/Go 依赖（仅 bash + coreutils/grep/awk）
 #
 #  这是三个开源检测脚本的合并增强版：

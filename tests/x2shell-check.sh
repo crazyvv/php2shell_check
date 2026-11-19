@@ -2,7 +2,7 @@
 set -eu
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-scanner=$repo/scripts/java4shell-scan.sh
+scanner=$repo/scripts/x2shell-check.sh
 source "$scanner"
 
 assert_build() {

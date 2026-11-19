@@ -1,4 +1,4 @@
-# 服务暴露面自查台 · Server Exposure Check
+# x2shell-check · 服务暴露面自查台
 
 面向开发与运维团队的多服务暴露面自查工具。Rust 程序提供 Web 工作台、授权目标的 HTTP 检查与 Linux 主机采集，Bash 脚本可无参盘点主机。网页和主机证据分开报告，扫描记录保存在 SQLite，无需外部数据库。
 
@@ -15,7 +15,7 @@
 
 ## 下载与运行
 
-从 [GitHub Releases](https://github.com/crazyvv/php2shell_check/releases) 下载与系统匹配的程序包：Windows x86_64 使用 ZIP，Linux x86_64 使用 musl 静态构建的 tar.gz。解压后阅读 `START-HERE.txt`，使用同一 Release 的 `SHA256SUMS` 校验文件。
+从 [GitHub Releases](https://github.com/crazyvv/x2shell-check/releases) 下载与系统匹配的程序包：Windows x86_64 使用 ZIP，Linux x86_64 使用 musl 静态构建的 tar.gz。解压后阅读 `START-HERE.txt`，使用同一 Release 的 `SHA256SUMS` 校验文件。
 
 Windows 在 PowerShell 中执行 `./php-selfcheck.exe`，Linux 执行 `./php-selfcheck`。两者都支持 Web 服务和 URL 检查，`collect` 主机采集仅支持 Linux。Linux 的 HTTPS 请求需要系统 CA 证书；Windows 如提示缺少运行库，安装微软官方 Visual C++ 2015–2022 Redistributable x64。
 
@@ -321,11 +321,11 @@ bash scripts/check-java4shell.sh --json --java-path /opt/jdk/bin/java > java4she
 
 脚本从 `/proc/cpuinfo` 检查所有可见逻辑 CPU。开启 `--jcmd` 后，使用当前 `PATH` 里的 `jcmd` 读取 JVM 生效参数，必要时会启动 HotSpot 的诊断监听器。默认输出 TSV。使用 `--json` 时，stdout 只写 JSON 汇总，TSV 证据写到 stderr。`--java-path` 会解析符号链接，并优先扫描目标 `bin/java` 所属的 JDK/JRE。`--root` 指定的目录也优先于系统默认目录。退出码 `0` 表示已排除影响或已确认缓解，`1` 表示存在受影响 JVM，`2` 表示用法或依赖错误，`3` 表示证据不足，`4` 表示有符合条件但未关联到运行中 JVM 的安装。检查思路参考两个上游项目和相应厂商公告。[Bash 检查器](https://github.com/ubitquity/cve-2026-114938-java4shell-remediation) · [Python 检查器](https://github.com/Mahgal/java4shell-check) · [Oracle 安全公告](https://www.oracle.com/security-alerts/cspunov2026.html)
 
-需要逐资产报告时，可单独运行增强版 `scripts/java4shell-scan.sh`。它增加了厂商和产品证据、容器线索以及 JSON/CSV 明细。运行进程以 `/proc` 映射为准，未验证的磁盘安装最多给出 `potential`，对于疑似受影响的运行 JVM，缺少生效参数时保留 `unknown`。
+需要逐资产报告时，可单独运行增强版 `scripts/x2shell-check.sh`。它增加了厂商和产品证据、容器线索以及 JSON/CSV 明细。运行进程以 `/proc` 映射为准，未验证的磁盘安装最多给出 `potential`，对于疑似受影响的运行 JVM，缺少生效参数时保留 `unknown`。
 
 ```bash
-bash scripts/java4shell-scan.sh --jcmd --json > java4shell-details.json
-bash scripts/java4shell-scan.sh --demo --json
+bash scripts/x2shell-check.sh --jcmd --json > java4shell-details.json
+bash scripts/x2shell-check.sh --demo --json
 ```
 
 增强版退出码为 `0`（没有命中门禁且证据足够）、`1`（命中 `--fail-on`，默认含 `affected,potential`）、`2`（参数或 I/O 错误）、`3`（证据不足）。`--jdk` 指定要盘点的运行时目录。`--java-path` 会执行指定程序的 `-version`，请传入可信 Java 程序。`--jcmd` 从当前 `PATH` 查找诊断工具，并可能启动 HotSpot 诊断监听器。
@@ -334,16 +334,16 @@ bash scripts/java4shell-scan.sh --demo --json
 
 当 `maps` 与磁盘设备号不同、inode 相同时，增强版尝试用 `map_files` 核对实际映射对象与磁盘文件。若因权限限制无法补证，进程保留 `potential`，磁盘安装仍单列。 JSON 进程条目的 `identity_confidence=weak` 表示文件身份尚未核实。`disk_evidence` 单独保存磁盘版本、厂商、产品和构建判定，CSV 在末尾追加对应列。进程的 `version` 保留给运行构建证据。开启 `--jcmd` 时，JVM 自报的完整构建号单独记录。它与磁盘构建冲突时返回 `unknown`，构建号一致也不会单独触发文件去重。只有文件身份已核实且版本无冲突时才去重。
 
-增强版 JSON 的 `coverage` 记录 `--root-depth` 上限、达到深度边界的目录数、递归扫描出错的根目录数和读取失败的进程映射数。达到深度边界表示该目录以下没有搜索。若未命中门禁，覆盖不足会返回退出码 `3`。`candidate` 是 JSON 和 CSV 中的 `build_assessment` 值，`--fail-on` 匹配最终的 `status`。运行 `bash tests/java4shell-scan.sh` 可验证构建规则和覆盖报告。
+增强版 JSON 的 `coverage` 记录 `--root-depth` 上限、达到深度边界的目录数、递归扫描出错的根目录数和读取失败的进程映射数。达到深度边界表示该目录以下没有搜索。若未命中门禁，覆盖不足会返回退出码 `3`。`candidate` 是 JSON 和 CSV 中的 `build_assessment` 值，`--fail-on` 匹配最终的 `status`。运行 `bash tests/x2shell-check.sh` 可验证构建规则和覆盖报告。
 
 ### 一次盘点 Java、NGINX 和 Apache
 
 ```bash
 # 无参数时自动盘点三类运行进程和常见安装目录
-bash scripts/java4shell-scan.sh
+bash scripts/x2shell-check.sh
 
 # 批量采集用一个 JSON 对象，包含三类结果和专项退出码
-bash scripts/java4shell-scan.sh --all --json
+bash scripts/x2shell-check.sh --all --json
 ```
 
 默认读取本机文件和启动线索。JVM 生效参数需要显式加 `--all --jcmd`，必要时 HotSpot 会打开诊断监听器。原有 Java 专项参数仍可用，例如 `--java4shell --json`，已存在的 `--json` 也继续输出 Java 专项格式。Apache 部分列出本机可见的进程和二进制版本。批量模式退出 `1` 表示 Java、NGINX 或 Apache 命中风险门禁，`3` 表示证据不完整，`2` 表示用法或采集错误。
@@ -352,8 +352,8 @@ bash scripts/java4shell-scan.sh --all --json
 
 ```bash
 # Bash 单文件
-bash scripts/java4shell-scan.sh --nginx2root --json
-bash scripts/java4shell-scan.sh --nginx2root --nginx-path /opt/nginx/sbin/nginx
+bash scripts/x2shell-check.sh --nginx2root --json
+bash scripts/x2shell-check.sh --nginx2root --nginx-path /opt/nginx/sbin/nginx
 
 # Rust 主机采集
 php-selfcheck collect --nginx2root > nginx-report.json
@@ -375,7 +375,7 @@ Nginx2Root 检查项参考了研究披露、官方公告和两个只读检查器
 
 ```bash
 # 单项 Bash 检查，批量模式也包含此项
-bash scripts/java4shell-scan.sh --apache2root --json
+bash scripts/x2shell-check.sh --apache2root --json
 # Rust 主机采集，--middleware 也会启用此项
 php-selfcheck collect --apache2root > apache-report.json
 ```

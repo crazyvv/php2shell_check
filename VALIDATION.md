@@ -84,9 +84,9 @@
 - Release workflow 通过 actionlint v1.7.7；发布脚本通过语法检查及隔离模拟 API 验证：必须具备两个平台附件，下载校验成功后才能公开；下载被篡改时不执行公开发布。
 - 云端 Windows MSVC 与 Linux musl 两个任务均通过测试、发布构建和本地启动检查；发布脚本上传附件后下载回验 SHA-256，再公开 Release。已从 release-manifests 分支取得成功回执，核对源提交与 v0.2.0 标签一致。当前环境的 GitHub API 仍返回 403，最终发布状态通过该 Git 回执确认。
 
-发布地址：https://github.com/crazyvv/php2shell_check/releases/tag/v0.2.0
+发布地址：https://github.com/crazyvv/x2shell-check/releases/tag/v0.2.0
 
-云端构建记录：https://github.com/crazyvv/php2shell_check/actions/runs/39947139307
+云端构建记录：https://github.com/crazyvv/x2shell-check/actions/runs/39947139307
 
 已发布附件的 SHA-256（以 Release 的 SHA256SUMS 为准）：
 
@@ -107,9 +107,9 @@
 
 GitHub Actions 已完成 Windows MSVC 与 Linux musl 的原生测试、构建、启动检查；上传后下载附件回验 SHA-256，再发布 v0.3.0。已取得 release-manifests 成功回执并核对源提交与标签一致。
 
-发布地址：https://github.com/crazyvv/php2shell_check/releases/tag/v0.3.0
+发布地址：https://github.com/crazyvv/x2shell-check/releases/tag/v0.3.0
 
-云端记录：https://github.com/crazyvv/php2shell_check/actions/runs/40266325395
+云端记录：https://github.com/crazyvv/x2shell-check/actions/runs/40266325395
 
 本地另外验证 Linux musl 包包含自定义示例、完整库和 MIT 许可：解压后使用相对路径加载 company-1 库，实际启动服务后 API 显示 52 条规则，不暴露服务器文件路径。
 
@@ -129,9 +129,9 @@ GitHub Actions 已完成 Windows MSVC 与 Linux musl 的原生测试、构建、
 
 后台保存不会修改源 JSON 文件；本机采集器依旧通过文件加载特征。没有对真实业务或公网资产执行扫描。
 
-发布地址：https://github.com/crazyvv/php2shell_check/releases/tag/v0.4.0
+发布地址：https://github.com/crazyvv/x2shell-check/releases/tag/v0.4.0
 
-云端构建及浏览器记录：https://github.com/crazyvv/php2shell_check/actions/runs/40284587356
+云端构建及浏览器记录：https://github.com/crazyvv/x2shell-check/actions/runs/40284587356
 
 已核对发布源提交与 v0.4.0 标签一致，Windows/Linux 附件下载回验通过。Chrome 实测关键版本值使用等宽字体、字重 700，前景 rgb(143, 28, 23)、背景 rgb(249, 220, 213)。
 
@@ -167,7 +167,7 @@ v0.5.3 本地复核：Rust 1.91.1 locked/offline 共 70 项测试通过；Node �
 
 ### v0.5.3 发布确认
 
-已公开发布 https://github.com/crazyvv/php2shell_check/releases/tag/v0.5.3 。Actions 40803315989 Windows/Linux 构建、真实 Chrome、下载 SHA-256 回验均通过，回执来源提交 015c1e9a8fb583d217cc9cfbcd70504bd581149a。
+已公开发布 https://github.com/crazyvv/x2shell-check/releases/tag/v0.5.3 。Actions 40803315989 Windows/Linux 构建、真实 Chrome、下载 SHA-256 回验均通过，回执来源提交 015c1e9a8fb583d217cc9cfbcd70504bd581149a。
 
 ## v0.6.0 — ikow 检测判据与最小基础观察
 
