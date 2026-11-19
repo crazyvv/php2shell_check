@@ -30,38 +30,29 @@ def main(tag, directory):
     archives = sorted(path for path in directory.iterdir() if path.name in expected)
     if {path.name for path in archives} != expected:
         raise RuntimeError("Both tested Windows and Linux archives are required")
-    hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in archives}
+    script = directory / "x2shell-check.sh"
+    if not script.is_file() or script.read_bytes() != (ROOT / "scripts/x2shell-check.sh").read_bytes():
+        raise RuntimeError("The tested Bash attachment must match the tagged source")
+    files = archives + [script]
+    hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
     sums = directory / "SHA256SUMS"
     sums.write_text("".join(f"{digest}  {name}\n" for name, digest in sorted(hashes.items())), encoding="utf-8")
-    attachments = archives + [sums]
+    attachments = files + [sums]
     notes = directory / "release-notes.md"
     notes.write_text(f"""x2shell-check · 服务暴露面自查台 {tag}
 
-下载对应系统的程序包，解压后阅读 `START-HERE.txt` 和 `README.md`。
-
-| 附件 | 适用系统 |
+| 附件 | 用途 |
 | --- | --- |
-| `x2shell-check-{tag}-windows-x86_64.zip` | Windows x86_64，MSVC 构建 |
-| `x2shell-check-{tag}-linux-x86_64.tar.gz` | Linux x86_64，musl 静态构建 |
-| `SHA256SUMS` | 两个程序包的 SHA-256 校验值 |
+| `x2shell-check-{tag}-windows-x86_64.zip` | Windows x86_64，网页服务和 URL 检查 |
+| `x2shell-check-{tag}-linux-x86_64.tar.gz` | Linux x86_64，musl 静态程序，含主机采集和 Bash 脚本 |
+| `x2shell-check.sh` | 独立 Bash 巡检脚本，可分发到目标主机 |
+| `SHA256SUMS` | 三个附件的 SHA-256 校验值 |
 
-包含独立扫描页面、管理员历史/筛选/删除、SQLite 持久化、轻量响应头模式、CI 检查命令，以及可选 PHP/Java 命令、中间件、进程端口和厂商补丁参考核验。
+解压程序包后阅读 `START-HERE.txt`。下载独立脚本后运行 `bash x2shell-check.sh`，默认检查 Java、NGINX 与 Apache。需要批量留档时运行 `bash x2shell-check.sh --all --json > host-audit.json`。
 
-支持可配置的被动网站特征库：63 条内置规则，支持 CMS/框架、Java 产品、静态生成器、托管平台、中间件、CDN/WAF 与挑战页识别；JSON 扩展/覆盖/禁用、命中证据和规则版本追踪。规则不增加请求，产品版本不作为运行时版本，外部资源及托管平台线索不作为当前站点已修复证明。管理员后台可逐条编辑、新增、禁用/启用、删除、校验及保存，并持久化到 SQLite。
+扫描工作台按 Apache、NGINX、Java/JVM 和 PHP 展示各自证据。知识库按组件和 CVE 索引，`/tools` 提供 Bash 下载、批量用法及退出码说明。Linux 的 Rust `collect` 生成可导入网页的主机报告。
 
-主机核验覆盖 PHP2Shell、Java4Shell、Nginx2Root 和 Apache2Root。Linux 包包含 `scripts/x2shell-check.sh`，无参数自动盘点 Java、NGINX 和 Apache。JVM 生效参数需显式启用诊断附加。网页线索和主机证据均按各自范围报告。
-
-本版新增默认关闭的上传进度基础观察：管理员允许后由开发者选择，仅一次普通 .txt 文件 POST，不指定会话 ID、不回读文件、不执行代码；Cookie 仅作线索，不确认配置或 CVE。增加会话销毁错误识别和 strict_mode/进度频率等配置采集，附社区判据复核与流程文档。新增公开只读 `/knowledge` 漏洞知识库，整理五类利用链、补丁边界、证据层级和 IOC 使用方法，并逐项链接来源；不包含可执行载荷。
-
-本版增加五类链路的前置条件、传播路径、防守点和缺失证据矩阵。主机材料按 SAPI 强制区分 Web 与 CLI，同一目标最近两份材料自动展示修复前后差异；`compare-reports` 可离线比较本地 JSON。`offline-poc` 只使用内置合成数据验证六项证据规则，网络请求、目标连接、PHP 命令、漏洞载荷和漏洞触发均为 0。对比和 PoC 都不把提交声明升级为漏洞或修复已确认。
-
-同时包含管理员在线配置面板（JSON、访问与扫描开关、白名单、采集默认选项、SQLite 持久化、校验、冲突保护、审计）。Web multipart 改为管理员允许后，由开发者为本次扫描选择启用。已有任务使用提交时配置快照。另新增已有响应的上传表单入口/文件字段提取、内存耗尽/会话解码/文件包含错误分类，以及可选 PHP/Web 报告的会话序列化配置采集。线索不提升漏洞结论，不新增探测请求、不上传文件或进行故障注入。详见 README 能力对照。
-
-Windows 支持 Web 服务及 URL 检查；`collect` 主机采集目前仅支持 Linux。Linux 的 HTTPS 检测仍需系统 CA 证书。Windows 如提示缺少运行库，请安装微软官方 Visual C++ 2015–2022 Redistributable x64。
-
-两个平台都须通过测试及本机启动检查后才能发布。发布包不含真实配置、管理员密码、数据库或扫描结果。免密码与无白名单通过 `init --allow-anonymous --allow-without-whitelist` 显式开启。
-
-PHP 版本声明与厂商参考规则匹配不能直接证明已修复；部分厂商参考阈值尚需独立复核。
+NGINX 和 Apache 的 Bash 检查补充了运行映像身份、配置线索与覆盖度。版本范围和配置线索用于安排复核，厂商回补与实际生效配置需要独立确认。
 """, encoding="utf-8")
     existing = command("gh", "release", "view", tag, "--repo", repository,
                        "--json", "url,isDraft,assets,tagName", check=False)
@@ -87,7 +78,7 @@ PHP 版本声明与厂商参考规则匹配不能直接证明已修复；部分�
         command("gh", "release", "edit", tag, "--repo", repository, "--draft=false", "--latest")
     release = json.loads(command("gh", "release", "view", tag, "--repo", repository,
                                  "--json", "url,isDraft,assets,tagName,publishedAt").stdout)
-    if release["isDraft"] or not (expected | {"SHA256SUMS"}).issubset({a["name"] for a in release["assets"]}):
+    if release["isDraft"] or not (expected | {"x2shell-check.sh", "SHA256SUMS"}).issubset({a["name"] for a in release["assets"]}):
         raise RuntimeError("Published release verification failed")
     status = {"state": "published", "tag": tag, "repository": repository,
               "source_commit": command("git", "rev-parse", "HEAD").stdout.strip(),
