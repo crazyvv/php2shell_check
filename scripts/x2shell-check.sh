@@ -2009,10 +2009,11 @@ RULES
 }
 
 nginx2root_binary_metadata() {
-    local file=$1 marks versions plus flavor=nginx
+    local file=$1 marks versions plus flavor=nginx module comma=
+    local hints=''
     [[ -f "$file" && $(head -c 4 -- "$file" 2>/dev/null) == $'\x7fELF' ]] || return 0
     marks=$(head -c 16777216 -- "$file" 2>/dev/null |
-        LC_ALL=C grep -aEo 'nginx/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b|nginx-plus(-r[0-9]+([.][0-9]+){0,3}(-p[0-9]+)?)?|Tengine|openresty' |
+        LC_ALL=C grep -aEo 'nginx/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b|nginx-plus(-r[0-9]+([.][0-9]+){0,3}(-p[0-9]+)?)?|Tengine|openresty|--with-http_v[23]_module|--with-mail(=dynamic)?|ngx_http_v[23]_module|ngx_http_mirror_module|ngx_mail_proxy_module' |
         LC_ALL=C sort -u)
     versions=$(sed -n 's|^nginx/||p' <<< "$marks")
     plus=$(sed -n 's|^nginx-plus-r||p' <<< "$marks")
@@ -2023,8 +2024,17 @@ nginx2root_binary_metadata() {
         *Tengine*) flavor=tengine ;;
         *openresty*) flavor=openresty ;;
     esac
-    # Keep release and patch syntax distinct. Only numeric releases feed the CERT-EU range.
-    printf '%s|%s|%s' "$versions" "$flavor" "$plus"
+    # These bounded string matches are positive hints. Dynamic modules may be absent from the executable.
+    for module in http_v2 http_v3 http_mirror mail_proxy; do
+        case $module in
+            http_v2|http_v3) [[ $marks == *"--with-${module}_module"* || $marks == *"ngx_${module}_module"* ]] || continue ;;
+            http_mirror) [[ $marks == *ngx_http_mirror_module* ]] || continue ;;
+            mail_proxy) [[ $marks == *ngx_mail_proxy_module* || $marks == *--with-mail* ]] || continue ;;
+        esac
+        hints+="$comma\"$module\""
+        comma=,
+    done
+    printf '%s|%s|%s|[%s]' "$versions" "$flavor" "$plus" "$hints"
 }
 
 nginx2root_config() {
@@ -2138,9 +2148,11 @@ apache_config_hints() {
             printf '\n@file\n'
         done
     ) | awk '
-        /^@file$/ {files++; next}
-        /^@skipped$/ {skipped++; next}
+        /^@file$/ {files++; vhost=0; next}
+        /^@skipped$/ {skipped++; vhost=0; next}
         { sub(/#.*/, ""); gsub(/"/, ""); $0=tolower($0) }
+        /^[[:space:]]*<virtualhost[[:space:]]/ {vhost=1; next}
+        /^[[:space:]]*<\/virtualhost[[:space:]]*>/ {vhost=0; next}
         $1 == "loadmodule" && $2 == "http2_module" {mod=1}
         $1 == "include" || $1 == "includeoptional" {includes=1}
         $1 == "h2direct" && $2 == "on" {direct=1}
@@ -2148,14 +2160,16 @@ apache_config_hints() {
         $1 == "protocols" {
             if (NF == 2 && $2 == "http/1.1") h1=1
             for (i=2; i<=NF; i++) {
-                if ($i == "h2") h2=1
-                if ($i == "h2c") h2c=1
+                if ($i == "h2" || $i == "h2c") {
+                    if (vhost) vhost_h2=1; else outer_h2=1
+                    if ($i == "h2") h2=1; else h2c=1
+                }
             }
         }
         function b(v) { return v ? "true" : "false" }
         END {
             printf "{\"scope\":\"disk_directive_hints\",\"files_examined\":%d,\"skipped\":%d,", files, skipped
-            printf "\"h2\":%s,\"h2c\":%s,\"http1_only_directive\":%s,\"load_module\":%s,\"h2_direct_on\":%s,\"h2_upgrade_on\":%s,\"include_observed\":%s}", b(h2),b(h2c),b(h1),b(mod),b(direct),b(upgrade),b(includes)
+            printf "\"h2\":%s,\"h2c\":%s,\"http1_only_directive\":%s,\"load_module\":%s,\"h2_direct_on\":%s,\"h2_upgrade_on\":%s,\"include_observed\":%s,\"h2_in_virtualhost\":%s,\"h2_outside_virtualhost\":%s}", b(h2),b(h2c),b(h1),b(mod),b(direct),b(upgrade),b(includes),b(vhost_h2),b(outer_h2)
         }'
 }
 
@@ -2390,8 +2404,8 @@ web_package_hint() {
 nginx2root_scan() {
     local format=txt explicit="" installed path proc pid id current raw matched
     local seen=' ' rows=0 comma= gate=0 unknown=0 total=0 config_report sctp_report package_hint
-    local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root metadata flavor plus
-    local index package_count=0 condition_not_observed=0
+    local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root metadata flavor plus module_hints
+    local index package_count=0 condition_not_observed=0 potential_missing=0 unknown_missing=0
     local -a package_ids=() package_values=()
     local -a config_paths=()
     while (($#)); do
@@ -2428,20 +2442,33 @@ nginx2root_scan() {
         local references missing_count plus_unresolved=false
         references=$(nginx2root_reference "$raw" "$config_report" "$flavor" "$plus")
         [[ $flavor != plus || -n $plus ]] || plus_unresolved=true
-        missing_count=$(awk -F '}' '{for (i=1;i<=NF;i++) if ($i ~ /"status":"potential"/ && $i ~ /"config_evidence":"condition_not_observed"/) n++} END {print n+0}' <<< "$references")
+        local missing_potential missing_unknown
+        read -r missing_count missing_potential missing_unknown < <(
+            awk -F '}' '{
+                for (i=1; i<=NF; i++) {
+                    if ($i !~ /"config_evidence":"condition_not_observed"/) continue
+                    total++
+                    if ($i ~ /"status":"potential"/) potential++
+                    if ($i ~ /"status":"unknown"/) unknown++
+                }
+            } END {print total+0, potential+0, unknown+0}' <<< "$references"
+        )
         condition_not_observed=$((condition_not_observed + missing_count))
+        potential_missing=$((potential_missing + missing_potential))
+        unknown_missing=$((unknown_missing + missing_unknown))
         case $references in *'"status":"potential"'*) gate=1 ;; esac
         case $references in *'"status":"unknown"'*) unknown=1 ;; esac
         total=$((total + 1))
         if [ "$format" = json ]; then
             printf '%s{"kind":"%s","pid":%s,"path":%s,"version":%s,"disk_identity_matched":%s,"disk_identity_status":"%s","flavor":"%s","plus_release":%s,"plus_release_unresolved":%s,"cves":' \
                 "$comma" "$kind" "$(jstr "$pid")" "$(jstr "$(san_field "$path")")" "$(jstr "$raw")" "$matched" "$image_state" "$flavor" "$(jstr "$plus")" "$plus_unresolved"
-            printf '%s,"package_evidence":%s}' "$references" "$package_hint"
+            printf '%s,"package_evidence":%s,"binary_module_hints":%s}' "$references" "$package_hint" "${module_hints:-null}"
             comma=,
         else
             printf '%s %s %q · NGINX %s · 磁盘身份 %s\n' "$kind" "$pid" "$path" "${raw:-未知}" "$image_state"
             if [[ $flavor == plus ]]; then printf 'NGINX Plus 发行标识 · %s\n' "${plus:-未解析}"; fi
             printf '%s\n' "$references"
+            if [[ -n $module_hints && $module_hints != '[]' ]]; then printf '二进制模块线索 · %s\n' "$module_hints"; fi
             [ "$package_hint" = null ] || printf '软件包线索: %s\n' "$package_hint"
         fi
     }
@@ -2458,12 +2485,12 @@ nginx2root_scan() {
         path=$(readlink "$proc/exe" 2>/dev/null || :)
         id=$(file_id "$proc/exe" || :)
         metadata=$(nginx2root_binary_metadata "$proc/exe")
-        IFS='|' read -r raw flavor plus <<< "$metadata"
+        IFS='|' read -r raw flavor plus module_hints <<< "$metadata"
         image_state=$(web_disk_identity "$proc" "$path" "$id")
         process_ns=$(readlink "$proc/ns/mnt" 2>/dev/null || :)
         if [[ -z $id || -z $start || $(file_id "$proc/exe") != "$id" ||
               $(java_process_start "$pid") != "$start" ]]; then
-            raw= flavor= plus=
+            raw= flavor= plus= module_hints=
             image_state=unverified
         elif [[ $image_state == matched ]]; then
             seen+="$id "
@@ -2492,16 +2519,16 @@ nginx2root_scan() {
         id=$(file_id "$path") || continue
         [[ $seen != *" $id "* ]] || continue
         metadata=$(nginx2root_binary_metadata "$path")
-        IFS='|' read -r raw flavor plus <<< "$metadata"
+        IFS='|' read -r raw flavor plus module_hints <<< "$metadata"
         seen+="$id "
         package_hint=$(web_package_hint "$path")
         nginx2root_row installation "" "$path" "$raw" null "${package_hint:-null}" not_applicable
     done
     if [ "$format" = json ]; then
-        printf '],"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d},"summary":{"condition_not_observed":%d}}\n' "$proc_limit" "$unresolved" "$condition_not_observed"
+        printf '],"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d},"summary":{"condition_not_observed":%d,"potential_condition_not_observed":%d,"unknown_condition_not_observed":%d}}\n' "$proc_limit" "$unresolved" "$condition_not_observed" "$potential_missing" "$unknown_missing"
     else
         printf '进程覆盖 · 达到上限 %s · 证据不完整 %s\n' "$proc_limit" "$unresolved"
-        printf '版本命中但缺少必要磁盘线索 · %d 项（按发现行和 CVE 计）\n' "$condition_not_observed"
+        printf '缺少必要磁盘线索 · %d 项（版本命中 %d · 版本未知 %d，按发现行和 CVE 计）\n' "$condition_not_observed" "$potential_missing" "$unknown_missing"
     fi
     if [ "$gate" -eq 1 ]; then return 1; fi
     if [ "$unknown" -eq 1 ] || [ "$total" -eq 0 ] || web_coverage_incomplete "$proc_limit" "$unresolved" "$config_report"; then return 3; fi

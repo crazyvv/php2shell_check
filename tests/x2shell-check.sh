@@ -253,17 +253,17 @@ NGINX
     [[ $flags == *'"resolver":true,"dynamic_proxy_pass":true'* ]]
     [[ $flags == *'"mail_proxy":true,"auth_http":true'* ]]
     [[ $flags == *'"include_observed":true,"proxy_http_version_2":true,"grpc_upstream":false'* ]]
-    printf '%s\n' 'Protocols h2 http/1.1' 'H2Direct on' 'H2Upgrade on' 'IncludeOptional conf.d/*.conf' > "$fixture/apache.conf"
+    printf '%s\n'  'Protocols http/1.1' '<VirtualHost *:443>' 'Protocols h2 http/1.1' '</VirtualHost>' 'H2Direct on' 'H2Upgrade on' 'IncludeOptional conf.d/*.conf' > "$fixture/apache.conf"
     flags=$(apache_config_hints "$fixture/apache.conf")
-    [[ $flags == *'"h2":true'*'"h2_direct_on":true,"h2_upgrade_on":true,"include_observed":true'* ]]
+    [[ $flags == *'"h2":true'*'"h2_direct_on":true,"h2_upgrade_on":true,"include_observed":true,"h2_in_virtualhost":true,"h2_outside_virtualhost":false'* ]]
     [[ $(web_disk_identity /proc/self "$fixture/apache.conf" "$(file_id "$fixture/apache.conf")") == matched ]]
     [[ $(web_disk_identity /proc/self "$fixture/apache.conf" '0 1 2') == mismatch ]]
     [[ $(web_disk_identity /proc/self '/tmp/sample (deleted)' '0 1 2') == deleted ]]
     [[ $(web_disk_identity /proc/self "$fixture/missing" '0 1 2') == unverified ]]
-    printf '\177ELF nginx/1.27.4 nginx-plus-r37.0.7.1' > "$fixture/nginx-elf"
-    [[ $(nginx2root_binary_metadata "$fixture/nginx-elf") == '1.27.4|plus|37.0.7.1' ]]
+    printf '\177ELF nginx/1.27.4 nginx-plus-r37.0.7.1 --with-http_v2_module ngx_http_v3_module' > "$fixture/nginx-elf"
+    [[ $(nginx2root_binary_metadata "$fixture/nginx-elf") == '1.27.4|plus|37.0.7.1|["http_v2","http_v3"]' ]]
     printf '\177ELF nginx/1.27.4 nginx/1.27.5 openresty' > "$fixture/nginx-elf"
-    [[ $(nginx2root_binary_metadata "$fixture/nginx-elf") == '|openresty|' ]]
+    [[ $(nginx2root_binary_metadata "$fixture/nginx-elf") == '|openresty||[]' ]]
     for plus_release in 36-p1 37-p1 37 37.0.7.1-p2 37.2.0.1; do
         [[ $(nginx_plus_reference "$plus_release") == potential ]]
     done
@@ -275,11 +275,12 @@ NGINX
     [[ $refs == *'"feature":"http2_upstream","config_evidence":"condition_not_observed","missing_disk_hints":["upstream"]'* ]]
     printf '\177ELF nginx/1.27.4 nginx-plus' > "$fixture/nginx-elf"
     nginx_rc=0
-    "$scanner" --nginx2root --nginx-path "$fixture/nginx-elf" --nginx-config "$fixture/nginx.conf" --json \
+    : > "$fixture/empty-nginx.conf"
+    "$scanner" --nginx2root --nginx-path "$fixture/nginx-elf" --nginx-config "$fixture/empty-nginx.conf" --json \
         > "$fixture/nginx-plus.json" || nginx_rc=$?
     [[ $nginx_rc == 1 || $nginx_rc == 3 ]]
     grep -Fq '"flavor":"plus","plus_release":"","plus_release_unresolved":true' "$fixture/nginx-plus.json"
-    grep -Fq '"summary":{"condition_not_observed":' "$fixture/nginx-plus.json"
+    grep -Eq '"unknown_condition_not_observed":([5-9]|[1-9][0-9]+)}' "$fixture/nginx-plus.json"
     web_coverage_incomplete false 0 '{"skipped":1}'
     ! web_coverage_incomplete false 0 '{"skipped":0}'
     (
