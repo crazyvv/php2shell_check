@@ -234,18 +234,118 @@ const CONFIG_HINTS: [&str; 12] = [
 ];
 
 #[cfg(target_os = "linux")]
+fn include_paths(base: &std::path::Path, value: &str) -> Option<Vec<std::path::PathBuf>> {
+    use std::{fs, path::Path};
+    let value = value.trim_matches(['\'', '"']);
+    if value.is_empty()
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/._-*".contains(&b))
+    {
+        return None;
+    }
+    let path = base.join(Path::new(value));
+    if !value.contains('*') {
+        return Some(vec![path]);
+    }
+    let suffix = path.file_name()?.to_str()?.strip_prefix('*')?;
+    let directory = path.parent()?;
+    if directory.to_str()?.contains('*') || suffix.contains('*') {
+        return None;
+    }
+    let mut paths = Vec::new();
+    for (index, entry) in fs::read_dir(directory).ok()?.take(66).enumerate() {
+        if index == 65 {
+            return None;
+        }
+        let entry = entry.ok()?;
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| !name.starts_with('.') && name.ends_with(suffix))
+        {
+            paths.push(entry.path());
+        }
+    }
+    paths.sort();
+    Some(paths)
+}
+
+#[cfg(target_os = "linux")]
+fn process_config_entry(proc: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::{fs::File, io::Read, path::PathBuf};
+    let mut bytes = Vec::new();
+    File::open(proc.join("cmdline"))
+        .ok()?
+        .take(4097)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > 4096 {
+        return None;
+    }
+    let text = std::str::from_utf8(&bytes).ok()?.replace('\0', " ");
+    let mut words = text.split_ascii_whitespace().peekable();
+    let mut config = None;
+    while let Some(word) = words.next() {
+        if word == "-g" {
+            break;
+        }
+        if word == "-c" {
+            let path = words.next()?;
+            if config.is_some()
+                || !path.starts_with('/')
+                || !path
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b))
+                || words.peek().is_some_and(|next| !next.starts_with('-'))
+            {
+                return None;
+            }
+            config = Some(PathBuf::from(path));
+        }
+    }
+    config
+}
+
+#[cfg(target_os = "linux")]
 fn config_hints(files: impl IntoIterator<Item = std::path::PathBuf>) -> Value {
-    use std::{collections::BTreeSet, fs, io::Read};
+    use std::{
+        collections::{BTreeSet, VecDeque},
+        fs,
+        io::Read,
+    };
     let mut hints = BTreeSet::new();
     let mut files_examined = 0;
     let mut skipped = 0;
-    for path in files {
-        if !path.is_file() {
-            continue;
-        }
+    let mut pending: VecDeque<_> = files
+        .into_iter()
+        .take(65)
+        .map(|path| {
+            let base = path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf();
+            (path, base, 0)
+        })
+        .collect();
+    let mut seen = BTreeSet::new();
+    let mut evidence = Vec::new();
+    let mut include_observed = false;
+    while let Some((path, base, depth)) = pending.pop_front() {
         if files_examined + skipped >= 64 {
             skipped += 1;
             break;
+        }
+        if !path.is_file() {
+            skipped += usize::from(depth > 0);
+            continue;
+        }
+        let Ok(identity) = fs::canonicalize(&path) else {
+            skipped += 1;
+            continue;
+        };
+        if !seen.insert(identity) {
+            continue;
         }
         let mut content = Vec::new();
         if !fs::File::open(&path)
@@ -256,29 +356,49 @@ fn config_hints(files: impl IntoIterator<Item = std::path::PathBuf>) -> Value {
             continue;
         }
         files_examined += 1;
-        for line in String::from_utf8_lossy(&content).lines() {
+        for (index, line) in String::from_utf8_lossy(&content).lines().enumerate() {
+            let mut record = |key| {
+                if hints.insert(key) {
+                    evidence.push(json!({"hint":key,"file":path,"line":index+1}));
+                }
+            };
             let line = line.split_once('#').map_or(line, |(text, _)| text);
             for fragment in line.split([';', '{', '}']) {
                 let mut words = fragment.split_whitespace();
                 let name = words.next().unwrap_or_default();
                 let first = words.next().unwrap_or_default();
                 let hint = match (name, first) {
+                    ("include", value) => {
+                        include_observed = true;
+                        if depth < 8 && words.next().is_none() {
+                            if let Some(paths) = include_paths(&base, value) {
+                                if pending.len() + paths.len() <= 65 {
+                                    pending.extend(
+                                        paths.into_iter().map(|p| (p, base.clone(), depth + 1)),
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                        skipped += 1;
+                        continue;
+                    }
                     ("http2", "on") => "http2_on",
                     ("http2", "off") => "http2_off",
                     ("http3", "on") => "http3_or_quic",
                     ("listen", _) => {
                         let options = words.collect::<Vec<_>>();
                         if options.contains(&"http2") {
-                            hints.insert("http2_on");
+                            record("http2_on");
                         }
                         if options.contains(&"quic") {
-                            hints.insert("http3_or_quic");
+                            record("http3_or_quic");
                         }
                         continue;
                     }
                     ("proxy_pass", _) => {
                         if first.contains('$') {
-                            hints.insert("dynamic_proxy_pass");
+                            record("dynamic_proxy_pass");
                         }
                         "upstream"
                     }
@@ -292,12 +412,11 @@ fn config_hints(files: impl IntoIterator<Item = std::path::PathBuf>) -> Value {
                     ("auth_http", _) if !first.is_empty() => "auth_http",
                     _ => continue,
                 };
-                hints.insert(hint);
+                record(hint);
             }
         }
     }
-    let mut report =
-        json!({"scope":"disk_directive_hints","files_examined":files_examined,"skipped":skipped});
+    let mut report = json!({"scope":"disk_directive_hints","files_examined":files_examined,"skipped":skipped,"include_observed":include_observed,"evidence":evidence,"scope_resolution":"file_directive_only"});
     for key in CONFIG_HINTS {
         report[key] = json!(hints.contains(key));
     }
@@ -534,6 +653,17 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
             row["path"] = json!(path);
             row["disk_identity_matched"] = json!(disk_match);
             row["host_package_eligible"] = json!(host_package_eligible);
+            if host_package_eligible
+                && fs::metadata(dir.join("root"))
+                    .ok()
+                    .zip(fs::metadata("/proc/self/root").ok())
+                    .is_some_and(|(a, b)| (a.dev(), a.ino()) == (b.dev(), b.ino()))
+                && let Some(config) = process_config_entry(&dir)
+            {
+                let configuration = config_hints([config.clone()]);
+                row["configuration_entry"] = json!(config);
+                row["configuration"] = configuration;
+            }
             running.push(row);
         }
         let installations: Vec<_> = paths
@@ -600,6 +730,36 @@ pub(crate) async fn add_package_evidence(report: &mut Value) {
     }
 }
 
+fn sanitize_configuration(raw: &Value) -> Value {
+    let mut configuration = json!({"scope":"disk_directive_hints",
+        "files_examined":raw["files_examined"].as_u64(),
+        "skipped":raw["skipped"].as_u64()});
+    for key in CONFIG_HINTS {
+        configuration[key] = json!(raw[key].as_bool());
+    }
+    configuration["evidence"] = json!(
+        raw["evidence"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(16)
+            .filter_map(|item| {
+                let hint = item["hint"]
+                    .as_str()
+                    .filter(|value| CONFIG_HINTS.contains(value))?;
+                let file: String = item["file"].as_str()?.chars().take(400).collect();
+                let line = item["line"]
+                    .as_u64()
+                    .filter(|line| *line > 0 && *line <= 65_536)?;
+                Some(json!({"hint":hint,"file":file,"line":line}))
+            })
+            .collect::<Vec<_>>()
+    );
+    configuration["include_observed"] = json!(raw["include_observed"].as_bool());
+    configuration["scope_resolution"] = json!("file_directive_only");
+    configuration
+}
+
 pub(crate) fn sanitize_host(raw: &Value) -> Value {
     if raw["status"] == "disabled" || raw.is_null() {
         return json!({"status":"disabled"});
@@ -610,6 +770,10 @@ pub(crate) fn sanitize_host(raw: &Value) -> Value {
             row["pid"] = json!(item["pid"].as_str().filter(|p| p.len() <= 20 && p.bytes().all(|c| c.is_ascii_digit())));
             row["path"] = json!(item["path"].as_str().map(|p| p.chars().take(400).collect::<String>()));
             row["disk_identity_matched"] = json!(item["disk_identity_matched"].as_bool());
+            row["configuration_entry"] = json!(item["configuration_entry"].as_str().map(|p|p.chars().take(400).collect::<String>()));
+            if item["configuration"].is_object() {
+                row["configuration"] = sanitize_configuration(&item["configuration"]);
+            }
             row["package_evidence"] = json!({
                 "manager":item["package_evidence"]["manager"].as_str().filter(|v| matches!(*v,"dpkg"|"rpm")),
                 "name":item["package_evidence"]["name"].as_str().map(|v|v.chars().take(100).collect::<String>()),
@@ -619,12 +783,7 @@ pub(crate) fn sanitize_host(raw: &Value) -> Value {
             row
         }).collect()
     };
-    let mut configuration = json!({"scope":"disk_directive_hints",
-        "files_examined":raw["configuration"]["files_examined"].as_u64(),
-        "skipped":raw["configuration"]["skipped"].as_u64()});
-    for key in CONFIG_HINTS {
-        configuration[key] = json!(raw["configuration"][key].as_bool());
-    }
+    let configuration = sanitize_configuration(&raw["configuration"]);
     json!({"status":"unverified","running_processes":rows("running_processes"),"installations":rows("installations"),"configuration":configuration,
         "coverage":{"proc_available":raw["coverage"]["proc_available"].as_bool(),"truncated":raw["coverage"]["truncated"].as_bool()},
         "sctp":{"kernel_release":raw["sctp"]["kernel_release"].as_str().map(|v| v.chars().take(128).collect::<String>()),
@@ -649,6 +808,34 @@ mod tests {
         assert_eq!(evidence["mail_proxy"], true);
         assert_eq!(evidence["auth_http"], true);
         assert_eq!(evidence["files_examined"], 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn config_provenance_includes_globs_and_terminates_cycles() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("nginx.conf");
+        let snippets = dir.path().join("sites");
+        let child = snippets.join("site.conf");
+        std::fs::create_dir(&snippets).unwrap();
+        std::fs::write(&root, "include sites/*.conf;\ninclude missing.conf;\n").unwrap();
+        std::fs::write(&child, "# header\nhttp2 on;\ninclude nginx.conf;\n").unwrap();
+        let parsed = config_hints([root.clone()]);
+        assert_eq!(parsed["files_examined"], 2);
+        assert_eq!(parsed["skipped"], 1);
+        assert_eq!(
+            parsed["evidence"][0],
+            json!({"hint":"http2_on","file":child,"line":2})
+        );
+        std::fs::write(
+            dir.path().join("cmdline"),
+            format!(
+                "nginx: master process nginx -c {} -g daemon off;\0",
+                root.display()
+            ),
+        )
+        .unwrap();
+        assert_eq!(process_config_entry(dir.path()), Some(root));
     }
 
     #[test]

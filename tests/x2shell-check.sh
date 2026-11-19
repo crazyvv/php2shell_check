@@ -290,6 +290,14 @@ NGINX
     [[ $nginx_rc == 1 || $nginx_rc == 3 ]]
     grep -Fq '"flavor":"plus","plus_release":"","plus_release_unresolved":true' "$fixture/nginx-plus.json"
     grep -Eq '"unknown_condition_not_observed":([5-9]|[1-9][0-9]+)}' "$fixture/nginx-plus.json"
+    mkdir "$fixture/sites"
+    printf '%s\n' 'include sites/*.conf;' 'include missing.conf;' > "$fixture/entry.conf"
+    printf '%s\n' '# header' 'http2 on;' 'include entry.conf;' > "$fixture/sites/site.conf"
+    flags=$(nginx2root_config "$fixture/entry.conf")
+    [[ $flags == *'"files_examined":2,"skipped":1'* ]]
+    [[ $flags == *'"hint":"http2_on","file":"'"$fixture/sites/site.conf"'","line":2'* ]]
+    printf 'nginx: master process nginx -c %s -g daemon off;\0' "$fixture/entry.conf" > "$fixture/cmdline"
+    [[ $(nginx_process_config_entry "$fixture") == "$fixture/entry.conf" ]]
     web_coverage_incomplete false 0 '{"skipped":1}'
     ! web_coverage_incomplete false 0 '{"skipped":0}'
     (
