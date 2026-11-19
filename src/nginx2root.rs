@@ -53,7 +53,16 @@ const OPENRESTY: &str = "https://openresty.org/en/ann-1031008001.html";
 const TENGINE: &str = "https://github.com/alibaba/tengine/blob/3.2.0-rc5/src/core/nginx.h";
 const INGRESS: &str = "https://docs.nginx.com/nginx-ingress-controller/releases/";
 const PLUS_RELEASES: &str = "https://docs.nginx.com/nginx/releases/";
-const SOURCES: [&str; 6] = [ADVISORY, CERT, OPENRESTY, TENGINE, INGRESS, PLUS_RELEASES];
+const OPENRESTY_125: &str = "https://openresty.org/en/changelog-1025003.html";
+const SOURCES: [&str; 7] = [
+    ADVISORY,
+    CERT,
+    OPENRESTY,
+    TENGINE,
+    INGRESS,
+    PLUS_RELEASES,
+    OPENRESTY_125,
+];
 
 fn plus_version(value: &str) -> Option<[u32; 4]> {
     let core = match value.split_once("-p") {
@@ -98,6 +107,7 @@ impl Product {
             .as_deref()
             .or_else(|| match (flavor, self.version.as_deref()) {
                 ("openresty", Some("1.31.8.1")) => Some("1.31.8"),
+                ("openresty", Some("1.25.3.1")) => Some("1.25.3"),
                 ("tengine", Some("3.2.0-rc5")) => Some("1.31.5"),
                 _ => None,
             });
@@ -113,7 +123,11 @@ impl Product {
                             || ([37, 0, 0, 0]..=[37, 0, 7, 1]).contains(&v)
                             || ([37, 1, 0, 0]..=[37, 2, 0, 1]).contains(&v)
                     });
-                let release = self.plus.as_deref();
+                let release = self
+                    .plus
+                    .as_deref()
+                    .filter(|value| plus_version(value).is_some())
+                    .map(|value| value.split_once("-p").map_or(value, |(core, _)| core));
                 let vendor_reference = matches!(release, Some("37.0.8.1" | "37.3.0.1"))
                     || (row["cve"] == "CVE-2026-123633"
                         && matches!(release, Some("37.0.7.1" | "37.2.0.1")));
@@ -273,7 +287,7 @@ fn include_paths(base: &std::path::Path, value: &str) -> Option<Vec<std::path::P
 
 #[cfg(target_os = "linux")]
 fn process_config_entry(proc: &std::path::Path) -> Option<std::path::PathBuf> {
-    use std::{fs::File, io::Read, path::PathBuf};
+    use std::{fs::File, io::Read};
     let mut bytes = Vec::new();
     File::open(proc.join("cmdline"))
         .ok()?
@@ -283,12 +297,33 @@ fn process_config_entry(proc: &std::path::Path) -> Option<std::path::PathBuf> {
     if bytes.len() > 4096 {
         return None;
     }
-    let text = std::str::from_utf8(&bytes).ok()?.replace('\0', " ");
-    let mut words = text.split_ascii_whitespace().peekable();
+    let original = std::str::from_utf8(&bytes).ok()?;
+    let args: Vec<_> = original
+        .split_terminator('\0')
+        .take_while(|arg| !arg.is_empty())
+        .collect();
+    if args.len() > 1 {
+        return config_from_words(args.into_iter().skip(1), true);
+    }
+    let text = original.replace('\0', " ");
+    config_from_words(text.split_ascii_whitespace(), false)
+}
+
+#[cfg(target_os = "linux")]
+fn config_from_words<'a>(
+    words: impl Iterator<Item = &'a str>,
+    original_argv: bool,
+) -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let mut words = words.peekable();
     let mut config = None;
     while let Some(word) = words.next() {
         if word == "-g" {
-            break;
+            if !original_argv {
+                break;
+            }
+            words.next()?;
+            continue;
         }
         if word == "-c" {
             let path = words.next()?;
@@ -305,6 +340,24 @@ fn process_config_entry(proc: &std::path::Path) -> Option<std::path::PathBuf> {
         }
     }
     config
+}
+
+#[cfg(target_os = "linux")]
+fn layout_config(binary: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::path::Path;
+    if !binary.is_absolute() {
+        return None;
+    }
+    let directory = binary.parent()?;
+    if !matches!(directory.file_name()?.to_str()?, "bin" | "sbin") {
+        return None;
+    }
+    let prefix = directory.parent()?;
+    if prefix == Path::new("/usr") || prefix == Path::new("/usr/local") {
+        return None;
+    }
+    let config = prefix.join("conf/nginx.conf");
+    config.is_file().then_some(config)
 }
 
 #[cfg(target_os = "linux")]
@@ -663,6 +716,7 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
                 let configuration = config_hints([config.clone()]);
                 row["configuration_entry"] = json!(config);
                 row["configuration"] = configuration;
+                row["configuration_entry_source"] = json!("process_argument");
             }
             running.push(row);
         }
@@ -678,6 +732,11 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
                 }
                 let mut row = product.report();
                 row["path"] = json!(path);
+                if let Some(config) = layout_config(path) {
+                    row["configuration_entry"] = json!(config);
+                    row["configuration"] = config_hints([config]);
+                    row["configuration_entry_source"] = json!("installation_layout");
+                }
                 Some(row)
             })
             .collect();
@@ -771,6 +830,8 @@ pub(crate) fn sanitize_host(raw: &Value) -> Value {
             row["path"] = json!(item["path"].as_str().map(|p| p.chars().take(400).collect::<String>()));
             row["disk_identity_matched"] = json!(item["disk_identity_matched"].as_bool());
             row["configuration_entry"] = json!(item["configuration_entry"].as_str().map(|p|p.chars().take(400).collect::<String>()));
+            row["configuration_entry_source"] = json!(item["configuration_entry_source"].as_str()
+                .filter(|source| matches!(*source, "installation_layout" | "process_argument")));
             if item["configuration"].is_object() {
                 row["configuration"] = sanitize_configuration(&item["configuration"]);
             }
@@ -835,7 +896,17 @@ mod tests {
             ),
         )
         .unwrap();
+        assert_eq!(process_config_entry(dir.path()), Some(root.clone()));
+        std::fs::write(
+            dir.path().join("cmdline"),
+            format!("nginx\0-g\0daemon off;\0-c\0{}\0", root.display()),
+        )
+        .unwrap();
         assert_eq!(process_config_entry(dir.path()), Some(root));
+        let config = dir.path().join("conf/nginx.conf");
+        std::fs::create_dir(config.parent().unwrap()).unwrap();
+        std::fs::write(&config, "http2 on;").unwrap();
+        assert_eq!(layout_config(&dir.path().join("sbin/nginx")), Some(config));
     }
 
     #[test]
@@ -854,7 +925,7 @@ mod tests {
             {"flavor":"plus","plus_release":"37-p1"},
             {"flavor":"plus","plus_release":"37.2.0.2"},
             {"flavor":"plus","plus_release":"37.2.0.1"},
-            {"flavor":"plus","plus_release":"37.3.0.1"}
+            {"flavor":"plus","plus_release":"37.3.0.1-p2"}
         ]}));
         let rows = report["running_processes"].as_array().unwrap();
         assert_eq!(rows[0]["cves"][0]["status"], "potential");

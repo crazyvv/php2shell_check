@@ -1956,13 +1956,13 @@ nginx_config_evidence() {
 
 nginx_plus_reference() {
     local version=$1 cve=${2:-}
+    [[ $version =~ ^[0-9]+([.][0-9]+){0,3}(-p[0-9]+)?$ ]] || { printf unknown; return; }
+    version=${version%%-p*}
     case $version in
         37.0.8.1|37.3.0.1) printf meets_vendor_reference; return ;;
         37.0.7.1|37.2.0.1)
             if [[ $cve == CVE-2026-123633 ]]; then printf meets_vendor_reference; return; fi ;;
     esac
-    [[ $version =~ ^[0-9]+([.][0-9]+){0,3}(-p[0-9]+)?$ ]] || { printf unknown; return; }
-    version=${version%%-p*}
     case $version in
         34|34.*|35|35.*|36|36.*|37) printf potential; return ;;
         37.*)
@@ -2053,6 +2053,29 @@ nginx2root_binary_metadata() {
 # Parse only unambiguous absolute -c arguments from the visible process.
 nginx_process_config_entry() {
     local proc=$1
+    local original
+    original=$(head -c 4097 -- "$proc/cmdline" 2>/dev/null | awk '
+        BEGIN {RS="\0"}
+        {size+=length($0)+1; args[NR]=$0}
+        END {
+            if (NR<=1) exit
+            print "argv"
+            if (size>4096) exit
+            for(i=2;i<=NR;i++) {
+                if(args[i]=="") break
+                if(args[i]=="-g") {i++; continue}
+                if(args[i]=="-c") {
+                    if(path!="" || args[i+1]!~/^\/[[:alnum:]\/._-]+$/ ||
+                       (args[i+2]!="" && args[i+2]!~/^-/)) exit
+                    path=args[++i]
+                }
+            }
+            if(path!="") print path
+        }')
+    if [[ $original == argv* ]]; then
+        [[ $original != *$'\n'* ]] || printf '%s\n' "${original#*$'\n'}"
+        return 0
+    fi
     head -c 4097 -- "$proc/cmdline" 2>/dev/null | tr '\000' ' ' | awk '
         {text=text " " $0}
         END {
@@ -2070,11 +2093,21 @@ nginx_process_config_entry() {
         }'
 }
 
+nginx_layout_config() {
+    local binary=$1 prefix
+    case $binary in
+        /*/sbin/*|/*/bin/*) prefix=${binary%/*/*} ;;
+        *) return 0 ;;
+    esac
+    case $prefix in /usr|/usr/local) return 0 ;; esac
+    if [ -f "$prefix/conf/nginx.conf" ]; then printf '%s' "$prefix/conf/nginx.conf"; fi
+}
+
 nginx_config_stream() {
     local path=$1 base=$2 depth=$3 id size content target dir suffix match has_match
     if [ "$count" -ge 64 ]; then printf '@skipped\n'; return; fi
     if [ ! -f "$path" ]; then
-        if [ "$depth" -gt 0 ]; then printf '@skipped\n'; fi
+        if [ "$depth" -gt 0 ] || [ "$explicit_roots" -eq 1 ]; then printf '@skipped\n'; fi
         return
     fi
     id=$(file_id "$path") || { printf '@skipped\n'; return; }
@@ -2128,10 +2161,11 @@ nginx_config_stream() {
 }
 
 nginx2root_config() {
-    local config count=0
+    local config count=0 explicit_roots=0
     local -a configs=()
     if [ "$#" -gt 0 ]; then
         configs=("$@")
+        explicit_roots=1
     else
         configs=(/etc/nginx/nginx.conf /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/* /usr/local/nginx/conf/nginx.conf)
     fi
@@ -2495,7 +2529,7 @@ web_package_hint() {
 nginx2root_scan() {
     local format=txt explicit="" installed path proc pid id current raw matched
     local seen=' ' rows=0 comma= gate=0 unknown=0 total=0 config_report sctp_report package_hint
-    local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root metadata flavor plus module_hints product_version config_entry row_config
+    local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root metadata flavor plus module_hints product_version config_entry row_config config_source incomplete=false gate_hit=false
     local index package_count=0 condition_not_observed=0 potential_missing=0 unknown_missing=0
     local -a package_ids=() package_values=()
     local -a config_paths=()
@@ -2503,7 +2537,7 @@ nginx2root_scan() {
         case $1 in
             --json|--format=json) format=json ;;
             --nginx-config)
-                (($# > 1)) && [ -f "$2" ] || die "--nginx-config 需要存在的文件"
+                (($# > 1)) && [ -n "$2" ] && [[ $2 != --* ]] || die "--nginx-config 需要文件路径"
                 config_paths+=("$2"); shift ;;
             --nginx-path)
                 (($# > 1)) && [ -f "$2" ] || die "--nginx-path 需要存在的文件"
@@ -2523,7 +2557,7 @@ nginx2root_scan() {
     config_report=$(nginx2root_config ${config_paths[@]+"${config_paths[@]}"})
     sctp_report=$(nginx2root_sctp)
     if [ "$format" = json ]; then
-        printf '{"status":"collected","source":"local_binary_inventory","patch_verified":false,"exploitability_confirmed":false,"sctp":%s,"configuration":%s,"sources":["https://nginx.org/en/security_advisories.html","https://cert.europa.eu/publications/security-advisories/2026-022/","https://openresty.org/en/ann-1031008001.html","https://github.com/alibaba/tengine/blob/3.2.0-rc5/src/core/nginx.h","https://docs.nginx.com/nginx-ingress-controller/releases/","https://docs.nginx.com/nginx/releases/"],"findings":[' "$sctp_report" "$config_report"
+        printf '{"status":"collected","source":"local_binary_inventory","patch_verified":false,"exploitability_confirmed":false,"sctp":%s,"configuration":%s,"sources":["https://nginx.org/en/security_advisories.html","https://cert.europa.eu/publications/security-advisories/2026-022/","https://openresty.org/en/ann-1031008001.html","https://openresty.org/en/changelog-1025003.html","https://github.com/alibaba/tengine/blob/3.2.0-rc5/src/core/nginx.h","https://docs.nginx.com/nginx-ingress-controller/releases/","https://docs.nginx.com/nginx/releases/"],"findings":[' "$sctp_report" "$config_report"
     else
         printf 'NGINX 上游版本参考\n磁盘配置线索: %s\n内核 SCTP 线索: %s\n' "$config_report" "$sctp_report"
     fi
@@ -2535,10 +2569,11 @@ nginx2root_scan() {
         if [ -z "$raw" ]; then
             case $flavor:$product_version in
                 openresty:1.31.8.1) raw=1.31.8 ;;
+                openresty:1.25.3.1) raw=1.25.3 ;;
                 tengine:3.2.0-rc5) raw=1.31.5 ;;
             esac
         fi
-        references=$(nginx2root_reference "$raw" "${row_config:-$config_report}" "$flavor" "$plus")
+        references=$(nginx2root_reference "$raw" "${row_config:-}" "$flavor" "$plus")
         [[ $flavor != plus || -n $plus ]] || plus_unresolved=true
         local missing_potential missing_unknown
         read -r missing_count missing_potential missing_unknown < <(
@@ -2561,14 +2596,14 @@ nginx2root_scan() {
             printf '%s{"kind":"%s","pid":%s,"path":%s,"version":%s,"disk_identity_matched":%s,"disk_identity_status":"%s","flavor":"%s","plus_release":%s,"plus_release_unresolved":%s,"product_version":%s,"embedded_nginx_version":%s,"patch_status":"unverified","cves":' \
                 "$comma" "$kind" "$(jstr "$pid")" "$(jstr "$(san_field "$path")")" "$(jstr "$raw")" "$matched" "$image_state" "$flavor" "$(jstr "$plus")" "$plus_unresolved" "$(jstr "$product_version")" "$(jstr "$raw")"
             printf '%s,"package_evidence":%s,"binary_module_hints":%s' "$references" "$package_hint" "${module_hints:-null}"
-            if [ -n "$row_config" ]; then printf ',"configuration_entry":%s,"configuration":%s' "$(jstr "$config_entry")" "$row_config"; fi
+            if [ -n "$row_config" ]; then printf ',"configuration_entry":%s,"configuration_entry_source":%s,"configuration":%s' "$(jstr "$config_entry")" "$(jstr "$config_source")" "$row_config"; fi
             printf '}'
             comma=,
         else
             printf '%s %s %q · %s %s · NGINX 内核 %s · 磁盘身份 %s\n' "$kind" "$pid" "$path" "${flavor:-未知}" "${product_version:-}" "${raw:-未知}" "$image_state"
             if [[ $flavor == plus ]]; then printf 'NGINX Plus 发行标识 · %s\n' "${plus:-未解析}"; fi
             printf '%s\n' "$references"
-            if [ -n "$row_config" ]; then printf '进程配置入口 · %q · %s\n' "$config_entry" "$row_config"; fi
+            if [ -n "$row_config" ]; then printf '配置来源 · %s · %q · %s\n' "$config_source" "$config_entry" "$row_config"; fi
             if [[ -n $module_hints && $module_hints != '[]' ]]; then printf '二进制模块线索 · %s\n' "$module_hints"; fi
             [ "$package_hint" = null ] || printf '软件包线索: %s\n' "$package_hint"
         fi
@@ -2599,12 +2634,14 @@ nginx2root_scan() {
         matched=$(web_identity_boolean "$image_state")
         [[ $image_state == matched ]] || unresolved=$((unresolved + 1))
         package_hint=null
-        config_entry= row_config=
+        config_entry= row_config= config_source=
+        if [ -n "${config_paths[0]:-}" ]; then row_config=$config_report; config_source=explicit; fi
         if [[ $matched == true && -n $self_ns && $process_ns == "$self_ns" &&
               -n $self_root && $(file_id "$proc/root") == "$self_root" && $(file_id "$path") == "$id" ]]; then
             if [ -z "${config_paths[0]:-}" ]; then
                 config_entry=$(nginx_process_config_entry "$proc")
-                if [[ -n $config_entry && -f $config_entry && $(java_process_start "$pid") == "$start" ]]; then
+                if [[ -n $config_entry && $(java_process_start "$pid") == "$start" ]]; then
+                    config_source=process_argument
                     row_config=$(nginx2root_config "$config_entry")
                     if web_coverage_incomplete false 0 "$row_config"; then unknown=1; fi
                 fi
@@ -2622,7 +2659,6 @@ nginx2root_scan() {
         nginx2root_row process "$pid" "$path" "$raw" "$matched" "$package_hint" "$image_state"
         rows=$((rows + 1))
     done
-    config_entry= row_config=
     installed=$(type -P nginx || :)
     for path in "$explicit" "$installed" "$(type -P openresty || :)" "$(type -P tengine || :)" \
                 /usr/sbin/nginx /usr/local/nginx/sbin/nginx /usr/local/openresty/nginx/sbin/nginx /usr/local/tengine/sbin/nginx; do
@@ -2633,16 +2669,28 @@ nginx2root_scan() {
         IFS='|' read -r raw flavor plus module_hints product_version <<< "$metadata"
         seen+="$id "
         package_hint=$(web_package_hint "$path")
+        config_entry= row_config= config_source=
+        if [ -n "${config_paths[0]:-}" ]; then
+            row_config=$config_report
+            config_source=explicit
+        elif config_entry=$(nginx_layout_config "$path") && [ -n "$config_entry" ]; then
+            config_source=installation_layout
+            row_config=$(nginx2root_config "$config_entry")
+            if web_coverage_incomplete false 0 "$row_config"; then unknown=1; fi
+        fi
         nginx2root_row installation "" "$path" "$raw" null "${package_hint:-null}" not_applicable
     done
+    if [ "$gate" -eq 1 ]; then gate_hit=true; fi
+    if [ "$unknown" -eq 1 ] || [ "$total" -eq 0 ] || web_coverage_incomplete "$proc_limit" "$unresolved" "$config_report"; then incomplete=true; fi
     if [ "$format" = json ]; then
-        printf '],"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d},"summary":{"condition_not_observed":%d,"potential_condition_not_observed":%d,"unknown_condition_not_observed":%d}}\n' "$proc_limit" "$unresolved" "$condition_not_observed" "$potential_missing" "$unknown_missing"
+        printf '],"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d,"evidence_incomplete":%s},"summary":{"risk_gate_hit":%s,"condition_not_observed":%d,"potential_condition_not_observed":%d,"unknown_condition_not_observed":%d}}\n' "$proc_limit" "$unresolved" "$incomplete" "$gate_hit" "$condition_not_observed" "$potential_missing" "$unknown_missing"
     else
         printf '进程覆盖 · 达到上限 %s · 证据不完整 %s\n' "$proc_limit" "$unresolved"
+        printf '版本门禁命中 %s · 证据不完整 %s\n' "$gate_hit" "$incomplete"
         printf '缺少必要磁盘线索 · %d 项（版本命中 %d · 版本未知 %d，按发现行和 CVE 计）\n' "$condition_not_observed" "$potential_missing" "$unknown_missing"
     fi
     if [ "$gate" -eq 1 ]; then return 1; fi
-    if [ "$unknown" -eq 1 ] || [ "$total" -eq 0 ] || web_coverage_incomplete "$proc_limit" "$unresolved" "$config_report"; then return 3; fi
+    if [ "$incomplete" = true ]; then return 3; fi
     return 0
 }
 

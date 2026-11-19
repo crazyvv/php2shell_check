@@ -298,6 +298,20 @@ NGINX
     [[ $flags == *'"hint":"http2_on","file":"'"$fixture/sites/site.conf"'","line":2'* ]]
     printf 'nginx: master process nginx -c %s -g daemon off;\0' "$fixture/entry.conf" > "$fixture/cmdline"
     [[ $(nginx_process_config_entry "$fixture") == "$fixture/entry.conf" ]]
+    printf 'nginx\0-g\0daemon off;\0-c\0%s\0' "$fixture/entry.conf" > "$fixture/cmdline"
+    [[ $(nginx_process_config_entry "$fixture") == "$fixture/entry.conf" ]]
+    [[ $(nginx_plus_reference 37.3.0.1-p2 CVE-2026-123007) == meets_vendor_reference ]]
+    mkdir -p "$fixture/openresty/nginx/"{sbin,conf}
+    printf '\177ELF openresty/1.31.8.1' > "$fixture/openresty/nginx/sbin/nginx"
+    printf 'http2 on;\n' > "$fixture/openresty/nginx/conf/nginx.conf"
+    nginx_rc=0
+    "$scanner" --nginx2root --nginx-path "$fixture/openresty/nginx/sbin/nginx" --json > "$fixture/layout.json" || nginx_rc=$?
+    [[ $nginx_rc == 1 ]]
+    grep -Fq '"configuration_entry_source":"installation_layout"' "$fixture/layout.json"
+    nginx_rc=0
+    "$scanner" --nginx2root --nginx-path "$fixture/openresty/nginx/sbin/nginx" --nginx-config "$fixture/missing" --json > "$fixture/incomplete.json" || nginx_rc=$?
+    [[ $nginx_rc == 1 ]]
+    grep -Fq '"evidence_incomplete":true},"summary":{"risk_gate_hit":true' "$fixture/incomplete.json"
     web_coverage_incomplete false 0 '{"skipped":1}'
     ! web_coverage_incomplete false 0 '{"skipped":0}'
     (
