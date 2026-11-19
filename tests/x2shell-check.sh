@@ -222,7 +222,7 @@ if [[ $OS == Linux ]]; then
         [[ ! -s $ACTIVE_FILE ]]
         report_json > "$fixture/weak.json"
         grep -Fq '"kind": "process", "status": "potential"' "$fixture/weak.json"
-        grep -Fq '"version": "", "java_home":' "$fixture/weak.json"
+        grep -Fq '"version": "21.0.13+9", "java_home":' "$fixture/weak.json"
         grep -Fq '"identity_confidence": "weak"' "$fixture/weak.json"
         grep -Fq '"disk_evidence": {"version": "21.0.13+9", "vendor": "OpenJDK", "product": "OpenJDK", "build_assessment": "unfixed"}' "$fixture/weak.json"
         grep -Fq '发现受影响的磁盘构建' "$fixture/weak.json"
@@ -260,6 +260,15 @@ NGINX
     [[ $(web_disk_identity /proc/self "$fixture/apache.conf" '0 1 2') == mismatch ]]
     [[ $(web_disk_identity /proc/self '/tmp/sample (deleted)' '0 1 2') == deleted ]]
     [[ $(web_disk_identity /proc/self "$fixture/missing" '0 1 2') == unverified ]]
+    printf '\177ELF nginx/1.27.4 nginx-plus-r37.0.7.1' > "$fixture/nginx-elf"
+    [[ $(nginx2root_binary_metadata "$fixture/nginx-elf") == '1.27.4|plus|37.0.7.1' ]]
+    printf '\177ELF nginx/1.27.4 nginx/1.27.5 openresty' > "$fixture/nginx-elf"
+    [[ $(nginx2root_binary_metadata "$fixture/nginx-elf") == '|openresty|' ]]
+    [[ $(nginx_plus_reference 37.2.0.1) == potential ]]
+    [[ $(nginx_plus_reference 37.2.0.2) == unknown ]]
+    refs=$(nginx2root_reference 1.25.0 '{"http2_on":true}')
+    [[ $refs == *'"feature":"http2","config_evidence":"disk_hints_present","missing_disk_hints":[]'* ]]
+    [[ $refs == *'"feature":"http2_upstream","config_evidence":"condition_not_observed","missing_disk_hints":["upstream"]'* ]]
     web_coverage_incomplete false 0 '{"skipped":1}'
     ! web_coverage_incomplete false 0 '{"skipped":0}'
     (

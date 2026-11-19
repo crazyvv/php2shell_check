@@ -1381,8 +1381,15 @@ scan_processes() {
             fi
             build=candidate
             bevid=$reason
-            version=$runtime_version
-            vendor="" product="" vm=""
+            if [ -n "$runtime_version" ]; then
+                version=$runtime_version
+                vendor="" product=""
+            else
+                version=$disk_hint_version
+                vendor=$disk_hint_vendor
+                product=$disk_hint_product
+            fi
+            vm=""
         elif [ "$openj9" -eq 1 ]; then
             build="outside_scope"
             bevid="运行在 Eclipse OpenJ9（自有 Base64 实现，不经过 HotSpot intrinsic）"
@@ -1935,12 +1942,41 @@ cleanup() {
 # 主流程
 # ---------------------------------------------------------------------------
 # Nginx2Root mode reuses the report format helpers and only reads local files.
+nginx_config_evidence() {
+    local config=$1 key comma=
+    shift
+    printf '['
+    for key in "$@"; do
+        [[ $config != *"\"$key\":true"* ]] || continue
+        printf '%s"%s"' "$comma" "$key"
+        comma=,
+    done
+    printf ']'
+}
+
+nginx_plus_reference() {
+    local version=$1
+    case $version in
+        34|35|36) printf potential; return ;;
+        37.*)
+            if { vge "$version" 37.0.0 && vle "$version" 37.0.7.1; } ||
+               { vge "$version" 37.1.0 && vle "$version" 37.2.0.1; }; then
+                printf potential; return
+            fi ;;
+    esac
+    printf unknown
+}
+
 nginx2root_reference() {
-    local raw=$1 cve minimum feature status comma=
+    local raw=$1 config=${2:-} flavor=${3:-nginx} plus=${4:-} cve minimum feature status missing evidence comma=
     printf '['
     while read -r cve minimum feature; do
         status=unknown
-        if { [[ $raw == 1.30.* ]] && vge "$raw" 1.30.7; } ||
+        if [[ $flavor == plus ]]; then
+            status=$(nginx_plus_reference "$plus")
+        elif [[ $flavor != nginx ]]; then
+            status=unknown
+        elif { [[ $raw == 1.30.* ]] && vge "$raw" 1.30.7; } ||
            { [[ $raw == 1.31.* ]] && vge "$raw" 1.31.9; }; then
             status=meets_upstream_reference
         elif [ -n "$raw" ]; then
@@ -1948,7 +1984,17 @@ nginx2root_reference() {
             elif vle "$raw" 1.31.8; then status=potential
             fi
         fi
-        printf '%s{"cve":"%s","status":"%s","feature":"%s"}' "$comma" "$cve" "$status" "$feature"
+        case $feature in
+            http2) missing=$(nginx_config_evidence "$config" http2_on) ;;
+            http2_upstream) missing=$(nginx_config_evidence "$config" http2_on upstream) ;;
+            http3_upstream) missing=$(nginx_config_evidence "$config" http3_or_quic upstream) ;;
+            resolver_proxy_mirror) missing=$(nginx_config_evidence "$config" resolver dynamic_proxy_pass mirror mirror_request_body_off) ;;
+            mail_proxy_auth_http) missing=$(nginx_config_evidence "$config" mail_proxy auth_http) ;;
+        esac
+        evidence=condition_not_observed
+        [[ $missing != '[]' ]] || evidence=disk_hints_present
+        printf '%s{"cve":"%s","status":"%s","feature":"%s","config_evidence":"%s","missing_disk_hints":%s}' \
+            "$comma" "$cve" "$status" "$feature" "$evidence" "$missing"
         comma=,
     done <<'RULES'
 CVE-2026-123007 1.9.5 http2
@@ -1960,18 +2006,23 @@ RULES
     printf ']'
 }
 
-nginx2root_version() {
-    local file=$1 size marks
-    [ -f "$file" ] || return 0
-    size=$(stat -Lc '%s' -- "$file" 2>/dev/null) || return 0
-    [[ $size =~ ^[0-9]+$ ]] && [ "$size" -le 16777216 ] || return 0
-    [[ $(head -c 4 -- "$file" 2>/dev/null) == $'\x7fELF' ]] || return 0
+nginx2root_binary_metadata() {
+    local file=$1 marks versions plus flavor=nginx
+    [[ -f "$file" && $(head -c 4 -- "$file" 2>/dev/null) == $'\x7fELF' ]] || return 0
     marks=$(head -c 16777216 -- "$file" 2>/dev/null |
-        LC_ALL=C grep -aEo 'nginx/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b|nginx-plus|Tengine|openresty' | LC_ALL=C sort -u)
-    local version_pattern='^nginx/([0-9]+\.[0-9]+\.[0-9]+)$'
-    if [[ $marks =~ $version_pattern ]]; then
-        printf '%s' "${BASH_REMATCH[1]}"
-    fi
+        LC_ALL=C grep -aEo 'nginx/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b|nginx-plus(-r[0-9]+([.][0-9]+){0,3}(-p[0-9]+)?)?|Tengine|openresty' |
+        LC_ALL=C sort -u)
+    versions=$(sed -n 's|^nginx/||p' <<< "$marks")
+    plus=$(sed -n 's|^nginx-plus-r||p' <<< "$marks")
+    [[ $versions != *$'\n'* ]] || versions=
+    [[ $plus != *$'\n'* ]] || plus=
+    case $marks in
+        *nginx-plus*) flavor=plus ;;
+        *Tengine*) flavor=tengine ;;
+        *openresty*) flavor=openresty ;;
+    esac
+    # Keep release and patch syntax distinct. Only numeric releases feed the CERT-EU range.
+    printf '%s|%s|%s' "$versions" "$flavor" "$plus"
 }
 
 nginx2root_config() {
@@ -2030,8 +2081,11 @@ nginx2root_config() {
 }
 
 nginx2root_sctp() {
-    local file loaded=false automatic_block_hint=false
+    local file loaded=false automatic_block_hint=false in_use=null
     [ ! -d /sys/module/sctp ] || loaded=true
+    if [ -r /proc/net/sctp/assocs ]; then
+        in_use=$(awk 'NR > 1 && NF {found=1; exit} END {print found ? "true" : "false"}' /proc/net/sctp/assocs 2>/dev/null) || in_use=null
+    fi
     for file in /etc/modprobe.d/*.conf /usr/lib/modprobe.d/*.conf /lib/modprobe.d/*.conf; do
         [ -f "$file" ] && [ -r "$file" ] || continue
         if grep -Eq '^[[:space:]]*install[[:space:]]+sctp[[:space:]]+(/usr)?/bin/false([[:space:]]|$)' "$file" 2>/dev/null; then
@@ -2039,8 +2093,8 @@ nginx2root_sctp() {
             break
         fi
     done
-    printf '{"kernel_release":%s,"module_visible":%s,"modprobe_install_block_hint":%s,"patch_status":"unknown"}' \
-        "$(jstr "$(cat /proc/sys/kernel/osrelease 2>/dev/null || :)")" "$loaded" "$automatic_block_hint"
+    printf '{"kernel_release":%s,"module_visible":%s,"associations_visible":%s,"modprobe_install_block_hint":%s,"patch_status":"unknown"}' \
+        "$(jstr "$(cat /proc/sys/kernel/osrelease 2>/dev/null || :)")" "$loaded" "$in_use" "$automatic_block_hint"
 }
 
 apache_reference() {
@@ -2063,9 +2117,13 @@ apache_reference() {
 apache_config_hints() {
     local file size count=0
     local -a configs=()
-    configs=("$@" /etc/apache2/apache2.conf /etc/apache2/{mods,conf,sites}-enabled/*.conf
-             /etc/apache2/mods-enabled/*.load /etc/httpd/conf/httpd.conf /etc/httpd/conf.d/*.conf
-             /etc/httpd/conf.modules.d/*.conf /usr/local/apache2/conf/httpd.conf)
+    if [ "$#" -gt 0 ]; then
+        configs=("$@")
+    else
+        configs=(/etc/apache2/apache2.conf /etc/apache2/{mods,conf,sites}-enabled/*.conf
+                 /etc/apache2/mods-enabled/*.load /etc/httpd/conf/httpd.conf /etc/httpd/conf.d/*.conf
+                 /etc/httpd/conf.modules.d/*.conf /usr/local/apache2/conf/httpd.conf)
+    fi
     (
         for file in "${configs[@]}"; do
             [ -f "$file" ] || continue
@@ -2123,7 +2181,7 @@ linux_inventory_unavailable() {
 
 apache_inventory() {
     local format=txt proc name pid path id start row= seen=' ' rows=0 disk=0 comma= version reference mapped config
-    local gate=0 modules=0 unknown=0 explicit= proc_limit=false unresolved=0 image_state match package_hint
+    local gate=0 modules=0 unknown=0 explicit= proc_limit=false unresolved=0 image_state match package_hint http2_evidence disk_http2=condition_not_observed
     local -a configs=()
     while (($#)); do
         case $1 in
@@ -2146,6 +2204,9 @@ apache_inventory() {
         return $?
     fi
     config=$(apache_config_hints ${configs[@]+"${configs[@]}"})
+    if [[ $config == *'"load_module":true'* || $config == *'"h2":true'* || $config == *'"h2c":true'* ]]; then
+        disk_http2=disk_hints_present
+    fi
     for proc in /proc/[0-9]*; do
         [ -r "$proc/comm" ] || continue
         IFS= read -r name < "$proc/comm" 2>/dev/null || continue
@@ -2168,14 +2229,16 @@ apache_inventory() {
         if [[ $image_state != matched || $mapped == null ]]; then
             unresolved=$((unresolved + 1))
         fi
+        http2_evidence=$disk_http2
+        [[ $mapped != true ]] || http2_evidence=module_mapped
         reference=$(apache_reference "$version")
         [[ $reference != potential ]] || gate=1
         [[ $reference != unknown ]] || unknown=1
         if [ "$format" = json ]; then
-            row+="$comma{\"kind\":\"process\",\"pid\":$pid,\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"mod_http2_mapped\":$mapped,\"disk_identity_matched\":$match,\"disk_identity_status\":\"$image_state\"}"
+            row+="$comma{\"kind\":\"process\",\"pid\":$pid,\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"mod_http2_mapped\":$mapped,\"http2_evidence\":\"$http2_evidence\",\"disk_identity_matched\":$match,\"disk_identity_status\":\"$image_state\"}"
             comma=,
         else
-            printf 'Apache PID %s · %q · %s · %s · mod_http2 映射 %s · 磁盘身份 %s\n' "$pid" "$path" "${version:-版本未知}" "$reference" "$mapped" "$image_state"
+            printf 'Apache PID %s · %q · %s · %s · mod_http2 映射 %s · 磁盘身份 %s · HTTP/2 证据 %s\n' "$pid" "$path" "${version:-版本未知}" "$reference" "$mapped" "$image_state" "$http2_evidence"
         fi
         rows=$((rows + 1))
     done
@@ -2190,7 +2253,7 @@ apache_inventory() {
         [[ $reference != unknown ]] || unknown=1
         package_hint=$(web_package_hint "$path")
         if [ "$format" = json ]; then
-            row+="$comma{\"kind\":\"installation\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"package_evidence\":${package_hint:-null}}"
+            row+="$comma{\"kind\":\"installation\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"package_evidence\":${package_hint:-null},\"http2_evidence\":\"$disk_http2\"}"
             comma=,
         else
             printf 'Apache 磁盘安装 · %q · %s · %s\n' "$path" "${version:-版本未知}" "$reference"
@@ -2209,7 +2272,7 @@ apache_inventory() {
         [[ $reference != unknown ]] || unknown=1
         package_hint=$(web_package_hint "$path")
         if [ "$format" = json ]; then
-            row+="$comma{\"kind\":\"module_installation\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"package_evidence\":${package_hint:-null}}"
+            row+="$comma{\"kind\":\"module_installation\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"package_evidence\":${package_hint:-null},\"http2_evidence\":\"$disk_http2\"}"
             comma=,
         else
             printf 'Apache 磁盘模块 · %q · %s · %s\n' "$path" "${version:-版本未知}" "$reference"
@@ -2325,7 +2388,7 @@ web_package_hint() {
 nginx2root_scan() {
     local format=txt explicit="" installed path proc pid id current raw matched
     local seen=' ' rows=0 comma= gate=0 unknown=0 total=0 config_report sctp_report package_hint
-    local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root
+    local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root metadata flavor plus
     local index package_count=0
     local -a package_ids=() package_values=()
     local -a config_paths=()
@@ -2361,13 +2424,13 @@ nginx2root_scan() {
     nginx2root_row() {
         local kind=$1 pid=$2 path=$3 raw=$4 matched=$5 package_hint=${6:-null} image_state=$7
         local references
-        references=$(nginx2root_reference "$raw")
+        references=$(nginx2root_reference "$raw" "$config_report" "$flavor" "$plus")
         case $references in *'"status":"potential"'*) gate=1 ;; esac
         case $references in *'"status":"unknown"'*) unknown=1 ;; esac
         total=$((total + 1))
         if [ "$format" = json ]; then
-            printf '%s{"kind":"%s","pid":%s,"path":%s,"version":%s,"disk_identity_matched":%s,"disk_identity_status":"%s","cves":' \
-                "$comma" "$kind" "$(jstr "$pid")" "$(jstr "$(san_field "$path")")" "$(jstr "$raw")" "$matched" "$image_state"
+            printf '%s{"kind":"%s","pid":%s,"path":%s,"version":%s,"disk_identity_matched":%s,"disk_identity_status":"%s","flavor":"%s","plus_release":%s,"cves":' \
+                "$comma" "$kind" "$(jstr "$pid")" "$(jstr "$(san_field "$path")")" "$(jstr "$raw")" "$matched" "$image_state" "$flavor" "$(jstr "$plus")"
             printf '%s,"package_evidence":%s}' "$references" "$package_hint"
             comma=,
         else
@@ -2388,12 +2451,13 @@ nginx2root_scan() {
         start=$(java_process_start "$pid")
         path=$(readlink "$proc/exe" 2>/dev/null || :)
         id=$(file_id "$proc/exe" || :)
-        raw=$(nginx2root_version "$proc/exe")
+        metadata=$(nginx2root_binary_metadata "$proc/exe")
+        IFS='|' read -r raw flavor plus <<< "$metadata"
         image_state=$(web_disk_identity "$proc" "$path" "$id")
         process_ns=$(readlink "$proc/ns/mnt" 2>/dev/null || :)
         if [[ -z $id || -z $start || $(file_id "$proc/exe") != "$id" ||
               $(java_process_start "$pid") != "$start" ]]; then
-            raw=
+            raw= flavor= plus=
             image_state=unverified
         elif [[ $image_state == matched ]]; then
             seen+="$id "
@@ -2421,7 +2485,8 @@ nginx2root_scan() {
         [ -n "$path" ] && [ -f "$path" ] || continue
         id=$(file_id "$path") || continue
         [[ $seen != *" $id "* ]] || continue
-        raw=$(nginx2root_version "$path")
+        metadata=$(nginx2root_binary_metadata "$path")
+        IFS='|' read -r raw flavor plus <<< "$metadata"
         seen+="$id "
         package_hint=$(web_package_hint "$path")
         nginx2root_row installation "" "$path" "$raw" null "${package_hint:-null}" not_applicable
