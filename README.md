@@ -346,6 +346,8 @@ bash scripts/x2shell-check.sh
 bash scripts/x2shell-check.sh --all --json
 ```
 
+在 macOS 上，Bash 仍会盘点可见的 Java 安装和启动器线索；依赖 Linux `/proc` 的 NGINX 与 Apache 主机专项会标记为不可采集。
+
 默认读取本机文件和启动线索。JVM 生效参数需要显式加 `--all --jcmd`，必要时 HotSpot 会打开诊断监听器。原有 Java 专项参数仍可用，例如 `--java4shell --json`，已存在的 `--json` 也继续输出 Java 专项格式。Apache 部分列出本机可见的进程和二进制版本。批量模式退出 `1` 表示 Java、NGINX 或 Apache 命中风险门禁，`3` 表示证据不完整，`2` 表示用法或采集错误。
 
 ### Nginx2Root 主机与 HTTP 响应核验

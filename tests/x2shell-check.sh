@@ -268,3 +268,12 @@ fi
 printf '%s\n' '7f000000-7f008000 r-xp 0 00:2e 123 /usr/lib/httpd/modules/mod_http2.so (deleted)' > "$fixture/apache-maps"
 [[ $(apache_mapped_http2 "$fixture/apache-maps") == true ]]
 [[ $(apache_mapped_http2 "$fixture/missing") == null ]]
+
+# Full dispatch also needs to succeed on macOS, where /proc is unavailable.
+darwin_rc=0
+bash -c 'source "$1"; OS=Darwin; main --all --json' bash "$scanner" \
+    > "$fixture/darwin.json" 2> "$fixture/darwin.stderr" || darwin_rc=$?
+[[ $darwin_rc == 1 || $darwin_rc == 3 ]]
+grep -Fq '"nginx2root":{"status":"unavailable","reason":"linux_proc_required","platform":"Darwin"' "$fixture/darwin.json"
+grep -Fq '"apache":{"status":"unavailable","reason":"linux_proc_required","platform":"Darwin"' "$fixture/darwin.json"
+! grep -Fq 'unbound variable' "$fixture/darwin.stderr"

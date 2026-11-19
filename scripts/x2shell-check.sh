@@ -486,7 +486,8 @@ range_assess() {
 
     if [ "$major" = 17 ] && [ "$(vcmp "$base" "$first")" = 0 ]; then
         local build_number=""
-        if [[ $v =~ \+([0-9]+) ]]; then build_number=${BASH_REMATCH[1]}; fi
+        local build_pattern='\+([0-9]+)'
+        if [[ $v =~ $build_pattern ]]; then build_number=${BASH_REMATCH[1]}; fi
         if [ -z "$build_number" ] || ! vge "$build_number" 10; then
             printf 'unknown\tJava 17.0.6 缺少已核实的受影响构建号（基线 +10）'
             return
@@ -552,7 +553,8 @@ build_assess() {
     major=${major//[!0-9]/}
 
     # Oracle Java 8 Performance Pack boundaries come from the vendor advisory.
-    if [[ $v =~ ^(1\.8\.0_[0-9]+(-[A-Za-z0-9.-]+)?|8u[0-9]+(b[0-9]+)?(-perf)?)$ ]]; then
+    local legacy_pattern='^(1\.8\.0_[0-9]+(-[A-Za-z0-9.-]+)?|8u[0-9]+(b[0-9]+)?(-perf)?)$'
+    if [[ $v =~ $legacy_pattern ]]; then
         if [[ $vl == oracle || $vl == "oracle corporation" ]]; then
             case $v in
                 8u511b33-perf|1.8.0_511-perf-b33)
@@ -592,7 +594,8 @@ build_assess() {
                         case $v in
                             "$base+4") printf 'fixed\tOracle Java SE 修复构建（%s+4）' "$base"; return ;;
                             "$base"+*)
-                                if [[ ${v#"$base"} =~ ^\+4-lts(-[0-9]+)?$ ]]; then
+                                local oracle_lts_pattern='^\+4-lts(-[0-9]+)?$'
+                                if [[ ${v#"$base"} =~ $oracle_lts_pattern ]]; then
                                     printf 'fixed\tOracle Java SE 修复构建（%s）' "$v"
                                     return
                                 fi ;;
@@ -647,7 +650,8 @@ build_assess() {
     esac
 
     # ---- 版本形态校验 ----
-    if [[ ! $v =~ ^[0-9]{1,3}(\.[0-9]+){0,4}(\+[0-9]+([.-][A-Za-z0-9.~+_-]+)?)?$ ]]; then
+    local version_pattern='^[0-9]{1,3}(\.[0-9]+){0,4}(\+[0-9]+([.-][A-Za-z0-9.~+_-]+)?)?$'
+    if [[ ! $v =~ $version_pattern ]]; then
         printf 'unknown\t没有可用的 Java 版本元数据（%s）' "$version"
         return
     fi
@@ -848,7 +852,8 @@ assess_jdk_build() {
         distribution=$(release_get "$home/release" IMPLEMENTOR_VERSION)
         if [ "$product" = "Oracle GraalVM Enterprise Edition" ]; then
             graal=$(release_get "$home/release" GRAALVM_VERSION)
-            if [[ $graal =~ ^[0-9]+(\.[0-9]+){1,4}$ ]]; then
+            local graal_pattern='^[0-9]+(\.[0-9]+){1,4}$'
+            if [[ $graal =~ $graal_pattern ]]; then
                 version=$graal
             fi
         fi
@@ -978,7 +983,7 @@ runtime_version_conflicts() {
     local runtime=$1 disk=$2
     [[ $runtime == *+* && -n $disk ]] || return 1
     if [[ $disk == *+* ]]; then
-        [[ ${runtime,,} != "${disk,,}" ]]
+        [[ $(lower "$runtime") != "$(lower "$disk")" ]]
     else
         [[ ${runtime%%+*} != "$disk" ]]
     fi
@@ -1250,9 +1255,9 @@ scan_processes() {
         if [ -n "$flags" ]; then
             # 启动参数是可信的"启动证据"，但 JVM 有效值仍需按实际进程确认
             if [ "$ASSUME_FEFF" -eq 1 ]; then
-                add_note "启动参数: $flags（已请求按启动参数估算，jcmd 实测优先）"
+                add_note "启动参数: ${flags}（已请求按启动参数估算，jcmd 实测优先）"
             else
-                add_note "启动参数: $flags（启动证据，未确认该 JVM 的有效值）"
+                add_note "启动参数: ${flags}（启动证据，未确认该 JVM 的有效值）"
             fi
         fi
 
@@ -1907,7 +1912,8 @@ parse_args() {
     fi
 
     local status_pattern='(affected|potential|mitigated|not_affected|unknown)'
-    [[ $FAIL_ON =~ ^$status_pattern(,$status_pattern)*$ ]] ||
+    local failure_pattern="^${status_pattern}(,${status_pattern})*$"
+    [[ $FAIL_ON =~ $failure_pattern ]] ||
         die "--fail-on 只接受 affected,potential,mitigated,not_affected,unknown"
 }
 
@@ -1952,7 +1958,8 @@ nginx2root_version() {
     [[ $(head -c 4 -- "$file" 2>/dev/null) == $'\x7fELF' ]] || return 0
     marks=$(head -c 16777216 -- "$file" 2>/dev/null |
         LC_ALL=C grep -aEo 'nginx/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b|nginx-plus|Tengine|openresty' | LC_ALL=C sort -u)
-    if [[ $marks =~ ^nginx/([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    local version_pattern='^nginx/([0-9]+\.[0-9]+\.[0-9]+)$'
+    if [[ $marks =~ $version_pattern ]]; then
         printf '%s' "${BASH_REMATCH[1]}"
     fi
 }
@@ -2025,13 +2032,13 @@ nginx2root_sctp() {
 apache_reference() {
     local raw=$1 scope=${2:-httpd}
     if [ "$scope" = module ]; then
-        [[ $raw =~ ^2\.0\.([0-9]+)$ ]] || { printf unknown; return; }
+        [[ $raw =~ ^2\.0\.[0-9]+$ ]] || { printf unknown; return; }
         if vlt "$raw" 2.0.8; then printf outside_upstream_range
         elif vle "$raw" 2.0.42; then printf potential
         else printf unknown
         fi
     else
-        [[ $raw =~ ^2\.4\.([0-9]+)$ ]] || { printf unknown; return; }
+        [[ $raw =~ ^2\.4\.[0-9]+$ ]] || { printf unknown; return; }
         if vlt "$raw" 2.4.55; then printf outside_upstream_range
         elif vle "$raw" 2.4.70; then printf potential
         else printf meets_upstream_reference
@@ -2083,9 +2090,25 @@ apache_mapped_http2() {
     fi
 }
 
+linux_inventory_unavailable() {
+    local format=$1 name=$2 cve=${3:-}
+    if [ "$format" = json ]; then
+        printf '{"status":"unavailable","reason":"linux_proc_required","platform":%s' "$(jstr "$OS")"
+        if [ -n "$cve" ]; then printf ',"cve":%s' "$(jstr "$cve")"; fi
+        printf ',"findings":[]}\n'
+    else
+        printf '%s · %s 上跳过主机核验（需要 Linux /proc）\n' "$name" "$OS"
+    fi
+    return 3
+}
+
 apache_inventory() {
     local format=$1 proc name pid path id start row= seen=' ' rows=0 disk=0 comma= version reference mapped config
     local gate=0 modules=0 unknown=0
+    if [ "$OS" != Linux ]; then
+        linux_inventory_unavailable "$format" Apache CVE-2026-119618
+        return $?
+    fi
     config=$(apache_config_hints)
     for proc in /proc/[0-9]*; do
         [ -r "$proc/comm" ] || continue
@@ -2171,7 +2194,8 @@ apache_version() {
     if [ "$scope" = module ]; then pattern='mod_http2(/| \(v)'; fi
     marks=$(head -c 16777216 -- "$file" 2>/dev/null |
         LC_ALL=C grep -aEo "$pattern"'[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b' | LC_ALL=C sort -u)
-    if [[ $marks != *$'\n'* && $marks =~ ([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    local version_pattern='([0-9]+\.[0-9]+\.[0-9]+)$'
+    if [[ $marks != *$'\n'* && $marks =~ $version_pattern ]]; then
         printf '%s' "${BASH_REMATCH[1]}"
     fi
 }
@@ -2192,7 +2216,7 @@ audit_all() {
     done
     if [ "$format" = json ]; then
         java_report=$(java4shell_main "${java_args[@]}" --json) || rc_java=$?
-        nginx_report=$(nginx2root_scan "${nginx_args[@]}" --json) || rc_nginx=$?
+        nginx_report=$(nginx2root_scan ${nginx_args[@]+"${nginx_args[@]}"} --json) || rc_nginx=$?
         apache_report=$(apache_inventory json) || rc_apache=$?
         printf '{"scope":"local_read_only_inventory","java4shell":%s,"nginx2root":%s,"apache":%s,"exit_codes":{"java4shell":%s,"nginx2root":%s,"apache2root":%s}}\n' \
             "${java_report:-null}" "${nginx_report:-null}" "${apache_report:-null}" "$rc_java" "$rc_nginx" "$rc_apache"
@@ -2200,7 +2224,7 @@ audit_all() {
         printf '=== Java4Shell ===\n'
         (java4shell_main "${java_args[@]}") || rc_java=$?
         printf '\n=== Nginx2Root ===\n'
-        (nginx2root_scan "${nginx_args[@]}") || rc_nginx=$?
+        (nginx2root_scan ${nginx_args[@]+"${nginx_args[@]}"}) || rc_nginx=$?
         printf '\n=== Apache HTTP Server ===\n'
         apache_inventory txt || rc_apache=$?
     fi
@@ -2234,7 +2258,8 @@ nginx_package_hint() {
 nginx2root_scan() {
     local format=txt explicit="" installed path proc pid id current raw matched
     local seen=' ' rows=0 comma= gate=0 unknown=0 total=0 config_report sctp_report package_hint
-    local -A packages=()
+    local index package_count=0
+    local -a package_ids=() package_values=()
     local -a config_paths=()
     while (($#)); do
         case $1 in
@@ -2253,8 +2278,11 @@ nginx2root_scan() {
         esac
         shift
     done
-    [ "$OS" = Linux ] || die "Nginx2Root 主机盘点需要 Linux /proc"
-    config_report=$(nginx2root_config "${config_paths[@]}")
+    if [ "$OS" != Linux ]; then
+        linux_inventory_unavailable "$format" Nginx2Root
+        return $?
+    fi
+    config_report=$(nginx2root_config ${config_paths[@]+"${config_paths[@]}"})
     sctp_report=$(nginx2root_sctp)
     if [ "$format" = json ]; then
         printf '{"status":"collected","source":"local_binary_inventory","patch_verified":false,"exploitability_confirmed":false,"sctp":%s,"configuration":%s,"sources":["https://nginx.org/en/security_advisories.html","https://cert.europa.eu/publications/security-advisories/2026-022/"],"findings":[' "$sctp_report" "$config_report"
@@ -2299,10 +2327,15 @@ nginx2root_scan() {
         fi
         package_hint=null
         if [[ $matched == true && $(file_id "$path") == "$id" ]]; then
-            if [[ ! ${packages[$id]+found} ]]; then
-                packages[$id]=$(nginx_package_hint "$path")
+            for ((index=0; index<package_count; index++)); do
+                [ "${package_ids[index]}" != "$id" ] || break
+            done
+            if [ "$index" -eq "$package_count" ]; then
+                package_ids[index]=$id
+                package_values[index]=$(nginx_package_hint "$path")
+                package_count=$((package_count + 1))
             fi
-            package_hint=${packages[$id]:-null}
+            package_hint=${package_values[index]:-null}
         fi
         nginx2root_row process "$pid" "$path" "$raw" "$matched" "$package_hint"
         rows=$((rows + 1))
@@ -2383,7 +2416,7 @@ java4shell_main() {
     fi
 
     cpu_probe
-    note_progress "CPU 条件: $CPU_STATE（$CPU_SOURCE）"
+    note_progress "CPU 条件: ${CPU_STATE}（${CPU_SOURCE}）"
 
     if [ "$EUID" -ne 0 ] 2>/dev/null; then
         warn "当前非 root 运行：部分其他用户的进程 /proc 可能不可读，进程发现可能不完整。"
