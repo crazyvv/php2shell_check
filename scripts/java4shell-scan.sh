@@ -85,8 +85,10 @@ cat <<EOF
 $NICKNAME · $CVE 主机暴露面检测（$PROG v$SCRIPT_VERSION）
 
 用法:
-  $PROG [选项]
-  $PROG --nginx2root [--json] [--nginx-path PATH]
+  $PROG                         # 同时盘点 Java、NGINX 和 Apache
+  $PROG --all [--json] [--jcmd]
+  $PROG --java4shell [选项]
+  $PROG --nginx2root [--json] [--nginx-path PATH] [--nginx-config FILE]
 
   默认行为：发现本机 JDK 安装 + 检查运行中的 JVM 进程 + 探测 CPU 条件，
   输出中文结论；默认不修改被检查的运行时，不联网。
@@ -1954,35 +1956,218 @@ nginx2root_version() {
     fi
 }
 
+nginx2root_config() {
+    local config size count=0
+    local -a configs=()
+    if [ "$#" -gt 0 ]; then
+        configs=("$@")
+    else
+        configs=(/etc/nginx/nginx.conf /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/* /usr/local/nginx/conf/nginx.conf)
+    fi
+    (
+        for config in "${configs[@]}"; do
+            [ -f "$config" ] || continue
+            count=$((count + 1))
+            [ "$count" -le 64 ] || { printf '@skipped\n'; break; }
+            size=$(stat -Lc '%s' -- "$config" 2>/dev/null) || size=
+            if [[ ! $size =~ ^[0-9]+$ ]] || [ "$size" -gt 65536 ] || [ ! -r "$config" ]; then
+                printf '@skipped\n'; continue
+            fi
+            if ! head -c 65536 -- "$config" 2>/dev/null; then printf '@skipped\n'; continue; fi
+            printf '\n@file\n'
+        done
+    ) | awk '
+        /^@file$/ { files++; next }
+        /^@skipped$/ { skipped++; next }
+        {
+            gsub(/"[^"]*"|\047[^\047]*\047/, "", $0)
+            sub(/#.*/, "", $0)
+            if ($0 ~ /(^|[;{}[:space:]])http2[[:space:]]+on([[:space:]]|;)/ ||
+                $0 ~ /(^|[;{}[:space:]])listen[[:space:]]+[^;]*[[:space:]]http2([[:space:]]|;)/) h2=1
+            if ($0 ~ /(^|[;{}[:space:]])http2[[:space:]]+off([[:space:]]|;)/) h2off=1
+            if ($0 ~ /(^|[;{}[:space:]])http3[[:space:]]+on([[:space:]]|;)/ ||
+                $0 ~ /(^|[;{}[:space:]])listen[[:space:]]+[^;]*[[:space:]]quic([[:space:]]|;)/) h3=1
+            if ($0 ~ /(^|[;{}[:space:]])resolver[[:space:]]+/) resolver=1
+            if ($0 ~ /(^|[;{}[:space:]])(proxy_pass|grpc_pass|fastcgi_pass|uwsgi_pass|scgi_pass)[[:space:]]+/) upstream=1
+            if ($0 ~ /(^|[;{}[:space:]])proxy_pass[[:space:]]+[^;]*\$/) dynamic=1
+            if ($0 ~ /(^|[;{}[:space:]])mirror[[:space:]]+/) mirror=1
+            if ($0 ~ /(^|[;{}[:space:]])mirror_request_body[[:space:]]+off([[:space:]]|;)/) mirror_off=1
+            if ($0 ~ /(^|[;{}[:space:]])ssi[[:space:]]+on([[:space:]]|;)/) ssi=1
+            if ($0 ~ /(^|[;{}[:space:]])mail[[:space:]]*\{/) mail=1
+            if ($0 ~ /(^|[;{}[:space:]])proxy[[:space:]]+on([[:space:]]|;)/) mail_proxy=1
+            if ($0 ~ /(^|[;{}[:space:]])auth_http[[:space:]]+/) auth=1
+        }
+        function b(value) { return value ? "true" : "false" }
+        END {
+            printf "{\"scope\":\"disk_directive_hints\",\"files_examined\":%d,\"skipped\":%d,", files, skipped
+            printf "\"http2_on\":%s,\"http2_off\":%s,\"http3_or_quic\":%s,", b(h2), b(h2off), b(h3)
+            printf "\"upstream\":%s,\"resolver\":%s,\"dynamic_proxy_pass\":%s,", b(upstream), b(resolver), b(dynamic)
+            printf "\"mirror\":%s,\"mirror_request_body_off\":%s,\"ssi\":%s,", b(mirror), b(mirror_off), b(ssi)
+            printf "\"mail\":%s,\"mail_proxy\":%s,\"auth_http\":%s}", b(mail), b(mail_proxy), b(auth)
+        }'
+}
+
+nginx2root_sctp() {
+    local file loaded=false automatic_block_hint=false
+    [ ! -d /sys/module/sctp ] || loaded=true
+    for file in /etc/modprobe.d/*.conf /usr/lib/modprobe.d/*.conf /lib/modprobe.d/*.conf; do
+        [ -f "$file" ] && [ -r "$file" ] || continue
+        if grep -Eq '^[[:space:]]*install[[:space:]]+sctp[[:space:]]+(/usr)?/bin/false([[:space:]]|$)' "$file" 2>/dev/null; then
+            automatic_block_hint=true
+            break
+        fi
+    done
+    printf '{"kernel_release":%s,"module_visible":%s,"modprobe_install_block_hint":%s,"patch_status":"unknown"}' \
+        "$(jstr "$(cat /proc/sys/kernel/osrelease 2>/dev/null || :)")" "$loaded" "$automatic_block_hint"
+}
+
+apache_inventory() {
+    local format=$1 proc name pid path id row= seen=' ' rows=0 disk=0 comma= version
+    for proc in /proc/[0-9]*; do
+        [ -r "$proc/comm" ] || continue
+        IFS= read -r name < "$proc/comm" 2>/dev/null || continue
+        case $name in apache2|httpd) ;; *) continue ;; esac
+        ((rows < 24)) || break
+        pid=${proc##*/}
+        path=$(readlink "$proc/exe" 2>/dev/null || :)
+        id=$(file_id "$proc/exe" || :)
+        version=$(apache_version "$proc/exe")
+        if [[ -z $id || $(file_id "$proc/exe") != "$id" ]]; then
+            version=
+        elif [[ $path == /* && $(file_id "$proc/root$path") == "$id" ]]; then
+            seen+="$id "
+        fi
+        if [ "$format" = json ]; then
+            row+="$comma{\"kind\":\"process\",\"pid\":$pid,\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version")}"
+            comma=,
+        else
+            printf 'Apache PID %s · %q · %s\n' "$pid" "$path" "${version:-版本未知}"
+        fi
+        rows=$((rows + 1))
+    done
+    for path in "$(type -P apache2 || :)" "$(type -P httpd || :)" /usr/sbin/apache2 /usr/sbin/httpd /usr/local/apache2/bin/httpd; do
+        [ -n "$path" ] && [ -f "$path" ] || continue
+        id=$(file_id "$path") || continue
+        [[ $seen != *" $id "* ]] || continue
+        seen+="$id "
+        version=$(apache_version "$path")
+        if [ "$format" = json ]; then
+            row+="$comma{\"kind\":\"installation\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version")}"
+            comma=,
+        else
+            printf 'Apache 磁盘安装 · %q · %s\n' "$path" "${version:-版本未知}"
+        fi
+        disk=$((disk + 1))
+    done
+    local status=observed
+    ((rows + disk > 0)) || status=not_observed
+    if [ "$format" = json ]; then
+        printf '{"status":"%s","scope":"inventory","proc_limit_reached":%s,"findings":[%s]}' \
+            "$status" "$([ "$rows" -ge 24 ] && printf true || printf false)" "$row"
+    elif [ "$status" = not_observed ]; then
+        printf 'Apache · 当前范围未观察到安装或进程\n'
+    fi
+}
+
+apache_version() {
+    local file=$1 marks
+    [ -f "$file" ] || return 0
+    [[ $(head -c 4 -- "$file" 2>/dev/null) == $'\x7fELF' ]] || return 0
+    marks=$(head -c 16777216 -- "$file" 2>/dev/null |
+        LC_ALL=C grep -aEo 'Apache/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b' | LC_ALL=C sort -u)
+    if [[ $marks =~ ^Apache/([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    fi
+}
+
+audit_all() {
+    local format=txt rc_java=0 rc_nginx=0 java_report nginx_report apache_report
+    local -a java_args=(--quiet) nginx_args=()
+    while (($#)); do
+        case $1 in
+            --json) format=json ;;
+            --jcmd) java_args+=("$1") ;;
+            --nginx-path|--nginx-config)
+                (($# >= 2)) || die "$1 需要一个路径"
+                nginx_args+=("$1" "$2"); shift ;;
+            *) die "未知批量检查选项: $1" ;;
+        esac
+        shift
+    done
+    if [ "$format" = json ]; then
+        java_report=$(java4shell_main "${java_args[@]}" --json) || rc_java=$?
+        nginx_report=$(nginx2root_scan "${nginx_args[@]}" --json) || rc_nginx=$?
+        apache_report=$(apache_inventory json)
+        printf '{"scope":"local_read_only_inventory","java4shell":%s,"nginx2root":%s,"apache":%s,"exit_codes":{"java4shell":%s,"nginx2root":%s}}\n' \
+            "${java_report:-null}" "${nginx_report:-null}" "${apache_report:-null}" "$rc_java" "$rc_nginx"
+    else
+        printf '=== Java4Shell ===\n'
+        (java4shell_main "${java_args[@]}") || rc_java=$?
+        printf '\n=== Nginx2Root ===\n'
+        (nginx2root_scan "${nginx_args[@]}") || rc_nginx=$?
+        printf '\n=== Apache HTTP Server ===\n'
+        apache_inventory txt
+    fi
+    if ((rc_java == 2 || rc_nginx == 2)); then return 2; fi
+    if ((rc_java == 1 || rc_nginx == 1)); then return 1; fi
+    if ((rc_java != 0 || rc_nginx != 0)); then return 3; fi
+    return 0
+}
+
+nginx_package_hint() {
+    local path=$1 owner manager result
+    have timeout || return 0
+    [[ $path == /* ]] || return 0
+    if have dpkg-query; then
+        owner=$(timeout 2 dpkg-query -S -- "$path" 2>/dev/null | awk -F ': ' -v target="$path" '$2 == target { print $1 }')
+        [[ $owner =~ ^[[:alnum:].+:-]+$ ]] || return 0
+        manager=dpkg
+        result=$(timeout 2 dpkg-query -W -f='${binary:Package} ${Version} ${db:Status-Status}' -- "$owner" 2>/dev/null) || return 0
+        [[ $result == *" installed" ]] || return 0
+        result=${result% installed}
+    elif have rpm; then
+        manager=rpm
+        result=$(timeout 2 rpm -qf --qf '%{NAME} %{VERSION}-%{RELEASE}' -- "$path" 2>/dev/null) || return 0
+    else
+        return 0
+    fi
+    [ -n "$result" ] || return 0
+    printf '{"manager":%s,"installed_package":%s,"patch_status":"unverified"}' "$(jstr "$manager")" "$(jstr "$(san_field "$result")")"
+}
+
 nginx2root_scan() {
-    local format=txt explicit="" installed path proc pid id current raw matched kernel sctp=false
-    local seen=' ' rows=0 comma= gate=0 unknown=0 total=0
+    local format=txt explicit="" installed path proc pid id current raw matched
+    local seen=' ' rows=0 comma= gate=0 unknown=0 total=0 config_report sctp_report package_hint
+    local -A packages=()
+    local -a config_paths=()
     while (($#)); do
         case $1 in
             --json|--format=json) format=json ;;
+            --nginx-config)
+                (($# > 1)) && [ -f "$2" ] || die "--nginx-config 需要存在的文件"
+                config_paths+=("$2"); shift ;;
             --nginx-path)
                 (($# > 1)) && [ -f "$2" ] || die "--nginx-path 需要存在的文件"
                 explicit=$2
                 shift ;;
             --help|-h)
-                printf '用法: %s --nginx2root [--json] [--nginx-path PATH]\n' "$PROG"
+                printf '用法: %s --nginx2root [--json] [--nginx-path PATH] [--nginx-config FILE]\n' "$PROG"
                 return ;;
             *) die "未知 Nginx2Root 选项: $1" ;;
         esac
         shift
     done
     [ "$OS" = Linux ] || die "Nginx2Root 主机盘点需要 Linux /proc"
-    kernel=$(cat /proc/sys/kernel/osrelease 2>/dev/null || :)
-    [ ! -d /sys/module/sctp ] || sctp=true
+    config_report=$(nginx2root_config "${config_paths[@]}")
+    sctp_report=$(nginx2root_sctp)
     if [ "$format" = json ]; then
-        printf '{"status":"collected","source":"local_binary_inventory","patch_verified":false,"exploitability_confirmed":false,"sctp":{"kernel_release":%s,"module_visible":%s,"patch_status":"unknown"},"sources":["https://nginx.org/en/security_advisories.html","https://cert.europa.eu/publications/security-advisories/2026-022/"],"findings":[' "$(jstr "$kernel")" "$sctp"
+        printf '{"status":"collected","source":"local_binary_inventory","patch_verified":false,"exploitability_confirmed":false,"sctp":%s,"configuration":%s,"sources":["https://nginx.org/en/security_advisories.html","https://cert.europa.eu/publications/security-advisories/2026-022/"],"findings":[' "$sctp_report" "$config_report"
     else
-        printf 'Nginx2Root · NGINX 上游版本参考\nLinux %s · SCTP 可见 %s · 内核补丁未知
-' "$kernel" "$sctp"
+        printf 'NGINX 上游版本参考\n磁盘配置线索: %s\n内核 SCTP 线索: %s\n' "$config_report" "$sctp_report"
     fi
 
     nginx2root_row() {
-        local kind=$1 pid=$2 path=$3 raw=$4 matched=$5
+        local kind=$1 pid=$2 path=$3 raw=$4 matched=$5 package_hint=${6:-null}
         local references
         references=$(nginx2root_reference "$raw")
         case $references in *'"status":"potential"'*) gate=1 ;; esac
@@ -1991,12 +2176,12 @@ nginx2root_scan() {
         if [ "$format" = json ]; then
             printf '%s{"kind":"%s","pid":%s,"path":%s,"version":%s,"disk_identity_matched":%s,"cves":' \
                 "$comma" "$kind" "$(jstr "$pid")" "$(jstr "$(san_field "$path")")" "$(jstr "$raw")" "$matched"
-            printf '%s}' "$references"
+            printf '%s,"package_evidence":%s}' "$references" "$package_hint"
             comma=,
         else
             printf '%s %s %q · NGINX %s · 磁盘身份匹配 %s\n' "$kind" "$pid" "$path" "${raw:-未知}" "$matched"
-            nginx2root_reference "$raw"
-            printf '\n'
+            printf '%s\n' "$references"
+            [ "$package_hint" = null ] || printf '软件包线索: %s\n' "$package_hint"
         fi
     }
 
@@ -2016,7 +2201,14 @@ nginx2root_scan() {
             matched=true
             seen+="$id "
         fi
-        nginx2root_row process "$pid" "$path" "$raw" "$matched"
+        package_hint=null
+        if [[ $matched == true && $(file_id "$path") == "$id" ]]; then
+            if [[ ! ${packages[$id]+found} ]]; then
+                packages[$id]=$(nginx_package_hint "$path")
+            fi
+            package_hint=${packages[$id]:-null}
+        fi
+        nginx2root_row process "$pid" "$path" "$raw" "$matched" "$package_hint"
         rows=$((rows + 1))
     done
     installed=$(type -P nginx || :)
@@ -2026,7 +2218,8 @@ nginx2root_scan() {
         [[ $seen != *" $id "* ]] || continue
         raw=$(nginx2root_version "$path")
         seen+="$id "
-        nginx2root_row installation "" "$path" "$raw" null
+        package_hint=$(nginx_package_hint "$path")
+        nginx2root_row installation "" "$path" "$raw" null "${package_hint:-null}"
     done
     if [ "$format" = json ]; then
         printf '],"coverage":{"proc_limit_reached":%s}}\n' "$([ "$rows" -ge 24 ] && printf true || printf false)"
@@ -2036,8 +2229,7 @@ nginx2root_scan() {
     return 0
 }
 
-main() {
-    if [ "${1:-}" = --nginx2root ]; then shift; nginx2root_scan "$@"; return; fi
+java4shell_main() {
     parse_args "$@"
 
     WORK=$(mktemp -d "${TMPDIR:-/tmp}/java4shell.XXXXXX") || die "无法创建临时目录"
@@ -2187,6 +2379,16 @@ main() {
         rc=3
     fi
     exit "$rc"
+}
+
+main() {
+    if [ "$#" -eq 0 ]; then audit_all; return; fi
+    case $1 in
+        --all) shift; audit_all "$@" ;;
+        --nginx2root) shift; nginx2root_scan "$@" ;;
+        --java4shell) shift; java4shell_main "$@" ;;
+        *) java4shell_main "$@" ;;
+    esac
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then

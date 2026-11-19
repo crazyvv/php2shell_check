@@ -327,6 +327,18 @@ bash scripts/java4shell-scan.sh --demo --json
 
 增强版 JSON 的 `coverage` 记录 `--root-depth` 上限、达到深度边界的目录数、递归扫描出错的根目录数和读取失败的进程映射数。达到深度边界表示该目录以下没有搜索。若未命中门禁，覆盖不足会返回退出码 `3`。`candidate` 是 JSON 和 CSV 中的 `build_assessment` 值，`--fail-on` 匹配最终的 `status`。运行 `bash tests/java4shell-scan.sh` 可验证构建规则和覆盖报告。
 
+### 一次盘点 Java、NGINX 和 Apache
+
+```bash
+# 无参数时自动盘点三类运行进程和常见安装目录
+bash scripts/java4shell-scan.sh
+
+# 批量采集用一个 JSON 对象，包含三类结果和专项退出码
+bash scripts/java4shell-scan.sh --all --json
+```
+
+默认读取本机文件和启动线索。JVM 生效参数需要显式加 `--all --jcmd`，必要时 HotSpot 会打开诊断监听器。原有 Java 专项参数仍可用，例如 `--java4shell --json`，已存在的 `--json` 也继续输出 Java 专项格式。Apache 部分列出本机可见的进程和二进制版本。批量模式退出 `1` 表示 Java 或 NGINX 命中风险门禁，`3` 表示证据不完整，`2` 表示用法或采集错误。
+
 ### Nginx2Root 主机与 HTTP 响应核验
 
 ```bash
@@ -342,9 +354,13 @@ php-selfcheck collect --nginx2root --java-command --java-attach > host-report.js
 
 Nginx2Root 核验逐项给出五个 NGINX CVE 的上游版本参考。主机模式读取当前命名空间可见的 NGINX 进程映像和常见磁盘安装，输出版本、文件身份关联和 SCTP 可见性。SCTP 可见性不能确认内核补丁状态。Bash 模式返回 `1` 表示命中上游受影响范围，`3` 表示没有足够的版本或覆盖证据，`2` 表示参数错误。版本范围与已知修复分支来自 [NGINX 官方公告](https://nginx.org/en/security_advisories.html) 和 [CERT-EU 公告](https://cert.europa.eu/publications/security-advisories/2026-022/)。
 
-Rust 的 `--middleware` 同时包含这项本机盘点。网页扫描只使用现有 HTTP 响应的 `Server` 头，结果可能来自代理。上游版本参考不能确认发行版回补、NGINX Plus 或第三方构建的补丁状态，也不能确认相关模块配置或请求路径可达。
+Bash 和 Rust 都检查标准路径中的磁盘配置线索，包括 HTTP/2、HTTP/3/QUIC、上游代理、resolver、mirror/SSI 和邮件代理。磁盘指令可能尚未加载，多个文件的指令也可能属于不同站点。Bash 可用可重复的 `--nginx-config FILE` 检查非标准路径。SCTP 禁载配置只报告为线索。可用时 Bash 读取 dpkg/RPM 软件包元数据，Rust 在 `--package-audit` 下读取。软件包回补仍按对应发行版公告核对。
+
+Rust 的 `--middleware` 同时包含 Nginx2Root 和 Apache 等中间件盘点。网页扫描只使用现有 HTTP 响应的 `Server` 头，结果可能来自代理。上游版本参考不能确认发行版回补、NGINX Plus 或第三方构建的补丁状态，也不能确认相关模块配置或请求路径可达。
 
 Rust `--java-command` 保留 CLI 默认值采集，并增加当前节点的 CPUID、`/proc/cpuinfo` 交叉核对、JVM 映射身份及磁盘构建证据。`--java-attach` 显式读取同用户 JVM 的生效参数和自报构建，必要时会启动 HotSpot 诊断监听器。运行构建与磁盘构建有冲突时保留未知。
+
+Nginx2Root 检查项参考了研究披露、官方公告和两个只读检查器。版本边界以 NGINX 官方公告为准。[Xint 研究](https://xint.io/blog/nginx2root-remote-code-execution) · [The DevOps Daily 检查器](https://github.com/The-DevOps-Daily/nginx2root-check) · [TimTheBeastNL 检查器](https://github.com/TimTheBeastNL/nginx2root)
 
 ### 可选运行实例与厂商补丁参考核验
 

@@ -234,3 +234,27 @@ if [[ $OS == Linux ]]; then
         grep -Fq '21.0.13+9 · OpenJDK / OpenJDK' "$fixture/weak.txt"
     )
 fi
+
+if [[ $OS == Linux ]]; then
+    cat > "$fixture/nginx.conf" <<'NGINX'
+# listen 443 ssl http2;
+server {
+    http2 off;
+    listen 443 quic;
+    resolver 192.0.2.53;
+    proxy_pass http://$upstream;
+}
+mail { proxy on; auth_http localhost; }
+NGINX
+    flags=$(nginx2root_config "$fixture/nginx.conf")
+    [[ $flags == *'"http2_on":false,"http2_off":true,"http3_or_quic":true'* ]]
+    [[ $flags == *'"resolver":true,"dynamic_proxy_pass":true'* ]]
+    [[ $flags == *'"mail_proxy":true,"auth_http":true'* ]]
+    (
+        java4shell_main() { printf '{"status":"fixture"}'; return 0; }
+        nginx2root_scan() { printf '{"status":"fixture"}'; return 0; }
+        apache_inventory() { printf '{"status":"fixture"}'; }
+        [[ $(main --all --json) == *'"java4shell":{"status":"fixture"},"nginx2root":{"status":"fixture"},"apache":{"status":"fixture"}'* ]]
+        [[ $(main) == *'=== Java4Shell ==='*'=== Nginx2Root ==='*'=== Apache HTTP Server ==='* ]]
+    )
+fi

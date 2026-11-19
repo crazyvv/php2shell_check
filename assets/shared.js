@@ -94,10 +94,16 @@ function nginx2rootView(n) {
   if(n.status==='nginx_hint')rows.push(n);
   for(const row of rows.slice(0,24)){
     box.append(node('p',`${row.pid ? 'PID '+row.pid+' · ' : ''}${row.path || 'NGINX'} · ${row.version || '版本未知'}`,'fine'));
+    if(row.package_evidence?.version)box.append(node('p',`软件包 ${row.package_evidence.name || ''} ${row.package_evidence.version} · 回补待核验`,'fine'));
     for(const cve of (row.cves || []).slice(0,5))
       box.append(node('p',`${cve.cve} · ${status[cve.status] || '未知'}`,'fine'));
   }
-  if(n.sctp)box.append(node('p',`Linux ${n.sctp.kernel_release || '未知'} · SCTP 模块：${n.sctp.module_visible===true?'可见':'未确认'} · 内核补丁待核验`,'fine'));
+  if(n.configuration?.files_examined){
+    const c=n.configuration;
+    const found=[['http2_on','HTTP/2'],['http2_off','HTTP/2 关闭指令'],['http3_or_quic','HTTP/3/QUIC'],['upstream','上游代理'],['resolver','resolver'],['dynamic_proxy_pass','变量 proxy_pass'],['mirror','mirror'],['ssi','SSI'],['mail_proxy','邮件代理'],['auth_http','auth_http']].filter(([k])=>c[k]===true).map(([,label])=>label);
+    box.append(node('p',`磁盘配置线索（${c.files_examined} 个文件）：${found.join('、') || '未观察到相关指令'}`,'fine'));
+  }
+  if(n.sctp)box.append(node('p',`Linux ${n.sctp.kernel_release || '未知'} · SCTP 模块：${n.sctp.module_visible===true?'可见':'未确认'} · modprobe 禁载配置：${n.sctp.modprobe_install_block_hint===true?'有线索':'未确认'} · 内核补丁待核验`,'fine'));
   box.append(node('p','根据上游公告解释所见版本；需要核对发行包回补和实际配置。','fine'));
   wrap.append(box);return wrap;
 }

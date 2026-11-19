@@ -283,6 +283,11 @@ async fn native_compare(tools: &Tools, manager: &str, version: &str, fixed: &str
     }
     Some(result["output"].as_str()?.trim().parse::<i32>().ok()? >= 0)
 }
+pub(crate) async fn nginx_package_metadata(path: &str) -> Value {
+    let os = os_release(&read(Path::new("/etc/os-release")).unwrap_or_default());
+    package_for(&Tools::discover(), path, &os, &[]).await
+}
+
 async fn package_for(
     tools: &Tools,
     path: &str,

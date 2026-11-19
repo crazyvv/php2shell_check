@@ -205,10 +205,13 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
         );
         java4shell["runtime_audit"] = audit;
     }
-    let nginx2root = crate::nginx2root::collect(
+    let mut nginx2root = crate::nginx2root::collect(
         options.nginx2root || options.middleware,
         options.nginx_path.as_deref(),
     );
+    if options.package_audit && nginx2root["status"] == "collected" {
+        crate::nginx2root::add_package_evidence(&mut nginx2root).await;
+    }
     bounded_report(
         json!({"php_command":{"status":if options.php_command {"enabled"}else{"disabled"},"scope":"cli_only","detail":"显式开启才运行 PHP；CLI 配置不能代表 Web/FPM"},"java4shell":java4shell,"nginx2root":nginx2root,"package_audit":package_audit,"collection_options":options,"middleware":middleware,"schema":"php-selfcheck-host/v1","hostname":std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim(),"collected_at":chrono::Utc::now().to_rfc3339(),"platform":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"source":"developer_supplied_unverified","checks":checks,"runtime_observations":runtime_observations,"processes":processes,"limitations":["CLI 版本不等于 Web/FPM 实例版本；报告不自动证明补丁或漏洞状态。","Java4Shell 核验只检查版本、VM、当前 CPU 与受限参数线索，不触发漏洞或确认可利用性。","仅检查当前主机可见进程与标准路径；容器、远端主机、自定义安装目录需另行核验。","此报告未签名，平台记录为开发者提交材料。"]}),
     )
