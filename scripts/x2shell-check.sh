@@ -1955,11 +1955,16 @@ nginx_config_evidence() {
 }
 
 nginx_plus_reference() {
-    local version=$1
+    local version=$1 cve=${2:-}
+    case $version in
+        37.0.8.1|37.3.0.1) printf meets_vendor_reference; return ;;
+        37.0.7.1|37.2.0.1)
+            if [[ $cve == CVE-2026-123633 ]]; then printf meets_vendor_reference; return; fi ;;
+    esac
     [[ $version =~ ^[0-9]+([.][0-9]+){0,3}(-p[0-9]+)?$ ]] || { printf unknown; return; }
     version=${version%%-p*}
     case $version in
-        34|35|36|37) printf potential; return ;;
+        34|34.*|35|35.*|36|36.*|37) printf potential; return ;;
         37.*)
             if { vge "$version" 37.0.0 && vle "$version" 37.0.7.1; } ||
                { vge "$version" 37.1.0 && vle "$version" 37.2.0.1; }; then
@@ -1970,14 +1975,12 @@ nginx_plus_reference() {
 }
 
 nginx2root_reference() {
-    local raw=$1 config=${2:-} flavor=${3:-nginx} plus=${4:-} cve minimum feature status missing evidence comma=
+    local raw=$1 config=${2:-} flavor=${3:-nginx} plus=${4:-} cve minimum feature status missing evidence upstream extra comma=
     printf '['
     while read -r cve minimum feature; do
         status=unknown
         if [[ $flavor == plus ]]; then
-            status=$(nginx_plus_reference "$plus")
-        elif [[ $flavor != nginx ]]; then
-            status=unknown
+            status=$(nginx_plus_reference "$plus" "$cve")
         elif { [[ $raw == 1.30.* ]] && vge "$raw" 1.30.7; } ||
            { [[ $raw == 1.31.* ]] && vge "$raw" 1.31.9; }; then
             status=meets_upstream_reference
@@ -1985,6 +1988,12 @@ nginx2root_reference() {
             if vlt "$raw" "$minimum"; then status=outside_upstream_range
             elif vle "$raw" 1.31.8; then status=potential
             fi
+        fi
+        extra=
+        if [[ $flavor != nginx && $flavor != plus ]]; then
+            upstream=$status
+            [[ $status == potential && ( $flavor == openresty || $flavor == tengine ) ]] || status=unknown
+            extra=",\"embedded_upstream_status\":\"$upstream\""
         fi
         case $feature in
             http2) missing=$(nginx_config_evidence "$config" http2_on) ;;
@@ -1995,8 +2004,8 @@ nginx2root_reference() {
         esac
         evidence=condition_not_observed
         [[ $missing != '[]' ]] || evidence=disk_hints_present
-        printf '%s{"cve":"%s","status":"%s","feature":"%s","config_evidence":"%s","missing_disk_hints":%s}' \
-            "$comma" "$cve" "$status" "$feature" "$evidence" "$missing"
+        printf '%s{"cve":"%s","status":"%s","feature":"%s","config_evidence":"%s","missing_disk_hints":%s%s}' \
+            "$comma" "$cve" "$status" "$feature" "$evidence" "$missing" "$extra"
         comma=,
     done <<'RULES'
 CVE-2026-123007 1.9.5 http2
@@ -2009,19 +2018,19 @@ RULES
 }
 
 nginx2root_binary_metadata() {
-    local file=$1 marks versions plus flavor=nginx module comma=
+    local file=$1 marks versions plus flavor=nginx module comma= product=
     local hints=''
     [[ -f "$file" && $(head -c 4 -- "$file" 2>/dev/null) == $'\x7fELF' ]] || return 0
     marks=$(head -c 16777216 -- "$file" 2>/dev/null |
-        LC_ALL=C grep -aEo 'nginx/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b|nginx-plus(-r[0-9]+([.][0-9]+){0,3}(-p[0-9]+)?)?|Tengine|openresty|--with-http_v[23]_module|--with-mail(=dynamic)?|ngx_http_v[23]_module|ngx_http_mirror_module|ngx_mail_proxy_module' |
-        LC_ALL=C sort -u)
+        LC_ALL=C grep -aiEo 'nginx/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b|nginx-plus(-r[0-9]+([.][0-9]+){0,3}(-p[0-9]+)?)?|(Tengine|openresty)(/[0-9]+([.][0-9]+){1,3}(-rc[0-9]+)?)?|--with-http_v[23]_module|--with-mail(=dynamic)?|ngx_http_v[23]_module|ngx_http_mirror_module|ngx_mail_proxy_module' |
+        LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sort -u)
     versions=$(sed -n 's|^nginx/||p' <<< "$marks")
     plus=$(sed -n 's|^nginx-plus-r||p' <<< "$marks")
     [[ $versions != *$'\n'* ]] || versions=
     [[ $plus != *$'\n'* ]] || plus=
     case $marks in
         *nginx-plus*) flavor=plus ;;
-        *Tengine*) flavor=tengine ;;
+        *tengine*) flavor=tengine ;;
         *openresty*) flavor=openresty ;;
     esac
     # These bounded string matches are positive hints. Dynamic modules may be absent from the executable.
@@ -2034,7 +2043,11 @@ nginx2root_binary_metadata() {
         hints+="$comma\"$module\""
         comma=,
     done
-    printf '%s|%s|%s|[%s]' "$versions" "$flavor" "$plus" "$hints"
+    if [[ $flavor == openresty || $flavor == tengine ]]; then
+        product=$(sed -n "s|^$flavor/||p" <<< "$marks")
+        [[ $product != *$'\n'* ]] || product=
+    fi
+    printf '%s|%s|%s|[%s]|%s' "$versions" "$flavor" "$plus" "$hints" "$product"
 }
 
 nginx2root_config() {
@@ -2404,7 +2417,7 @@ web_package_hint() {
 nginx2root_scan() {
     local format=txt explicit="" installed path proc pid id current raw matched
     local seen=' ' rows=0 comma= gate=0 unknown=0 total=0 config_report sctp_report package_hint
-    local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root metadata flavor plus module_hints
+    local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root metadata flavor plus module_hints product_version
     local index package_count=0 condition_not_observed=0 potential_missing=0 unknown_missing=0
     local -a package_ids=() package_values=()
     local -a config_paths=()
@@ -2432,7 +2445,7 @@ nginx2root_scan() {
     config_report=$(nginx2root_config ${config_paths[@]+"${config_paths[@]}"})
     sctp_report=$(nginx2root_sctp)
     if [ "$format" = json ]; then
-        printf '{"status":"collected","source":"local_binary_inventory","patch_verified":false,"exploitability_confirmed":false,"sctp":%s,"configuration":%s,"sources":["https://nginx.org/en/security_advisories.html","https://cert.europa.eu/publications/security-advisories/2026-022/"],"findings":[' "$sctp_report" "$config_report"
+        printf '{"status":"collected","source":"local_binary_inventory","patch_verified":false,"exploitability_confirmed":false,"sctp":%s,"configuration":%s,"sources":["https://nginx.org/en/security_advisories.html","https://cert.europa.eu/publications/security-advisories/2026-022/","https://openresty.org/en/ann-1031008001.html","https://github.com/alibaba/tengine/blob/3.2.0-rc5/src/core/nginx.h","https://docs.nginx.com/nginx-ingress-controller/releases/","https://docs.nginx.com/nginx/releases/"],"findings":[' "$sctp_report" "$config_report"
     else
         printf 'NGINX 上游版本参考\n磁盘配置线索: %s\n内核 SCTP 线索: %s\n' "$config_report" "$sctp_report"
     fi
@@ -2440,6 +2453,13 @@ nginx2root_scan() {
     nginx2root_row() {
         local kind=$1 pid=$2 path=$3 raw=$4 matched=$5 package_hint=${6:-null} image_state=$7
         local references missing_count plus_unresolved=false
+        # Only use published core mappings for exact derivative release identifiers.
+        if [ -z "$raw" ]; then
+            case $flavor:$product_version in
+                openresty:1.31.8.1) raw=1.31.8 ;;
+                tengine:3.2.0-rc5) raw=1.31.5 ;;
+            esac
+        fi
         references=$(nginx2root_reference "$raw" "$config_report" "$flavor" "$plus")
         [[ $flavor != plus || -n $plus ]] || plus_unresolved=true
         local missing_potential missing_unknown
@@ -2460,12 +2480,12 @@ nginx2root_scan() {
         case $references in *'"status":"unknown"'*) unknown=1 ;; esac
         total=$((total + 1))
         if [ "$format" = json ]; then
-            printf '%s{"kind":"%s","pid":%s,"path":%s,"version":%s,"disk_identity_matched":%s,"disk_identity_status":"%s","flavor":"%s","plus_release":%s,"plus_release_unresolved":%s,"cves":' \
-                "$comma" "$kind" "$(jstr "$pid")" "$(jstr "$(san_field "$path")")" "$(jstr "$raw")" "$matched" "$image_state" "$flavor" "$(jstr "$plus")" "$plus_unresolved"
+            printf '%s{"kind":"%s","pid":%s,"path":%s,"version":%s,"disk_identity_matched":%s,"disk_identity_status":"%s","flavor":"%s","plus_release":%s,"plus_release_unresolved":%s,"product_version":%s,"embedded_nginx_version":%s,"patch_status":"unverified","cves":' \
+                "$comma" "$kind" "$(jstr "$pid")" "$(jstr "$(san_field "$path")")" "$(jstr "$raw")" "$matched" "$image_state" "$flavor" "$(jstr "$plus")" "$plus_unresolved" "$(jstr "$product_version")" "$(jstr "$raw")"
             printf '%s,"package_evidence":%s,"binary_module_hints":%s}' "$references" "$package_hint" "${module_hints:-null}"
             comma=,
         else
-            printf '%s %s %q · NGINX %s · 磁盘身份 %s\n' "$kind" "$pid" "$path" "${raw:-未知}" "$image_state"
+            printf '%s %s %q · %s %s · NGINX 内核 %s · 磁盘身份 %s\n' "$kind" "$pid" "$path" "${flavor:-未知}" "${product_version:-}" "${raw:-未知}" "$image_state"
             if [[ $flavor == plus ]]; then printf 'NGINX Plus 发行标识 · %s\n' "${plus:-未解析}"; fi
             printf '%s\n' "$references"
             if [[ -n $module_hints && $module_hints != '[]' ]]; then printf '二进制模块线索 · %s\n' "$module_hints"; fi
@@ -2478,19 +2498,19 @@ nginx2root_scan() {
     for proc in /proc/[0-9]*; do
         [ -r "$proc/comm" ] || continue
         IFS= read -r current < "$proc/comm" 2>/dev/null || continue
-        [ "$current" = nginx ] || continue
+        case $current in nginx|openresty|tengine) ;; *) continue ;; esac
         ((rows < 24)) || { proc_limit=true; break; }
         pid=${proc##*/}
         start=$(java_process_start "$pid")
         path=$(readlink "$proc/exe" 2>/dev/null || :)
         id=$(file_id "$proc/exe" || :)
         metadata=$(nginx2root_binary_metadata "$proc/exe")
-        IFS='|' read -r raw flavor plus module_hints <<< "$metadata"
+        IFS='|' read -r raw flavor plus module_hints product_version <<< "$metadata"
         image_state=$(web_disk_identity "$proc" "$path" "$id")
         process_ns=$(readlink "$proc/ns/mnt" 2>/dev/null || :)
         if [[ -z $id || -z $start || $(file_id "$proc/exe") != "$id" ||
               $(java_process_start "$pid") != "$start" ]]; then
-            raw= flavor= plus= module_hints=
+            raw= flavor= plus= module_hints= product_version=
             image_state=unverified
         elif [[ $image_state == matched ]]; then
             seen+="$id "
@@ -2514,12 +2534,13 @@ nginx2root_scan() {
         rows=$((rows + 1))
     done
     installed=$(type -P nginx || :)
-    for path in "$explicit" "$installed" /usr/sbin/nginx /usr/local/nginx/sbin/nginx; do
+    for path in "$explicit" "$installed" "$(type -P openresty || :)" "$(type -P tengine || :)" \
+                /usr/sbin/nginx /usr/local/nginx/sbin/nginx /usr/local/openresty/nginx/sbin/nginx /usr/local/tengine/sbin/nginx; do
         [ -n "$path" ] && [ -f "$path" ] || continue
         id=$(file_id "$path") || continue
         [[ $seen != *" $id "* ]] || continue
         metadata=$(nginx2root_binary_metadata "$path")
-        IFS='|' read -r raw flavor plus module_hints <<< "$metadata"
+        IFS='|' read -r raw flavor plus module_hints product_version <<< "$metadata"
         seen+="$id "
         package_hint=$(web_package_hint "$path")
         nginx2root_row installation "" "$path" "$raw" null "${package_hint:-null}" not_applicable

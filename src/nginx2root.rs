@@ -16,7 +16,7 @@ const RULES: [(&str, [u32; 3], &str); 5] = [
 ];
 #[cfg(target_os = "linux")]
 static VERSION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"nginx/([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5})\b").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)nginx/([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5})\b").unwrap());
 
 fn version(raw: &str) -> Option<[u32; 3]> {
     let mut pieces = raw.split('.');
@@ -49,28 +49,173 @@ fn reference(raw: Option<&str>) -> Vec<Value> {
         .collect()
 }
 
+const OPENRESTY: &str = "https://openresty.org/en/ann-1031008001.html";
+const TENGINE: &str = "https://github.com/alibaba/tengine/blob/3.2.0-rc5/src/core/nginx.h";
+const INGRESS: &str = "https://docs.nginx.com/nginx-ingress-controller/releases/";
+const PLUS_RELEASES: &str = "https://docs.nginx.com/nginx/releases/";
+const SOURCES: [&str; 6] = [ADVISORY, CERT, OPENRESTY, TENGINE, INGRESS, PLUS_RELEASES];
+
+fn plus_version(value: &str) -> Option<[u32; 4]> {
+    let core = match value.split_once("-p") {
+        Some((core, patch)) if !patch.is_empty() && patch.bytes().all(|c| c.is_ascii_digit()) => {
+            core
+        }
+        Some(_) => return None,
+        None => value,
+    };
+    let mut result = [0; 4];
+    for (index, component) in core.split('.').enumerate() {
+        if component.is_empty() || !component.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        *result.get_mut(index)? = component.parse().ok()?;
+    }
+    Some(result)
+}
+
+fn valid_product_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 40
+        && value.starts_with(|c: char| c.is_ascii_digit())
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-'))
+}
+
+#[derive(Default, Clone)]
+struct Product {
+    flavor: Option<&'static str>,
+    version: Option<String>,
+    core: Option<String>,
+    plus: Option<String>,
+}
+
+impl Product {
+    fn report(&self) -> Value {
+        let flavor = self.flavor.unwrap_or("unknown");
+        let core = self
+            .core
+            .as_deref()
+            .or_else(|| match (flavor, self.version.as_deref()) {
+                ("openresty", Some("1.31.8.1")) => Some("1.31.8"),
+                ("tengine", Some("3.2.0-rc5")) => Some("1.31.5"),
+                _ => None,
+            });
+        let mut cves = reference(core);
+        for row in &mut cves {
+            if flavor == "plus" {
+                let affected = self
+                    .plus
+                    .as_deref()
+                    .and_then(plus_version)
+                    .is_some_and(|v| {
+                        matches!(v[0], 34..=36)
+                            || ([37, 0, 0, 0]..=[37, 0, 7, 1]).contains(&v)
+                            || ([37, 1, 0, 0]..=[37, 2, 0, 1]).contains(&v)
+                    });
+                let release = self.plus.as_deref();
+                let vendor_reference = matches!(release, Some("37.0.8.1" | "37.3.0.1"))
+                    || (row["cve"] == "CVE-2026-123633"
+                        && matches!(release, Some("37.0.7.1" | "37.2.0.1")));
+                row["status"] = json!(if vendor_reference {
+                    "meets_vendor_reference"
+                } else if affected {
+                    "potential"
+                } else {
+                    "unknown"
+                });
+            } else if flavor != "nginx" {
+                row["embedded_upstream_status"] = row["status"].clone();
+                if row["status"] != "potential" || flavor == "unknown" {
+                    row["status"] = json!("unknown");
+                }
+            }
+        }
+        json!({"flavor":flavor,"product_version":self.version,"embedded_nginx_version":core,
+            "version":if flavor=="nginx" {core} else {self.version.as_deref()},
+            "plus_release":self.plus,"plus_release_unresolved":flavor=="plus" && self.plus.is_none(),
+            "patch_status":"unverified","cves":cves})
+    }
+
+    fn from_report(row: &Value) -> Self {
+        let flavor = match row["flavor"].as_str() {
+            Some("nginx") | None => Some("nginx"),
+            Some("plus") => Some("plus"),
+            Some("openresty") => Some("openresty"),
+            Some("tengine") => Some("tengine"),
+            _ => None,
+        };
+        let core = row["embedded_nginx_version"]
+            .as_str()
+            .or_else(|| {
+                (flavor == Some("nginx"))
+                    .then(|| row["version"].as_str())
+                    .flatten()
+            })
+            .filter(|v| v.len() <= 20 && version(v).is_some())
+            .map(str::to_owned);
+        Self {
+            flavor,
+            core,
+            version: row["product_version"]
+                .as_str()
+                .filter(|v| valid_product_version(v))
+                .map(str::to_owned),
+            plus: row["plus_release"]
+                .as_str()
+                .filter(|v| v.len() <= 40 && plus_version(v).is_some())
+                .map(str::to_owned),
+        }
+    }
+}
+
+fn banner_product(banner: &str) -> Option<Product> {
+    let (name, raw) = banner.split_once('/').unwrap_or((banner, ""));
+    let flavor = match name.to_ascii_lowercase().as_str() {
+        "nginx" => "nginx",
+        "nginx-plus" => "plus",
+        "openresty" => "openresty",
+        "tengine" => "tengine",
+        _ if banner.starts_with("nginx-plus-r") => "plus",
+        _ => return None,
+    };
+    let raw = raw.split_ascii_whitespace().next().unwrap_or_default();
+    let plus = banner
+        .strip_prefix("nginx-plus-r")
+        .unwrap_or(raw.trim_start_matches(['R', 'r']));
+    Some(Product {
+        flavor: Some(flavor),
+        core: (flavor == "nginx" && version(raw).is_some()).then(|| raw.to_owned()),
+        version: (flavor != "nginx" && flavor != "plus" && valid_product_version(raw))
+            .then(|| raw.to_owned()),
+        plus: (flavor == "plus" && plus.len() <= 40 && plus_version(plus).is_some())
+            .then(|| plus.to_owned()),
+    })
+}
+
 pub(crate) fn remote(headers: &[(String, String)], blocked: bool) -> Value {
     let servers: Vec<_> = headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("server"))
         .map(|(_, value)| value.trim())
         .collect();
-    let banners: std::collections::BTreeSet<_> = servers
-        .iter()
-        .copied()
-        .filter(|v| v.eq_ignore_ascii_case("nginx") || v.starts_with("nginx/"))
-        .collect();
-    let raw = (banners.len() == 1 && servers.len() == 1 && !blocked)
-        .then(|| {
-            banners
-                .first()
-                .and_then(|b| b.trim().strip_prefix("nginx/"))
-                .filter(|v| version(v).is_some())
-        })
-        .flatten();
-    json!({"status":if banners.is_empty() {"not_observed"} else {"nginx_hint"},
-        "source":"passive_server_header","version":raw,"cves":reference(raw),
-        "patch_verified":false,"exploitability_confirmed":false,"sources":[ADVISORY,CERT]})
+    let observed = servers.iter().any(|value| banner_product(value).is_some());
+    let product = if servers.len() == 1 && !blocked {
+        banner_product(servers[0]).unwrap_or_default()
+    } else {
+        Product::default()
+    };
+    let mut report = product.report();
+    report["status"] = json!(if observed {
+        "nginx_hint"
+    } else {
+        "not_observed"
+    });
+    report["source"] = json!("passive_server_header");
+    report["patch_verified"] = json!(false);
+    report["exploitability_confirmed"] = json!(false);
+    report["sources"] = json!(SOURCES);
+    report
 }
 
 const CONFIG_HINTS: [&str; 12] = [
@@ -221,34 +366,77 @@ fn sctp_block_hint() -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn binary_evidence(path: &std::path::Path) -> Option<(std::fs::Metadata, Option<String>)> {
+fn binary_evidence(path: &std::path::Path) -> Option<(std::fs::Metadata, Product)> {
     use std::io::Read;
     if !std::fs::metadata(path).ok()?.is_file() {
         return None;
     }
     let file = std::fs::File::open(path).ok()?;
     let meta = file.metadata().ok()?;
-    if !meta.is_file() || meta.len() > 16 * 1024 * 1024 {
+    if !meta.is_file() {
         return None;
     }
     let mut data = Vec::new();
     file.take(16 * 1024 * 1024).read_to_end(&mut data).ok()?;
-    let raw = if data.starts_with(b"\x7fELF")
-        && ![b"nginx-plus".as_slice(), b"Tengine", b"openresty"]
-            .iter()
-            .any(|token| data.windows(token.len()).any(|window| window == *token))
-    {
-        let mut versions = VERSION
-            .captures_iter(&data)
-            .filter_map(|capture| std::str::from_utf8(capture.get(1)?.as_bytes()).ok());
-        versions
-            .next()
-            .filter(|first| versions.all(|v| v == *first))
-            .map(str::to_owned)
-    } else {
-        None
+    if !data.starts_with(b"\x7fELF") {
+        return Some((meta, Product::default()));
+    }
+    let marker = |token: &[u8]| {
+        data.windows(token.len())
+            .any(|window| window.eq_ignore_ascii_case(token))
     };
-    Some((meta, raw))
+    static PRODUCT_VERSION: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)(openresty|tengine)/([0-9]+(?:\.[0-9]+){1,3}(?:-rc[0-9]+)?)\b").unwrap()
+    });
+    static PLUS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)nginx-plus-r([0-9]+(?:\.[0-9]+){0,3}(?:-p[0-9]+)?)\b").unwrap()
+    });
+    let unique = |values: &mut dyn Iterator<Item = &str>| {
+        let first = values.next()?;
+        for value in values {
+            if value != first {
+                return None;
+            }
+        }
+        Some(first.to_owned())
+    };
+    let flavor = if marker(b"nginx-plus") {
+        "plus"
+    } else if marker(b"Tengine") {
+        "tengine"
+    } else if marker(b"openresty") {
+        "openresty"
+    } else {
+        "nginx"
+    };
+    let core = unique(
+        &mut VERSION
+            .captures_iter(&data)
+            .filter_map(|c| std::str::from_utf8(c.get(1)?.as_bytes()).ok()),
+    );
+    let version = unique(&mut PRODUCT_VERSION.captures_iter(&data).filter_map(|c| {
+        c.get(1)?
+            .as_bytes()
+            .eq_ignore_ascii_case(flavor.as_bytes())
+            .then_some(())?;
+        std::str::from_utf8(c.get(2)?.as_bytes())
+            .ok()
+            .filter(|v| valid_product_version(v))
+    }));
+    let plus = unique(&mut PLUS.captures_iter(&data).filter_map(|c| {
+        std::str::from_utf8(c.get(1)?.as_bytes())
+            .ok()
+            .filter(|v| v.len() <= 40 && plus_version(v).is_some())
+    }));
+    Some((
+        meta,
+        Product {
+            flavor: Some(flavor),
+            version,
+            core,
+            plus,
+        },
+    ))
 }
 
 pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Value {
@@ -265,16 +453,24 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
         };
         let mut paths = BTreeSet::new();
         paths.extend(explicit.map(std::path::Path::to_path_buf));
-        if let Some(path) = crate::collector::which("nginx") {
-            paths.insert(path);
-        }
         paths.extend(
-            ["/usr/sbin/nginx", "/usr/local/nginx/sbin/nginx"]
+            ["nginx", "openresty", "tengine"]
                 .into_iter()
-                .map(std::path::PathBuf::from),
+                .filter_map(crate::collector::which),
+        );
+        paths.extend(
+            [
+                "/usr/sbin/nginx",
+                "/usr/local/nginx/sbin/nginx",
+                "/usr/local/openresty/nginx/sbin/nginx",
+                "/usr/local/tengine/sbin/nginx",
+            ]
+            .into_iter()
+            .map(std::path::PathBuf::from),
         );
         let mut running = Vec::new();
         let mut cache = BTreeMap::new();
+        let mut matched_images = BTreeSet::new();
         let mut truncated = false;
         let proc = fs::read_dir("/proc");
         let proc_available = proc.is_ok();
@@ -289,7 +485,7 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
                 continue;
             }
             let name = fs::read_to_string(dir.join("comm")).unwrap_or_default();
-            if name.trim() != "nginx" {
+            if !matches!(name.trim(), "nginx" | "openresty" | "tengine") {
                 continue;
             }
             if running.len() == 24 {
@@ -305,7 +501,7 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
                     .entry(key)
                     .or_insert_with(|| {
                         let (m, v) = binary_evidence(&exe)?;
-                        (key == (m.dev(), m.ino())).then_some(v).flatten()
+                        (key == (m.dev(), m.ino())).then_some(v)
                     })
                     .clone()
             });
@@ -313,7 +509,7 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
                 && fs::metadata(&exe)
                     .ok()
                     .is_some_and(|m| id == Some((m.dev(), m.ino())));
-            let version = version.filter(|_| stable);
+            let product = version.filter(|_| stable).unwrap_or_default();
             let disk_match = stable
                 && path.as_ref().is_some_and(|p| {
                     p.strip_prefix("/")
@@ -321,6 +517,9 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
                         .and_then(|p| fs::metadata(dir.join("root").join(p)).ok())
                         .is_some_and(|m| id == Some((m.dev(), m.ino())))
                 });
+            if let Some(id) = id.filter(|_| disk_match) {
+                matched_images.insert(id);
+            }
             let host_package_eligible = disk_match
                 && fs::read_link(dir.join("ns/mnt"))
                     .ok()
@@ -330,19 +529,26 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
                     .as_ref()
                     .and_then(|p| fs::metadata(p).ok())
                     .is_some_and(|m| id == Some((m.dev(), m.ino())));
-            running.push(
-                json!({"pid":entry.file_name().to_string_lossy(),"path":path,"version":version,
-                "disk_identity_matched":disk_match,"host_package_eligible":host_package_eligible,"cves":reference(version.as_deref())}),
-            );
+            let mut row = product.report();
+            row["pid"] = json!(entry.file_name().to_string_lossy());
+            row["path"] = json!(path);
+            row["disk_identity_matched"] = json!(disk_match);
+            row["host_package_eligible"] = json!(host_package_eligible);
+            running.push(row);
         }
         let installations: Vec<_> = paths
             .iter()
             .filter_map(|path| {
-                let (meta, version) = binary_evidence(path)?;
-                if cache.contains_key(&(meta.dev(), meta.ino())) && version.is_some() {
+                let (meta, product) = binary_evidence(path)?;
+                if cache
+                    .get(&(meta.dev(), meta.ino()))
+                    .is_some_and(Option::is_some)
+                {
                     return None;
                 }
-                Some(json!({"path":path,"version":version,"cves":reference(version.as_deref())}))
+                let mut row = product.report();
+                row["path"] = json!(path);
+                Some(row)
             })
             .collect();
         let kernel_release = fs::read_to_string("/proc/sys/kernel/osrelease")
@@ -351,7 +557,7 @@ pub(crate) fn collect(enabled: bool, explicit: Option<&std::path::Path>) -> Valu
         json!({"status":"collected","source":"local_binary_inventory","running_processes":running,
             "installations":installations,"configuration":local_config(),"coverage":{"proc_available":proc_available,"truncated":truncated},
             "sctp":{"kernel_release":kernel_release,"module_visible":Path::new("/sys/module/sctp").exists(),"modprobe_install_block_hint":sctp_block_hint(),"patch_status":"unknown"},
-            "patch_verified":false,"exploitability_confirmed":false,"sources":[ADVISORY,CERT]})
+            "patch_verified":false,"exploitability_confirmed":false,"sources":SOURCES})
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -400,14 +606,17 @@ pub(crate) fn sanitize_host(raw: &Value) -> Value {
     }
     let rows = |key: &str| -> Vec<Value> {
         raw[key].as_array().into_iter().flatten().filter(|item| item.is_object()).take(24).map(|item| {
-            let version = item["version"].as_str().filter(|v| version(v).is_some() && v.len() <= 20);
-            json!({"version":version,"pid":item["pid"].as_str().filter(|p| p.len() <= 20 && p.bytes().all(|c| c.is_ascii_digit())),
-                "path":item["path"].as_str().map(|p| p.chars().take(400).collect::<String>()),
-                "disk_identity_matched":item["disk_identity_matched"].as_bool(),"cves":reference(version),
-                "package_evidence":{"manager":item["package_evidence"]["manager"].as_str().filter(|v| matches!(*v,"dpkg"|"rpm")),
-                    "name":item["package_evidence"]["name"].as_str().map(|v|v.chars().take(100).collect::<String>()),
-                    "version":item["package_evidence"]["version"].as_str().map(|v|v.chars().take(150).collect::<String>()),
-                    "patch_status":"unverified"}})
+            let mut row = Product::from_report(item).report();
+            row["pid"] = json!(item["pid"].as_str().filter(|p| p.len() <= 20 && p.bytes().all(|c| c.is_ascii_digit())));
+            row["path"] = json!(item["path"].as_str().map(|p| p.chars().take(400).collect::<String>()));
+            row["disk_identity_matched"] = json!(item["disk_identity_matched"].as_bool());
+            row["package_evidence"] = json!({
+                "manager":item["package_evidence"]["manager"].as_str().filter(|v| matches!(*v,"dpkg"|"rpm")),
+                "name":item["package_evidence"]["name"].as_str().map(|v|v.chars().take(100).collect::<String>()),
+                "version":item["package_evidence"]["version"].as_str().map(|v|v.chars().take(150).collect::<String>()),
+                "patch_status":"unverified"
+            });
+            row
         }).collect()
     };
     let mut configuration = json!({"scope":"disk_directive_hints",
@@ -420,7 +629,7 @@ pub(crate) fn sanitize_host(raw: &Value) -> Value {
         "coverage":{"proc_available":raw["coverage"]["proc_available"].as_bool(),"truncated":raw["coverage"]["truncated"].as_bool()},
         "sctp":{"kernel_release":raw["sctp"]["kernel_release"].as_str().map(|v| v.chars().take(128).collect::<String>()),
             "module_visible":raw["sctp"]["module_visible"].as_bool(),"modprobe_install_block_hint":raw["sctp"]["modprobe_install_block_hint"].as_bool(),"patch_status":"unknown"},
-        "patch_verified":false,"exploitability_confirmed":false,"sources":[ADVISORY,CERT]})
+        "patch_verified":false,"exploitability_confirmed":false,"sources":SOURCES})
 }
 
 #[cfg(test)]
@@ -440,6 +649,59 @@ mod tests {
         assert_eq!(evidence["mail_proxy"], true);
         assert_eq!(evidence["auth_http"], true);
         assert_eq!(evidence["files_examined"], 1);
+    }
+
+    #[test]
+    fn derivatives_keep_product_and_core_evidence_separate() {
+        let headers = [("Server".into(), "openresty/1.31.8.1".into())];
+        let observed = remote(&headers, false);
+        assert_eq!(observed["flavor"], "openresty");
+        assert_eq!(observed["product_version"], "1.31.8.1");
+        assert_eq!(observed["embedded_nginx_version"], "1.31.8");
+        assert_eq!(observed["cves"][0]["status"], "potential");
+        assert!(remote(&headers, true)["product_version"].is_null());
+
+        let report = sanitize_host(&json!({"running_processes":[
+            {"flavor":"tengine","product_version":"3.2.0","embedded_nginx_version":"1.31.5"},
+            {"flavor":"openresty","product_version":"1.31.8.1","embedded_nginx_version":"1.31.9"},
+            {"flavor":"plus","plus_release":"37-p1"},
+            {"flavor":"plus","plus_release":"37.2.0.2"},
+            {"flavor":"plus","plus_release":"37.2.0.1"},
+            {"flavor":"plus","plus_release":"37.3.0.1"}
+        ]}));
+        let rows = report["running_processes"].as_array().unwrap();
+        assert_eq!(rows[0]["cves"][0]["status"], "potential");
+        assert_eq!(rows[1]["cves"][0]["status"], "unknown");
+        assert_eq!(
+            rows[1]["cves"][0]["embedded_upstream_status"],
+            "meets_upstream_reference"
+        );
+        assert_eq!(rows[2]["cves"][0]["status"], "potential");
+        assert_eq!(rows[3]["cves"][0]["status"], "unknown");
+        assert_eq!(rows[4]["cves"][0]["status"], "potential");
+        assert_eq!(rows[4]["cves"][1]["status"], "meets_vendor_reference");
+        assert!(
+            rows[5]["cves"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|c| c["status"] == "meets_vendor_reference")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn derivative_elf_is_read_without_execution() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nginx");
+        std::fs::write(&path, b"\x7fELF nginx/1.31.5 Tengine/3.2.0").unwrap();
+        let (_, evidence) = binary_evidence(&path).unwrap();
+        assert_eq!(evidence.report()["flavor"], "tengine");
+        assert_eq!(evidence.report()["embedded_nginx_version"], "1.31.5");
+        std::fs::write(&path, b"\x7fELF nginx/1.27.4 nginx-plus-r37-p1").unwrap();
+        let (_, evidence) = binary_evidence(&path).unwrap();
+        assert_eq!(evidence.report()["plus_release"], "37-p1");
+        assert_eq!(evidence.report()["cves"][0]["status"], "potential");
     }
 
     #[test]

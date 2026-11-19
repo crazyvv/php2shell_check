@@ -89,11 +89,14 @@ function nginx2rootView(n) {
   if(!n?.status || ['disabled','not_observed'].includes(n.status))return wrap;
   const box=node('div',undefined,'runtime-comparison java4shell-evidence');
   box.append(node('strong','Nginx2Root · '+(n.status==='nginx_hint'?'HTTP 响应线索':'主机提交证据')));
-  const status={potential:'上游受影响范围',meets_upstream_reference:'达到上游版本基线',outside_upstream_range:'低于披露范围',unknown:'未知'};
+  const status={potential:'命中披露版本范围',meets_vendor_reference:'达到厂商修复版本参考',meets_upstream_reference:'达到上游版本基线',outside_upstream_range:'低于披露范围',unknown:'未知'};
   const rows=[...(n.running_processes || []),...(n.installations || [])];
   if(n.status==='nginx_hint')rows.push(n);
   for(const row of rows.slice(0,24)){
-    box.append(node('p',`${row.pid ? 'PID '+row.pid+' · ' : ''}${row.path || 'NGINX'} · ${row.version || '版本未知'}`,'fine'));
+    const product = {nginx:'NGINX',plus:'NGINX Plus',openresty:'OpenResty',tengine:'Tengine'}[row.flavor] || 'NGINX 系';
+    const release = row.plus_release || row.product_version || row.version || '版本未知';
+    const core = row.embedded_nginx_version && row.embedded_nginx_version !== release ? ' · 内嵌 NGINX '+row.embedded_nginx_version : '';
+    box.append(node('p',`${row.pid ? 'PID '+row.pid+' · ' : ''}${product} ${release}${core}${row.path ? ' · '+row.path : ''}`,'fine'));
     if(row.package_evidence?.version)box.append(node('p',`软件包 ${row.package_evidence.name || ''} ${row.package_evidence.version} · 回补待核验`,'fine'));
     for(const cve of (row.cves || []).slice(0,5))
       box.append(node('p',`${cve.cve} · ${status[cve.status] || '未知'}`,'fine'));

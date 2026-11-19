@@ -47,6 +47,9 @@
       </tbody>
     </table></div>
     <p>官方列出的修复分支为 1.30.7+ 和 1.31.9+。表中范围采用公告写法，修复分支优先核对。现场应按正在运行的 NGINX 映像和软件包完整修订号核对回补，并把磁盘配置关联到实际加载的站点或监听。SCTP 属于独立的内核核验项，可见性或禁载线索无法确认内核已修复。</p>
+    <h3>衍生版本与 Ingress</h3>
+    <p>NGINX Plus 按 CERT-EU 披露的发行范围检查。F5 发布说明列出 37.0.7.1 LTS 和 37.2.0.1 CR 对 CVE-2026-123633 的修复，后续 37.0.8.1 LTS 和 37.3.0.1 CR 补齐另外四项。<a href="https://docs.nginx.com/nginx/releases/">F5 Plus 发布说明</a>。OpenResty 1.31.8.1 基于 NGINX 1.31.8，Tengine 3.2.0-rc5 的源码标注内核为 1.31.5。两者命中上游范围时需要核对厂商回补与实际组件。<a href="https://openresty.org/en/ann-1031008001.html">OpenResty 公告</a> · <a href="https://github.com/alibaba/tengine/blob/3.2.0-rc5/src/core/nginx.h">Tengine 标签源码</a></p>
+    <p>F5 NGINX Ingress Controller 5.7.1 使用 NGINX 1.31.8 或 Plus R37.2.0.1。5.8.0 的内核更新到 1.31.9 或 R37.3.0.1。集群巡检应按运行镜像中的实际版本复核。社区 ingress-nginx 已停止维护，仍在运行的实例应核对镜像内核并安排迁移。<a href="https://docs.nginx.com/nginx-ingress-controller/releases/">F5 版本矩阵</a> · <a href="https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/">Kubernetes 退役公告</a></p>
     <p class="fine"><a href="https://nginx.org/en/security_advisories.html">NGINX 官方安全公告</a> · <a href="https://cert.europa.eu/publications/security-advisories/2026-022/">CERT-EU 公告</a></p>
   </section>
 

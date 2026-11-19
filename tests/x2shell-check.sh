@@ -261,15 +261,24 @@ NGINX
     [[ $(web_disk_identity /proc/self '/tmp/sample (deleted)' '0 1 2') == deleted ]]
     [[ $(web_disk_identity /proc/self "$fixture/missing" '0 1 2') == unverified ]]
     printf '\177ELF nginx/1.27.4 nginx-plus-r37.0.7.1 --with-http_v2_module ngx_http_v3_module' > "$fixture/nginx-elf"
-    [[ $(nginx2root_binary_metadata "$fixture/nginx-elf") == '1.27.4|plus|37.0.7.1|["http_v2","http_v3"]' ]]
+    [[ $(nginx2root_binary_metadata "$fixture/nginx-elf") == '1.27.4|plus|37.0.7.1|["http_v2","http_v3"]|' ]]
     printf '\177ELF nginx/1.27.4 nginx/1.27.5 openresty' > "$fixture/nginx-elf"
-    [[ $(nginx2root_binary_metadata "$fixture/nginx-elf") == '|openresty||[]' ]]
+    [[ $(nginx2root_binary_metadata "$fixture/nginx-elf") == '|openresty||[]|' ]]
     for plus_release in 36-p1 37-p1 37 37.0.7.1-p2 37.2.0.1; do
         [[ $(nginx_plus_reference "$plus_release") == potential ]]
     done
     [[ $(nginx_plus_reference 37.2.0.2-p1) == unknown ]]
     [[ $(nginx_plus_reference 37-pbad) == unknown ]]
     [[ $(nginx_plus_reference 37.2.0.2) == unknown ]]
+    [[ $(nginx_plus_reference 37.2.0.1 CVE-2026-123633) == meets_vendor_reference ]]
+    [[ $(nginx_plus_reference 37.2.0.1 CVE-2026-123007) == potential ]]
+    [[ $(nginx_plus_reference 37.0.8.1 CVE-2026-123007) == meets_vendor_reference ]]
+    printf '\177ELF nginx/1.31.5 Tengine/3.2.0' > "$fixture/nginx-elf"
+    [[ $(nginx2root_binary_metadata "$fixture/nginx-elf") == '1.31.5|tengine||[]|3.2.0' ]]
+    refs=$(nginx2root_reference 1.31.5 '' tengine)
+    [[ $refs == *'"status":"potential"'*'"embedded_upstream_status":"potential"'* ]]
+    refs=$(nginx2root_reference 1.31.9 '' openresty)
+    [[ $refs == *'"status":"unknown"'*'"embedded_upstream_status":"meets_upstream_reference"'* ]]
     refs=$(nginx2root_reference 1.25.0 '{"http2_on":true}')
     [[ $refs == *'"feature":"http2","config_evidence":"disk_hints_present","missing_disk_hints":[]'* ]]
     [[ $refs == *'"feature":"http2_upstream","config_evidence":"condition_not_observed","missing_disk_hints":["upstream"]'* ]]
