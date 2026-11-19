@@ -190,8 +190,10 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
     }
     let middleware = crate::middleware::collect(options).await;
     let package_audit = crate::hostaudit::collect(options.package_audit).await;
-    let java_scoped =
-        options.java_processes_only || options.java_no_processes || !options.java_pid.is_empty();
+    let java_scoped = options.java_processes_only
+        || options.java_no_processes
+        || !options.java_pid.is_empty()
+        || !options.java_jdk.is_empty();
     let java4shell = if java_scoped {
         json!({"status":"collected","checks":{},"scope":"runtime_audit"})
     } else {
@@ -215,6 +217,11 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
     } else {
         java4shell
     };
+    let mut java4shell = java4shell;
+    if let Some(path) = &options.java_apps {
+        java4shell["applications"] =
+            crate::java4shell::application_inventory(path, options.java_apps_depth.unwrap_or(3));
+    }
     let mut nginx2root = crate::nginx2root::collect(
         options.nginx2root || options.middleware,
         options.nginx_path.as_deref(),
@@ -279,6 +286,7 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
                 .any(|r| matches!(r["status"].as_str(), Some("affected" | "potential"))),
             java_rows.is_empty()
                 || java_rows.iter().any(|r| r["status"] == "unknown")
+                || java4shell["applications"]["coverage_incomplete"] == true
                 || java4shell["runtime_audit"]["coverage"]["proc_available"] == false
                 || java4shell["runtime_audit"]["coverage"]["process_limit_reached"] == true
                 || java4shell["runtime_audit"]["coverage"]["disk_budget_exhausted"] == true
@@ -366,6 +374,7 @@ fn bounded_report(mut report: Value) -> Value {
         "/apache2root/module_installations",
         "/nginx2root/installations",
         "/nginx2root/running_processes",
+        "/java4shell/applications/findings",
         "/java4shell/runtimes",
         "/java4shell/running_processes",
     ] {
@@ -424,7 +433,12 @@ pub struct CollectOptions {
     pub php_binary: Option<PathBuf>,
     pub java_command: bool,
     pub java_attach: bool,
+    pub java_apps: Option<PathBuf>,
+    pub java_apps_depth: Option<usize>,
+    pub java_cpuinfo: Option<PathBuf>,
+    pub java_assume_flags_effective: bool,
     pub java_root: Vec<PathBuf>,
+    pub java_jdk: Vec<PathBuf>,
     pub java_root_depth: Option<usize>,
     pub java_pid: Vec<u32>,
     pub java_processes_only: bool,
@@ -453,7 +467,12 @@ impl Default for CollectOptions {
             php_binary: None,
             java_command: false,
             java_attach: false,
+            java_apps: None,
+            java_apps_depth: None,
+            java_cpuinfo: None,
+            java_assume_flags_effective: false,
             java_root: vec![],
+            java_jdk: vec![],
             java_root_depth: None,
             java_pid: vec![],
             java_processes_only: false,
@@ -479,6 +498,37 @@ impl Default for CollectOptions {
 impl CollectOptions {
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
+            self.java_cpuinfo.is_none() || self.java_no_processes,
+            "--java-cpuinfo 需要 --java-no-processes，以免将离线 CPU 证据用于运行进程"
+        );
+        anyhow::ensure!(
+            !self.java_no_processes || !self.java_assume_flags_effective,
+            "--java-assume-flags-effective 需要进程采集"
+        );
+        anyhow::ensure!(
+            self.java_apps_depth.is_none() || self.java_apps.is_some(),
+            "--java-apps-depth 需要 --java-apps"
+        );
+        anyhow::ensure!(
+            self.java_apps_depth.unwrap_or(3) <= 16,
+            "--java-apps-depth 必须在 0 至 16 之间"
+        );
+        anyhow::ensure!(
+            self.java_command || (self.java_apps.is_none() && !self.java_assume_flags_effective),
+            "Java 应用或估算参数需要 --java-command 或 --all"
+        );
+        anyhow::ensure!(
+            self.nginx_config.is_empty() || self.nginx2root || self.middleware,
+            "--nginx-config 需要 --nginx2root、--middleware 或 --all"
+        );
+        anyhow::ensure!(
+            (self.apache_path.is_none() && self.apache_config.is_empty())
+                || self.apache2root
+                || self.middleware,
+            "Apache 路径选项需要 --apache2root、--middleware 或 --all"
+        );
+        anyhow::ensure!(!self.java_pid.contains(&0), "--java-pid 必须为正整数");
+        anyhow::ensure!(
             self.java_root_depth.unwrap_or(8) <= 32,
             "--java-root-depth 必须在 0 至 32 之间"
         );
@@ -493,16 +543,19 @@ impl CollectOptions {
                     && !self.java_no_processes
                     && self.java_pid.is_empty()
                     && self.java_root.is_empty()
+                    && self.java_jdk.is_empty()
                     && self.java_root_depth.is_none()),
             "Java 范围参数需要 --java-command 或 --all"
         );
         anyhow::ensure!(
-            self.java_pid.len() <= 128 && self.java_root.len() <= 64,
+            self.java_pid.len() <= 128 && self.java_root.len() + self.java_jdk.len() <= 64,
             "Java PID 或根目录数量超出上限"
         );
         anyhow::ensure!(
             !self.java_processes_only
-                || (self.java_root.is_empty() && self.java_root_depth.is_none()),
+                || (self.java_root.is_empty()
+                    && self.java_jdk.is_empty()
+                    && self.java_root_depth.is_none()),
             "--java-processes-only 与 Java 安装盘点范围冲突"
         );
         anyhow::ensure!(
@@ -570,6 +623,14 @@ impl CollectOptions {
         Ok(())
     }
 }
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+pub enum CollectFormat {
+    #[default]
+    Json,
+    Txt,
+    Csv,
+}
+
 #[derive(clap::Args, Debug)]
 pub struct CollectArgs {
     /// 本机 Web 探测使用的被动特征库 JSON
@@ -587,9 +648,26 @@ pub struct CollectArgs {
     /// 读取目标 JVM 的生效参数（需要 --java-command）
     #[arg(long,num_args=0..=1,default_missing_value="true",require_equals=true)]
     pub java_attach: Option<bool>,
+    /// Java 应用目录清单，按目录名收集产品线索
+    #[arg(long)]
+    pub java_apps: Option<PathBuf>,
+    #[arg(long)]
+    pub java_apps_depth: Option<usize>,
+    /// 离线 CPU flags 文件，需使用仅安装模式
+    #[arg(long)]
+    pub java_cpuinfo: Option<PathBuf>,
+    /// 显式允许在生效参数缺失时按 JVM 启动参数估算
+    #[arg(long)]
+    pub java_assume_flags_effective: bool,
+    /// 报告格式，文本和 CSV 适用于仅启用 Java 的采集
+    #[arg(long, value_enum, default_value = "json")]
+    pub format: CollectFormat,
     /// Java 安装盘点额外递归根目录，可重复
     #[arg(long)]
     pub java_root: Vec<PathBuf>,
+    /// 指定 JDK Home，可重复，替代默认安装目录
+    #[arg(long)]
+    pub java_jdk: Vec<PathBuf>,
     /// Java 安装扫描最大深度，默认 8
     #[arg(long)]
     pub java_root_depth: Option<usize>,
@@ -622,7 +700,7 @@ pub struct CollectArgs {
     #[arg(long)]
     pub all: bool,
     /// 报告输出后按风险和证据完整性返回 1 或 3
-    #[arg(long, requires = "all")]
+    #[arg(long)]
     pub fail_on_risk: bool,
     /// 从运行进程/模块反查软件包，核对厂商参考规则与旧进程状态
     #[arg(long,num_args=0..=1,default_missing_value="true",require_equals=true)]
@@ -672,10 +750,36 @@ impl CollectArgs {
                 *path = options_dir.join(&*path);
             }
         }
-        for path in &mut options.java_root {
+        for path in options
+            .java_apps
+            .iter_mut()
+            .chain(options.java_cpuinfo.iter_mut())
+        {
             if path.is_relative() {
                 *path = options_dir.join(&*path);
             }
+        }
+        if self.java_apps.is_some() {
+            options.java_apps = self.java_apps;
+        }
+        if self.java_apps_depth.is_some() {
+            options.java_apps_depth = self.java_apps_depth;
+        }
+        if self.java_cpuinfo.is_some() {
+            options.java_cpuinfo = self.java_cpuinfo;
+        }
+        options.java_assume_flags_effective |= self.java_assume_flags_effective;
+        for path in options
+            .java_root
+            .iter_mut()
+            .chain(options.java_jdk.iter_mut())
+        {
+            if path.is_relative() {
+                *path = options_dir.join(&*path);
+            }
+        }
+        if !self.java_jdk.is_empty() {
+            options.java_jdk = self.java_jdk;
         }
         if !self.java_root.is_empty() {
             options.java_root = self.java_root;
@@ -716,6 +820,13 @@ impl CollectArgs {
         }
         if let Some(path) = self.nginx_path {
             options.nginx_path = Some(path);
+        }
+        if let Some(path) = options.nginx_path.as_mut() {
+            *path = std::fs::canonicalize(&*path)?;
+        }
+        if let Some(path) = options.apache_path.as_mut() {
+            *path = std::fs::canonicalize(&*path)?;
+            anyhow::ensure!(path.is_file(), "Apache 路径必须是存在的普通文件");
         }
         if let Some(value) = self.apache2root {
             options.apache2root = value;

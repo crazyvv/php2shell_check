@@ -301,6 +301,195 @@ fn processes(proc_root: &Path, binaries: &mut BTreeSet<PathBuf>) -> Vec<Value> {
     out
 }
 
+pub(crate) fn application_inventory(root: &Path, depth: usize) -> Value {
+    const PRODUCTS: [(&str, &str); 11] = [
+        ("keycloak", "Keycloak"),
+        ("jira", "Atlassian Jira"),
+        ("confluence", "Atlassian Confluence"),
+        ("artifactory", "JFrog Artifactory"),
+        ("jenkins", "Jenkins"),
+        ("pingfederate", "PingFederate"),
+        ("kafka", "Apache Kafka Broker"),
+        ("solr", "Apache Solr"),
+        ("elasticsearch", "Elasticsearch"),
+        ("gerrit", "Gerrit"),
+        ("spinnaker", "Spinnaker"),
+    ];
+    let mut pending = vec![(root.to_path_buf(), 0)];
+    let mut findings = Vec::new();
+    let mut incomplete = !root.is_dir();
+    let mut remaining = 4096;
+    'scan: while let Some((path, level)) = pending.pop() {
+        if level > 0 {
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .replace(['-', '_'], "");
+            if let Some((_, label)) = PRODUCTS.iter().find(|(key, _)| name.contains(key)) {
+                findings.push(json!({"product":label,"path":path,"status":"directory_name_hint"}));
+                if findings.len() == 128 {
+                    incomplete = true;
+                    break;
+                }
+            }
+        }
+        if level >= depth {
+            continue;
+        }
+        let entries = match std::fs::read_dir(path) {
+            Ok(entries) => entries,
+            Err(_) => {
+                incomplete = true;
+                continue;
+            }
+        };
+        for entry in entries {
+            if remaining == 0 {
+                incomplete = true;
+                break 'scan;
+            }
+            remaining -= 1;
+            let Ok(entry) = entry else {
+                incomplete = true;
+                continue;
+            };
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => pending.push((entry.path(), level + 1)),
+                Ok(_) => {}
+                Err(_) => incomplete = true,
+            }
+        }
+    }
+    json!({"scope":"directory_name_hints","coverage_incomplete":incomplete,"findings":findings,"max_depth":depth})
+}
+
+#[cfg(target_os = "macos")]
+pub async fn collect_macos(options: &crate::collector::CollectOptions) -> Value {
+    let mut java = if options.java_processes_only {
+        json!({"status":"collected","scope":"launcher_only_macos","cve":CVE})
+    } else {
+        collect(true).await
+    };
+    let mut launchers = Vec::new();
+    if !options.java_no_processes {
+        let command =
+            crate::collector::run_clean_java(Path::new("/bin/ps"), &["-axo", "pid=,comm="]).await;
+        for line in command["output"].as_str().unwrap_or_default().lines() {
+            if launchers.len() >= 128 {
+                break;
+            }
+            let Some((pid, executable)) = line.trim().split_once(char::is_whitespace) else {
+                continue;
+            };
+            let Ok(pid) = pid.parse::<u32>() else {
+                continue;
+            };
+            let executable = executable.trim();
+            if !options.java_pid.is_empty() && !options.java_pid.contains(&pid) {
+                continue;
+            }
+            if Path::new(executable)
+                .file_name()
+                .is_some_and(|name| name == "java")
+            {
+                launchers.push(json!({"pid":pid,"path":executable,"status":"unknown","reason":"launcher_only_macos"}));
+            }
+        }
+    }
+    if options.java_processes_only {
+        java["runtimes"] = json!([]);
+    }
+    java["runtime_audit"] = json!({"processes":launchers,"coverage":{"scope":"launcher_only_macos","process_scan_enabled":!options.java_no_processes}});
+    if let Some(path) = &options.java_apps {
+        java["applications"] = application_inventory(path, options.java_apps_depth.unwrap_or(3));
+    }
+    json!({"schema":"php-selfcheck-host/v1","source":"developer_supplied_unverified",
+        "platform":format!("macos {}",std::env::consts::ARCH),"java4shell":java,
+        "audit":{"risk_gate_hit":false,"evidence_incomplete":true,"exit_codes":{"java4shell":3}}})
+}
+
+pub fn format_audit(
+    report: &Value,
+    format: crate::collector::CollectFormat,
+) -> anyhow::Result<String> {
+    use crate::collector::CollectFormat;
+    let java = &report["java4shell"];
+    if matches!(format, CollectFormat::Json) {
+        return Ok(serde_json::to_string_pretty(report)?);
+    }
+    let mut csv = csv::Writer::from_writer(Vec::new());
+    let mut text = String::from("Java4Shell 主机报告\n");
+    let cols = [
+        "kind",
+        "pid",
+        "path",
+        "version",
+        "status",
+        "reason",
+        "flag_source",
+    ];
+    if matches!(format, CollectFormat::Csv) {
+        csv.write_record(cols)?;
+    }
+    for (kind, rows) in [
+        ("process", &java["runtime_audit"]["processes"]),
+        ("installation", &java["runtime_audit"]["installations"]),
+        ("launcher", &java["runtimes"]),
+        ("application", &java["applications"]["findings"]),
+    ] {
+        for row in rows.as_array().into_iter().flatten() {
+            let pid = row["pid"]
+                .as_u64()
+                .map(|n| n.to_string())
+                .unwrap_or_default();
+            let path = row["installation"]["home"]
+                .as_str()
+                .or(row["path"].as_str())
+                .or(row["binary"].as_str())
+                .unwrap_or("");
+            let version = row["runtime_build"]
+                .as_str()
+                .or(row["installation"]["release"]["full_build"].as_str())
+                .or(row["version"].as_str())
+                .unwrap_or("");
+            let status = row["status"].as_str().unwrap_or("unknown");
+            let reason = row["reason"]
+                .as_str()
+                .or(row["product"].as_str())
+                .unwrap_or("");
+            let source = row["flag_source"].as_str().unwrap_or("");
+            if matches!(format, CollectFormat::Csv) {
+                csv.write_record([kind, &pid, path, version, status, reason, source].map(
+                    |field| {
+                        if field.starts_with(['=', '+', '-', '@', '\t', '\r', '\n']) {
+                            format!("'{field}")
+                        } else {
+                            field.to_owned()
+                        }
+                    },
+                ))?;
+            } else {
+                use std::fmt::Write;
+                writeln!(
+                    text,
+                    "{kind} · {pid} {path:?} {version} · {status} · {reason} · {source}"
+                )?;
+            }
+        }
+    }
+    if matches!(format, CollectFormat::Csv) {
+        return Ok(String::from_utf8(csv.into_inner()?)?);
+    }
+    use std::fmt::Write;
+    writeln!(text, "覆盖与门禁 · {}", report["audit"])?;
+    Ok(text)
+}
+
 pub async fn collect(enabled: bool) -> Value {
     if !enabled {
         return json!({"status":"disabled","cve":CVE,"detail":"需显式启用 --java-command；未运行 Java 命令或主机核验"});
@@ -308,6 +497,19 @@ pub async fn collect(enabled: bool) -> Value {
     let cpuinfo = text_file(Path::new("/proc/cpuinfo"), 2_097_152).unwrap_or_default();
     let hardware = hardware_from(std::env::consts::ARCH, &cpuinfo);
     let mut binaries = BTreeSet::new();
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = std::env::var_os("JAVA_HOME") {
+            let path = std::path::PathBuf::from(home).join("bin/java");
+            if path.is_file() {
+                binaries.insert(path);
+            }
+        }
+        find_java(
+            Path::new("/Library/Java/JavaVirtualMachines"),
+            &mut binaries,
+        );
+    }
     if let Some(path) = crate::collector::which("java") {
         binaries.insert(std::fs::canonicalize(&path).unwrap_or(path));
     }
@@ -467,6 +669,9 @@ pub fn sanitize_host(raw: &Value) -> Value {
             json!({"pid":item["pid"].as_u64(),"status":bounded_string(&item["status"],40),
                 "runtime_build":bounded_string(&item["runtime_build"],128),
                 "flag_status":bounded_string(&item["flag_status"],40),
+                "flag_source":item["flag_source"].as_str().filter(|source| matches!(*source,"startup_arguments_estimated"|"jcmd VM.flags -all"|"unavailable")),
+                "estimated_startup_flags":{"UseBASE64Intrinsics":item["estimated_startup_flags"]["UseBASE64Intrinsics"].as_bool(),
+                    "UseAVX":item["estimated_startup_flags"]["UseAVX"].as_u64()},
                 "effective_flags":{"UseBASE64Intrinsics":flags["UseBASE64Intrinsics"].as_bool(),
                     "UseAVX":flags["UseAVX"].as_u64()},"mappings":mappings})
         })

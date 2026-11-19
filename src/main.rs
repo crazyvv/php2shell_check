@@ -268,10 +268,59 @@ async fn main() -> Result<()> {
         }
         Command::Collect(args) => {
             let fail_on_risk = args.fail_on_risk;
+            let format = args.format;
             let options = args.resolve()?;
-            ensure!(cfg!(target_os = "linux"), "主机采集目前仅支持 Linux");
+            let java_only = options.java_command
+                && !(options.nginx2root
+                    || options.apache2root
+                    || options.middleware
+                    || options.php_command
+                    || options.package_audit);
+            ensure!(
+                matches!(format, collector::CollectFormat::Json) || java_only,
+                "文本和 CSV 格式只支持 Java 专项"
+            );
+            ensure!(
+                !fail_on_risk
+                    || options.java_command
+                    || options.nginx2root
+                    || options.apache2root
+                    || options.middleware,
+                "--fail-on-risk 需要启用至少一个专项"
+            );
+            #[cfg(target_os = "linux")]
             let report = collector::collect_with_options(&options).await;
-            println!("{}", serde_json::to_string_pretty(&report)?);
+            #[cfg(target_os = "macos")]
+            let report = {
+                ensure!(
+                    java_only
+                        && !options.java_attach
+                        && !options.java_assume_flags_effective
+                        && options.java_root.is_empty()
+                        && options.java_jdk.is_empty()
+                        && options.java_root_depth.is_none()
+                        && options.java_cpuinfo.is_none(),
+                    "macOS 仅支持 Java 启动器降级盘点与应用目录清单"
+                );
+                x2shell_check::java4shell::collect_macos(&options).await
+            };
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            let report = {
+                let _ = &options;
+                anyhow::bail!("主机采集支持 Linux，macOS 支持 Java 降级盘点");
+                #[allow(unreachable_code)]
+                serde_json::Value::Null
+            };
+            {
+                use std::io::Write as _;
+                let mut output = std::io::stdout().lock();
+                writeln!(
+                    output,
+                    "{}",
+                    x2shell_check::java4shell::format_audit(&report, format)?.trim_end()
+                )?;
+                output.flush()?;
+            }
             if fail_on_risk {
                 if report["audit"]["risk_gate_hit"] == true {
                     std::process::exit(1);

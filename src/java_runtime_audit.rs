@@ -386,13 +386,20 @@ fn installation(scope: &Path, lib: &Path, id: FileId) -> Option<Installation> {
 
 fn installations(
     extra: &[PathBuf],
+    homes: &[PathBuf],
     max_depth: usize,
 ) -> (BTreeMap<PathBuf, Installation>, bool, usize, usize) {
-    let mut queue: VecDeque<_> = extra
+    let mut queue: VecDeque<_> = homes
         .iter()
+        .chain(extra)
         .cloned()
         .map(|p| (p, 0, true))
-        .chain(ROOTS.into_iter().map(|p| (PathBuf::from(p), 0, false)))
+        .chain(
+            ROOTS
+                .into_iter()
+                .filter(|_| homes.is_empty())
+                .map(|p| (PathBuf::from(p), 0, false)),
+        )
         .collect();
     let mut depth_boundaries = 0;
     let mut seen = BTreeSet::new();
@@ -407,7 +414,9 @@ fn installations(
                 .and_then(|p| Some(p.parent()?.parent()?.to_path_buf())),
         )
     {
-        queue.push_front((home, 0, false));
+        if homes.is_empty() {
+            queue.push_front((home, 0, false));
+        }
     }
     let mut budget = 30000;
     while let Some((path, depth, explicit)) = queue.pop_front() {
@@ -550,6 +559,36 @@ fn parse_flags(data: &str) -> Flags {
     flags
 }
 
+fn startup_flags(raw: &[u8]) -> Flags {
+    let mut flags = Flags::default();
+    // Once the launcher target or an argument file is encountered, later tokens are ambiguous.
+    for arg in raw.split(|byte| *byte == 0).skip(1) {
+        let Ok(arg) = std::str::from_utf8(arg) else {
+            break;
+        };
+        if arg.is_empty()
+            || !arg.starts_with('-')
+            || matches!(arg, "-jar" | "-m" | "--module" | "--")
+            || arg.starts_with("--module=")
+            || !(arg.starts_with("-XX:")
+                || arg.starts_with("-X")
+                || arg.starts_with("-D")
+                || matches!(arg, "-server" | "-client" | "-ea" | "-da"))
+        {
+            break;
+        }
+        match arg {
+            "-XX:-UseBASE64Intrinsics" => flags.use_base64_intrinsics = Some(false),
+            "-XX:+UseBASE64Intrinsics" => flags.use_base64_intrinsics = Some(true),
+            value if value.starts_with("-XX:UseAVX=") => {
+                flags.use_avx = value["-XX:UseAVX=".len()..].parse().ok()
+            }
+            _ => {}
+        }
+    }
+    flags
+}
+
 fn decision(build: BuildStatus, cpu: Option<bool>, flags: &Flags) -> (&'static str, &'static str) {
     if build == BuildStatus::NotAffected || cpu == Some(false) {
         return ("not_affected", "excluded_build_or_cpu");
@@ -571,21 +610,41 @@ fn decision(build: BuildStatus, cpu: Option<bool>, flags: &Flags) -> (&'static s
 
 pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value {
     let attach = options.java_attach;
-    let (cpu, evidence) = cpu_evidence(
-        cpuid(),
-        fs::read_to_string("/proc/cpuinfo")
-            .ok()
-            .as_deref()
-            .map(cpu_profiles)
-            .unwrap_or_default(),
-        cfg!(target_arch = "x86_64"),
-    );
+    let (cpu, evidence) = if let Some(path) = &options.java_cpuinfo {
+        let mut content = String::new();
+        let readable = File::open(path)
+            .and_then(|file| file.take(2_097_153).read_to_string(&mut content))
+            .is_ok_and(|bytes| bytes <= 2_097_152);
+        let profiles = if readable {
+            cpu_profiles(&content)
+        } else {
+            BTreeMap::new()
+        };
+        let eligible =
+            (profiles.len() == 1).then(|| profiles.keys().next().unwrap().iter().all(|flag| *flag));
+        (
+            eligible,
+            json!({"source":"offline_cpuinfo","file":path,"readable":readable,
+            "cpuid_leaf_7_subleaf_0":null,"manual_review":profiles.len()>1,"eligible":eligible,
+            "proc_cpuinfo_profiles":profiles.into_iter().map(|(flags,count)| json!({"flags":named_flags(flags),"logical_cpus":count})).collect::<Vec<_>>()}),
+        )
+    } else {
+        cpu_evidence(
+            cpuid(),
+            fs::read_to_string("/proc/cpuinfo")
+                .ok()
+                .as_deref()
+                .map(cpu_profiles)
+                .unwrap_or_default(),
+            cfg!(target_arch = "x86_64"),
+        )
+    };
     let depth = options.java_root_depth.unwrap_or(8);
     let (disk, disk_budget_exhausted, unreadable_directories, depth_boundaries) =
         if options.java_processes_only {
             (BTreeMap::new(), false, 0, 0)
         } else {
-            installations(&options.java_root, depth)
+            installations(&options.java_root, &options.java_jdk, depth)
         };
     let jcmd = attach.then(|| which("jcmd")).flatten();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
@@ -760,12 +819,47 @@ pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value
         let build = disk_evidence
             .filter(|_| identity && !conflict)
             .map_or(BuildStatus::Unknown, |item| item.build_status);
+        let mut estimated = None;
+        if options.java_assume_flags_effective
+            && identity
+            && !conflict
+            && flags.use_base64_intrinsics.is_none()
+            && flags.use_avx.is_none()
+            && fs::read_link(proc_dir.join("exe"))
+                .is_ok_and(|p| p.file_name().is_some_and(|name| name == "java"))
+        {
+            let mut raw = Vec::new();
+            if File::open(proc_dir.join("cmdline"))
+                .and_then(|file| file.take(65_537).read_to_end(&mut raw))
+                .is_ok_and(|n| n <= 65_536)
+                && started.is_some()
+                && start_time(&proc_dir) == started
+                && mappings(&proc_dir).is_ok_and(|current| current == maps)
+            {
+                let hint = startup_flags(&raw);
+                if hint.use_base64_intrinsics.is_some() || hint.use_avx.is_some() {
+                    estimated = Some(hint);
+                }
+            }
+        }
         let (status, reason) = if conflict {
             ("unknown", "running_build_conflicts_with_disk")
         } else if !identity && disk_evidence.is_some() {
             ("potential", "disk_identity_unconfirmed")
         } else {
-            decision(build, cpu, &flags)
+            let measured = decision(build, cpu, &flags);
+            if measured.0 == "unknown"
+                && let Some(hint) = &estimated
+            {
+                let estimate = decision(build, cpu, hint);
+                if matches!(estimate.0, "affected" | "mitigated") {
+                    (estimate.0, "operator_trusted_startup_flags")
+                } else {
+                    measured
+                }
+            } else {
+                measured
+            }
         };
         if !conflict {
             for (_, matched, _) in &runtimes {
@@ -776,8 +870,10 @@ pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value
         }
         processes.push(json!({
             "pid":pid,"start_time_ticks":started,"status":status,"reason":reason,
-            "build_status":build,"runtime_build":runtime_build,"flag_source":"jcmd VM.flags -all","flag_status":flag_status,
-            "effective_flags":flags,
+            "build_status":build,"runtime_build":runtime_build,"flag_source":if reason == "operator_trusted_startup_flags" { "startup_arguments_estimated" }
+                else if flags.use_base64_intrinsics.is_some() || flags.use_avx.is_some() { "jcmd VM.flags -all" }
+                else { "unavailable" },
+            "flag_status":flag_status,"effective_flags":flags,"estimated_startup_flags":estimated,
             "mappings":runtimes.iter().map(|(mapping,matched,item)| json!({
                 "mapping":mapping,"disk_evidence":item,"disk_identity_matched":matched.is_some(),
                 "identity_source":matched.map(|(_,source)| source),
@@ -810,7 +906,7 @@ pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value
             "https://alas.aws.amazon.com/AL2023/ALAS2023-2026-3480.html",
             "https://alas.aws.amazon.com/AL2027/ALAS2027-2026-374.html"],
         "coverage":{"proc_available":proc_available,"unreadable_maps":unreadable_maps,
-            "unstable_snapshots":unstable_snapshots,"process_limit_reached":processes.len() >= 128,"disk_roots":ROOTS,"disk_max_depth":depth,"root_depth_truncated":depth_boundaries,"process_scan_enabled":!options.java_no_processes,
+            "unstable_snapshots":unstable_snapshots,"process_limit_reached":processes.len() >= 128,"disk_roots":if options.java_jdk.is_empty() && !options.java_processes_only { ROOTS.as_slice() } else { &[] },"explicit_jdk_homes":options.java_jdk,"extra_roots":options.java_root,"disk_max_depth":depth,"root_depth_truncated":depth_boundaries,"process_scan_enabled":!options.java_no_processes,
             "disk_budget_exhausted":disk_budget_exhausted,"unreadable_directories":unreadable_directories},
     })
 }
@@ -916,6 +1012,15 @@ mod tests {
         );
         let (eligible, _) = cpu_evidence(Some([true; 4]), BTreeMap::new(), true);
         assert_eq!(eligible, None);
+    }
+
+    #[test]
+    fn startup_estimate_ignores_application_arguments() {
+        let prefix = startup_flags(b"/bin/java\0-XX:+UseBASE64Intrinsics\0-XX:UseAVX=3\0-jar\0app.jar\0-XX:-UseBASE64Intrinsics\0");
+        assert_eq!(prefix.use_base64_intrinsics, Some(true));
+        assert_eq!(prefix.use_avx, Some(3));
+        let args = startup_flags(b"/bin/java\0example.Main\0-XX:UseAVX=2\0");
+        assert_eq!(args.use_avx, None);
     }
 
     #[test]

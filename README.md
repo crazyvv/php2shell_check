@@ -384,7 +384,16 @@ x2shell-check collect --all --fail-on-risk > host-report.json
 
 两条命令都先输出 Rust 主机报告。启用 `--fail-on-risk` 后，版本门禁命中返回 1，仅有证据不足返回 3。可同时查看 `audit.risk_gate_hit`、`audit.evidence_incomplete` 和各专项 `audit.exit_codes`。配置未归属或未读全有独立字段。
 
-Rust 主机采集支持重复指定 `--nginx-config` 和 `--apache-config`，并支持 `--apache-path`。Java 运行时盘点可用 `--java-root`、`--java-root-depth`、`--java-pid`、`--java-processes-only` 或 `--java-no-processes` 控制范围。
+Rust 主机采集支持重复指定 `--nginx-config` 和 `--apache-config`，并支持 `--apache-path`。Java 运行时盘点可用 `--java-jdk`、`--java-root`、`--java-root-depth`、`--java-pid`、`--java-processes-only` 或 `--java-no-processes` 控制范围。
+
+Java 专项可以输出文本或 CSV，也可加入应用目录名线索：
+
+```bash
+x2shell-check collect --java-command --java-apps /opt --format csv > java-audit.csv
+x2shell-check collect --java-command --java-no-processes --java-cpuinfo ./cpuinfo --java-root /opt/jdks
+```
+
+离线 CPU 文件只用于安装盘点，不与当前主机 CPUID 混用。显式指定 `--java-assume-flags-effective` 时，无法实测的进程可在映像身份确认后用标准 Java 启动器参数估算，报告区分估算和生效参数。macOS 可运行 `collect --java-command` 做启动器降级盘点，运行映像与生效参数保持未知。
 
 ### Apache2Root（CVE-2026-119618）
 

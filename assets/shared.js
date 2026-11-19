@@ -149,7 +149,7 @@ function javaHostEvidenceView(j) {
   for(const r of (Array.isArray(j.runtimes)?j.runtimes:[]).slice(0,32))box.append(node('p',`${r.binary || 'Java 路径未知'} · ${r.vm || 'VM 未知'} · Java ${r.version || '版本未知'} · ${statuses[r.status] || r.status || '未知'} · ${r.detail || ''}`,'fine'));
   for(const p of (Array.isArray(j.running_processes)?j.running_processes:[]).slice(0,32)){const flags=Array.isArray(p.known_command_line_flags)?p.known_command_line_flags.join(', '):'';box.append(node('p',`JVM PID ${p.pid || '未知'} · ${p.name || ''} · 相关命令行参数 ${flags || '未观察到（环境与参数文件未读取）'}`,'fine'));}
   for(const p of (j.runtime_audit?.processes || []).slice(0,32)){
-    box.append(node('p',`JVM PID ${p.pid ?? '未知'} · ${p.status || '未知'} · 运行构建 ${p.runtime_build || '未知'} · 生效参数 ${p.flag_status || '未知'}`,'fine'));
+    box.append(node('p',`JVM PID ${p.pid ?? '未知'} · ${p.status || '未知'} · 运行构建 ${p.runtime_build || '未知'} · ${p.flag_source==='startup_arguments_estimated'?'启动参数估算（显式信任）':'生效参数 '+(p.flag_status || '未知')}`,'fine'));
     for(const m of (p.mappings || []).slice(0,4)){
       const d=m.disk_evidence;
       if(d?.full_build)box.append(node('p',`磁盘构建 ${d.full_build} · ${d.vendor || '发行商未知'} · ${m.disk_identity_matched===true?'身份匹配':'身份待核'}`,'fine'));
