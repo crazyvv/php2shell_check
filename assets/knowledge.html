@@ -9,24 +9,55 @@
 <main class="knowledge">
   <section class="card hero"><h1>服务漏洞知识库</h1>
     <p>按专项查看网页线索、主机核验与厂商公告。PHP 专项另有链路与补丁分析，不提供可执行载荷。</p>
-    <nav class="scan-links" aria-label="专项索引"><a href="#java4shell">Java4Shell</a><a href="#nginx2root">Nginx2Root</a><a href="#apache2root">Apache2Root</a><a href="#php2shell">PHP2Shell</a></nav>
+    <nav class="scan-links" aria-label="专项索引"><a href="#apache2root">Apache2Root</a><a href="#nginx2root">Nginx2Root</a><a href="#java4shell">Java4Shell</a><a href="#php2shell">PHP2Shell</a></nav>
     <div class="knowledge-callout warning"><strong>证据边界</strong><p>社区研究的复现结论、在野情报和补丁分析需要分别核验。版本响应头、会话 Cookie、HTTP 500/502、响应时间或错误文本都不能单独确认漏洞、利用成功或修复完成。</p></div>
   </section>
 
-  <section id="java4shell" class="card wide"><h2>Java4Shell：网页线索与主机判据必须分开</h2><p>Java4Shell（CVE-2026-114938）是 OpenJDK HotSpot x86-64 Base64 intrinsic 的堆缓冲区越界写。Oracle 官方记录给出 CVSS 3.1 8.1、网络可达、攻击复杂度高且无需权限；CISA 在 2026-11-17 的补充记录中标为尚无已知利用。</p><div class="knowledge-table"><table><thead><tr><th>证据层</th><th>能够说明</th><th>不能说明</th></tr></thead><tbody><tr><td>网页被动指纹</td><td>响应可能来自 Jenkins、Keycloak、Jira、Confluence、Artifactory 等 Java 产品</td><td>不能确认 JVM build、VM、CPU、启动参数或漏洞</td></tr><tr><td>本地主机采集</td><td>JVM 映像与完整构建、HotSpot/OpenJ9、客户机 CPU flags、启动参数线索；可选诊断附加读取生效参数</td><td>不能确认外部输入到达 Base64 decoder，也不确认可利用性</td></tr><tr><td>修复复核</td><td>厂商固定构建、运行映像和全部实例重启</td><td>仅达到通用版本号不能替代捆绑运行时和厂商回补核验</td></tr></tbody></table></div><div class="knowledge-callout warning"><strong>安全边界</strong><p>网页扫描仅采集产品线索。主机侧需核对 x86-64 的 AVX-512 VBMI 等前置条件，并检查 UseBASE64Intrinsics 与 UseAVX 的生效值。首个公开修复基线为 17.0.21.1 / 21.0.13.1 / 25.0.5.1 / 27.0.1.1；厂商构建仍以各自公告为准。</p></div><p class="fine">来源：<a href="https://www.cve.org/CVERecord?id=CVE-2026-114938" target="_blank" rel="noreferrer">Oracle CVE 记录</a> · <a href="https://www.oracle.com/security-alerts/cspunov2026.html" target="_blank" rel="noreferrer">Oracle 2026-11 CSPU</a> · <a href="https://calif.io/java4shell" target="_blank" rel="noreferrer">Calif 技术披露</a> · <a href="https://github.com/openjdk/jdk/commit/5177a70b385c16f26ede191fdac7aaba0bed0f8b" target="_blank" rel="noreferrer">OpenJDK 修复提交</a>。完整判据见 docs/java4shell-review.md。</p></section>
-
-  <section id="nginx2root" class="card wide">
-    <h2>Nginx2Root</h2>
-    <p>当前规则逐项检查 CVE-2026-123007、CVE-2026-123633、CVE-2026-123634、CVE-2026-121810 与 CVE-2026-113425。SCTP 内核证据单独记录。</p>
-    <p>网页证据包括响应中的产品版本与本次连接协议。主机核验应比对运行映像与发行版补丁，并复核 HTTP/2、HTTP/3 上游、解析器与代理、邮件代理等相关配置。磁盘配置可能尚未加载，代理响应也可能来自边缘节点。</p>
-    <p>升级后核对各运行实例及其实际生效配置。<a href="https://nginx.org/en/security_advisories.html">NGINX 官方安全公告</a></p>
-  </section>
   <section id="apache2root" class="card wide">
     <h2>Apache2Root · CVE-2026-119618</h2>
-    <p>上游 Apache HTTP Server 2.4.55–2.4.70 在披露范围内，2.4.71 发布修复。独立 mod_h2 2.0.8–2.0.42 也在披露范围内。</p>
-    <p>核对运行中 httpd、已加载的 mod_http2、发行版补丁和各虚拟主机启用的 h2/h2c。仅提供 HTTP/1.1 的实例不受此漏洞影响。单次 HTTP/1.1 观测只说明该次连接使用的协议。</p>
-    <p>升级后核查各实例实际加载的版本和模块。<a href="https://httpd.apache.org/security/vulnerabilities_24#CVE-2026-119618">Apache 官方安全公告</a></p>
+    <p>Apache 于 2026 年 11 月 11 日披露，<code>mod_http2</code> 的 <code>assign_headers()</code> 在处理共享资源时同步不足，可导致堆内存破坏。外部流量能够到达受影响的 HTTP/2 处理路径时，可能造成进程崩溃或以 httpd 服务进程的权限执行代码。</p>
+    <h3>受影响范围</h3>
+    <p>上游 Apache HTTP Server 2.4.55–2.4.70 受影响，2.4.71 发布修复。独立发布的 <code>mod_h2</code> 2.0.8–2.0.42 也受影响。独立安装模块的实例应分别核对 httpd 和实际加载的模块版本，发行版回补以对应公告为准。</p>
+    <h3>证据分析与复核</h3>
+    <ul>
+      <li><strong>网页线索</strong>保存 Apache 响应标识和本次连接协议。边缘代理协商出 HTTP/2 无法证明后端 Apache 也启用了 HTTP/2。一次 HTTP/1.1 响应同样无法覆盖其他虚拟主机或监听地址。</li>
+      <li><strong>主机核验</strong>先关联处理业务流量的 httpd 和 <code>mod_http2.so</code>，再核对对应虚拟主机的生效配置是否提供 TLS 下的 <code>h2</code> 或明文 <code>h2c</code>。磁盘上的 <code>LoadModule</code> 和 <code>Protocols</code> 仅是配置线索。只提供 HTTP/1.1 的实例不进入这条路径。</li>
+      <li><strong>修复复核</strong>升级至厂商确认的修复包，检查各实例重新加载后使用的程序和模块。暂时停用 HTTP/2 时，应核对所有相关监听地址和虚拟主机。</li>
+    </ul>
+    <p class="fine"><a href="https://httpd.apache.org/security/vulnerabilities_24#CVE-2026-119618">Apache 官方安全公告</a> · <a href="https://httpd.apache.org/docs/2.4/mod/mod_http2.html">mod_http2 文档</a></p>
   </section>
+
+  <section id="nginx2root" class="card wide">
+    <h2>Nginx2Root · 五项 NGINX 漏洞</h2>
+    <p>当前专项按 CVE 分别评估。HTTP/2 流量控制问题会破坏内存，其余四项涉及释放后使用，即对象释放后仍被访问。是否暴露取决于运行构建和具体功能路径，某项命中只说明该项需要复核。</p>
+    <div class="knowledge-table"><table>
+      <thead><tr><th scope="col">CVE</th><th scope="col">公告描述</th><th scope="col">上游范围</th><th scope="col">主机复核重点</th></tr></thead>
+      <tbody>
+        <tr><td>CVE-2026-123007</td><td>HTTP/2 流量控制中的内存破坏</td><td>1.9.5–1.31.8</td><td>确认 NGINX 本身是否处理对外的 HTTP/2 流量。</td></tr>
+        <tr><td>CVE-2026-123633</td><td>HTTP/2 释放后使用</td><td>1.19.7–1.31.8</td><td>核对实际配置中的 HTTP/2 上游路径。前端协商结果无法说明上游协议。</td></tr>
+        <tr><td>CVE-2026-123634</td><td>解析器处理响应时释放后使用</td><td>0.6.18–1.31.8</td><td>核对运行时 DNS 解析器及引用它的代理配置。镜像等指令仅作为关联线索。</td></tr>
+        <tr><td>CVE-2026-121810</td><td>HTTP/3 释放后使用</td><td>1.25.0–1.31.8</td><td>核对 HTTP/3、QUIC 监听和相关代理路径。响应中的协议声明仅表示服务宣告。</td></tr>
+        <tr><td>CVE-2026-113425</td><td>邮件代理模块释放后使用</td><td>0.5.33–1.31.8</td><td>核对邮件代理监听、模块和 HTTP 认证服务配置。普通网页入口无法覆盖邮件服务。</td></tr>
+      </tbody>
+    </table></div>
+    <p>官方列出的修复分支为 1.30.7+ 和 1.31.9+。表中范围采用公告写法，修复分支优先核对。现场应按正在运行的 NGINX 映像和软件包完整修订号核对回补，并把磁盘配置关联到实际加载的站点或监听。SCTP 属于独立的内核核验项，可见性或禁载线索无法确认内核已修复。</p>
+    <p class="fine"><a href="https://nginx.org/en/security_advisories.html">NGINX 官方安全公告</a> · <a href="https://cert.europa.eu/publications/security-advisories/2026-022/">CERT-EU 公告</a></p>
+  </section>
+
+  <section id="java4shell" class="card wide">
+    <h2>Java4Shell · CVE-2026-114938</h2>
+    <p>HotSpot 在 x86-64 上用于加速 Base64 解码的 AVX-512 intrinsic 存在边界检查缺陷，可造成堆缓冲区越界写。Oracle 记录的 CVSS 3.1 评分为 8.1。网络暴露还取决于应用是否把外部数据交给相关解码路径。Jenkins、Keycloak 等网页指纹只能提示可能使用 Java。</p>
+    <h3>主机判据</h3>
+    <ul>
+      <li><strong>运行构建</strong>将业务进程实际映射的 JVM 库与对应运行时关联，再核对完整构建号、发行商和 VM 类型。PATH 的 Java 版本可能属于另一套安装。OpenJ9 不使用这条 HotSpot intrinsic。</li>
+      <li><strong>客户机 CPU</strong>核对 <code>avx512f</code>、<code>avx512bw</code>、<code>avx512vbmi</code> 和 <code>bmi2</code>。虚拟机以客户机可见能力为准。CPUID 与系统 flags 不一致时保留两份证据，工作负载迁移后重新评估。</li>
+      <li><strong>生效参数</strong><code>UseBASE64Intrinsics=false</code> 或 <code>UseAVX&lt;=2</code> 可阻断该路径。启动脚本、CLI 默认值和配置文件只能提供线索。需要确认时，可显式开启 JVM 诊断附加读取运行值。参数证据缺失时保留待确认。</li>
+    </ul>
+    <h3>修复与复核</h3>
+    <p>公开修复基线为 17.0.21.1、21.0.13.1、25.0.5.1 和 27.0.1.1。Oracle 另列出特定 Java 8 perf 构建。升级应按产品或 JDK 厂商公告确认完整修复构建，替换应用内嵌运行时或容器镜像并重启各实例，再复核实际运行构建。</p>
+    <p class="fine"><a href="https://www.cve.org/CVERecord?id=CVE-2026-114938">Oracle CVE 记录</a> · <a href="https://www.oracle.com/security-alerts/cspunov2026.html">Oracle 安全公告</a> · <a href="https://github.com/crazyvv/x2shell-check/blob/main/docs/java4shell-review.md">项目核验说明</a></p>
+  </section>
+
   <section id="php2shell" class="card wide">
     <h2>PHP2Shell · CVE-2026-109618 / CVE-2026-109619</h2>
     <p>网页可观察 PHP 版本与可选的上传相关线索。主机核验应确认处理业务请求的 Web SAPI、会话上传进度配置及厂商补丁。PHP CLI 的配置与版本可能不同。</p>
