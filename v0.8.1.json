@@ -1,0 +1,10 @@
+{
+  "state": "failed",
+  "tag": "v0.8.1",
+  "repository": "crazyvv/x2shell-check",
+  "build_result": "failure",
+  "publish_result": "success",
+  "source_commit": "c19969b0ab662c82a3bb53eee3b8f61562fdc9d5",
+  "workflow_run": "https://github.com/crazyvv/x2shell-check/actions/runs/44454259548",
+  "recorded_at": "2026-11-19T03:56:02.883882+00:00"
+}
