@@ -86,6 +86,7 @@ $NICKNAME · $CVE 主机暴露面检测（$PROG v$SCRIPT_VERSION）
 
 用法:
   $PROG [选项]
+  $PROG --nginx2root [--json] [--nginx-path PATH]
 
   默认行为：发现本机 JDK 安装 + 检查运行中的 JVM 进程 + 探测 CPU 条件，
   输出中文结论；默认不修改被检查的运行时，不联网。
@@ -1914,7 +1915,129 @@ cleanup() {
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
+# Nginx2Root mode reuses the report format helpers and only reads local files.
+nginx2root_reference() {
+    local raw=$1 cve minimum feature status comma=
+    printf '['
+    while read -r cve minimum feature; do
+        status=unknown
+        if { [[ $raw == 1.30.* ]] && vge "$raw" 1.30.7; } ||
+           { [[ $raw == 1.31.* ]] && vge "$raw" 1.31.9; }; then
+            status=meets_upstream_reference
+        elif [ -n "$raw" ]; then
+            if vlt "$raw" "$minimum"; then status=outside_upstream_range
+            elif vle "$raw" 1.31.8; then status=potential
+            fi
+        fi
+        printf '%s{"cve":"%s","status":"%s","feature":"%s"}' "$comma" "$cve" "$status" "$feature"
+        comma=,
+    done <<'RULES'
+CVE-2026-123007 1.9.5 http2
+CVE-2026-123633 1.19.7 http2_upstream
+CVE-2026-123634 0.6.18 resolver_proxy_mirror
+CVE-2026-121810 1.25.0 http3_upstream
+CVE-2026-113425 0.5.33 mail_proxy_auth_http
+RULES
+    printf ']'
+}
+
+nginx2root_version() {
+    local file=$1 size marks
+    [ -f "$file" ] || return 0
+    size=$(stat -Lc '%s' -- "$file" 2>/dev/null) || return 0
+    [[ $size =~ ^[0-9]+$ ]] && [ "$size" -le 16777216 ] || return 0
+    [[ $(head -c 4 -- "$file" 2>/dev/null) == $'\x7fELF' ]] || return 0
+    marks=$(head -c 16777216 -- "$file" 2>/dev/null |
+        LC_ALL=C grep -aEo 'nginx/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b|nginx-plus|Tengine|openresty' | LC_ALL=C sort -u)
+    if [[ $marks =~ ^nginx/([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    fi
+}
+
+nginx2root_scan() {
+    local format=txt explicit="" installed path proc pid id current raw matched kernel sctp=false
+    local seen=' ' rows=0 comma= gate=0 unknown=0 total=0
+    while (($#)); do
+        case $1 in
+            --json|--format=json) format=json ;;
+            --nginx-path)
+                (($# > 1)) && [ -f "$2" ] || die "--nginx-path 需要存在的文件"
+                explicit=$2
+                shift ;;
+            --help|-h)
+                printf '用法: %s --nginx2root [--json] [--nginx-path PATH]\n' "$PROG"
+                return ;;
+            *) die "未知 Nginx2Root 选项: $1" ;;
+        esac
+        shift
+    done
+    [ "$OS" = Linux ] || die "Nginx2Root 主机盘点需要 Linux /proc"
+    kernel=$(cat /proc/sys/kernel/osrelease 2>/dev/null || :)
+    [ ! -d /sys/module/sctp ] || sctp=true
+    if [ "$format" = json ]; then
+        printf '{"status":"collected","source":"local_binary_inventory","patch_verified":false,"exploitability_confirmed":false,"sctp":{"kernel_release":%s,"module_visible":%s,"patch_status":"unknown"},"sources":["https://nginx.org/en/security_advisories.html","https://cert.europa.eu/publications/security-advisories/2026-022/"],"findings":[' "$(jstr "$kernel")" "$sctp"
+    else
+        printf 'Nginx2Root · NGINX 上游版本参考\nLinux %s · SCTP 可见 %s · 内核补丁未知
+' "$kernel" "$sctp"
+    fi
+
+    nginx2root_row() {
+        local kind=$1 pid=$2 path=$3 raw=$4 matched=$5
+        local references
+        references=$(nginx2root_reference "$raw")
+        case $references in *'"status":"potential"'*) gate=1 ;; esac
+        case $references in *'"status":"unknown"'*) unknown=1 ;; esac
+        total=$((total + 1))
+        if [ "$format" = json ]; then
+            printf '%s{"kind":"%s","pid":%s,"path":%s,"version":%s,"disk_identity_matched":%s,"cves":' \
+                "$comma" "$kind" "$(jstr "$pid")" "$(jstr "$(san_field "$path")")" "$(jstr "$raw")" "$matched"
+            printf '%s}' "$references"
+            comma=,
+        else
+            printf '%s %s %q · NGINX %s · 磁盘身份匹配 %s\n' "$kind" "$pid" "$path" "${raw:-未知}" "$matched"
+            nginx2root_reference "$raw"
+            printf '\n'
+        fi
+    }
+
+    for proc in /proc/[0-9]*; do
+        [ -r "$proc/comm" ] || continue
+        IFS= read -r current < "$proc/comm" 2>/dev/null || continue
+        [ "$current" = nginx ] || continue
+        ((rows < 24)) || break
+        pid=${proc##*/}
+        path=$(readlink "$proc/exe" 2>/dev/null || :)
+        id=$(file_id "$proc/exe" || :)
+        raw=$(nginx2root_version "$proc/exe")
+        matched=false
+        if [[ -z $id || $(file_id "$proc/exe") != "$id" ]]; then
+            raw=
+        elif [[ $path == /* && $(file_id "$proc/root$path") == "$id" ]]; then
+            matched=true
+            seen+="$id "
+        fi
+        nginx2root_row process "$pid" "$path" "$raw" "$matched"
+        rows=$((rows + 1))
+    done
+    installed=$(type -P nginx || :)
+    for path in "$explicit" "$installed" /usr/sbin/nginx /usr/local/nginx/sbin/nginx; do
+        [ -n "$path" ] && [ -f "$path" ] || continue
+        id=$(file_id "$path") || continue
+        [[ $seen != *" $id "* ]] || continue
+        raw=$(nginx2root_version "$path")
+        seen+="$id "
+        nginx2root_row installation "" "$path" "$raw" null
+    done
+    if [ "$format" = json ]; then
+        printf '],"coverage":{"proc_limit_reached":%s}}\n' "$([ "$rows" -ge 24 ] && printf true || printf false)"
+    fi
+    if [ "$gate" -eq 1 ]; then return 1; fi
+    if [ "$unknown" -eq 1 ] || [ "$total" -eq 0 ] || [ "$rows" -ge 24 ]; then return 3; fi
+    return 0
+}
+
 main() {
+    if [ "${1:-}" = --nginx2root ]; then shift; nginx2root_scan "$@"; return; fi
     parse_args "$@"
 
     WORK=$(mktemp -d "${TMPDIR:-/tmp}/java4shell.XXXXXX") || die "无法创建临时目录"

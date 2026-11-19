@@ -289,7 +289,7 @@ PHP 命令所得配置始终标为 `cli_only`，不能证明 Web/FPM、容器或
 php-selfcheck collect --java-command > host-report.json
 ```
 
-`--java-command` 默认关闭且独立于 PHP 与中间件选项。开启后只执行发现到的 Java 程序的 `-version` 和 `-XX:+PrintFlagsFinal -version`，并检查当前命名空间可见的 CPU flags、JVM 进程和 Java4Shell 相关启动参数。调用 Java 时清除采集器自身的 `JAVA_TOOL_OPTIONS`、`JDK_JAVA_OPTIONS` 与 `_JAVA_OPTIONS`，避免把采集环境选项误当成运行服务配置；不会读取目标进程环境、附加 JVM 或保存其他命令行参数。
+`--java-command` 默认关闭且独立于 PHP 与中间件选项。开启后只执行发现到的 Java 程序的 `-version` 和 `-XX:+PrintFlagsFinal -version`，并检查当前命名空间可见的 CPU flags、JVM 进程和 Java4Shell 相关启动参数。调用 Java 时清除采集器自身的 `JAVA_TOOL_OPTIONS`、`JDK_JAVA_OPTIONS` 与 `_JAVA_OPTIONS`，避免把采集环境选项误当成运行服务配置；不读取目标进程环境或保存其他命令行参数。诊断附加需单独开启 `--java-attach`。
 
 候选必须分层核对：HotSpot/GraalVM、公开受影响版本范围、x86-64、当前节点可见的 `avx512f`/`avx512bw`/`avx512vbmi`/`bmi2`，以及服务实际使用的 Base64 intrinsic/JIT 条件。采集器新启动进程观察到的默认参数不代表运行服务；命令行没有相关参数也不代表环境变量或参数文件未设置。当前节点硬件不适用只说明当前放置，迁移后必须重新采集。
 
@@ -327,6 +327,25 @@ bash scripts/java4shell-scan.sh --demo --json
 
 增强版 JSON 的 `coverage` 记录 `--root-depth` 上限、达到深度边界的目录数、递归扫描出错的根目录数和读取失败的进程映射数。达到深度边界表示该目录以下没有搜索。若未命中门禁，覆盖不足会返回退出码 `3`。`candidate` 是 JSON 和 CSV 中的 `build_assessment` 值，`--fail-on` 匹配最终的 `status`。运行 `bash tests/java4shell-scan.sh` 可验证构建规则和覆盖报告。
 
+### Nginx2Root 主机与 HTTP 响应核验
+
+```bash
+# Bash 单文件
+bash scripts/java4shell-scan.sh --nginx2root --json
+bash scripts/java4shell-scan.sh --nginx2root --nginx-path /opt/nginx/sbin/nginx
+
+# Rust 主机采集
+php-selfcheck collect --nginx2root > nginx-report.json
+php-selfcheck collect --nginx2root --nginx-path /opt/nginx/sbin/nginx > nginx-report.json
+php-selfcheck collect --nginx2root --java-command --java-attach > host-report.json
+```
+
+Nginx2Root 核验逐项给出五个 NGINX CVE 的上游版本参考。主机模式读取当前命名空间可见的 NGINX 进程映像和常见磁盘安装，输出版本、文件身份关联和 SCTP 可见性。SCTP 可见性不能确认内核补丁状态。Bash 模式返回 `1` 表示命中上游受影响范围，`3` 表示没有足够的版本或覆盖证据，`2` 表示参数错误。版本范围与已知修复分支来自 [NGINX 官方公告](https://nginx.org/en/security_advisories.html) 和 [CERT-EU 公告](https://cert.europa.eu/publications/security-advisories/2026-022/)。
+
+Rust 的 `--middleware` 同时包含这项本机盘点。网页扫描只使用现有 HTTP 响应的 `Server` 头，结果可能来自代理。上游版本参考不能确认发行版回补、NGINX Plus 或第三方构建的补丁状态，也不能确认相关模块配置或请求路径可达。
+
+Rust `--java-command` 保留 CLI 默认值采集，并增加当前节点的 CPUID、`/proc/cpuinfo` 交叉核对、JVM 映射身份及磁盘构建证据。`--java-attach` 显式读取同用户 JVM 的生效参数和自报构建，必要时会启动 HotSpot 诊断监听器。运行构建与磁盘构建有冲突时保留未知。
+
 ### 可选运行实例与厂商补丁参考核验
 
 ```bash
@@ -350,7 +369,7 @@ php-selfcheck collect --php-command --package-audit --middleware --php-modules -
 
 ## 可选 Web 中间件、PHP 模块与端口采集
 
-PHP 命令、Java4Shell 主机核验、软件包核验、中间件、PHP 模块、端口与 Web 探测七个开关**默认全部关闭**。不添加这些选项时，仅读取基础进程和包信息。页面“主机采集”区域可勾选功能，生成在目标主机手工执行的命令；不会通过网页远程执行系统命令。
+PHP 命令、Java4Shell 主机核验、软件包核验、中间件、PHP 模块、端口与 Web 探测等采集开关**默认关闭**。不添加这些选项时，仅读取基础进程和包信息。页面“主机采集”区域可勾选功能，生成在目标主机手工执行的命令；不会通过网页远程执行系统命令。
 
 ```bash
 # 仅识别 Web 中间件
@@ -368,7 +387,7 @@ php-selfcheck collect --middleware --ports --web-probe \
   --max-web-probes 8 > host-report.json
 ```
 
-七个开关均接受显式 `=true` / `=false`。模块、端口与 Web 功能需要 `--middleware`，Web 功能还需要 `--ports`；不满足依赖会给出错误，不会静默扩大采集。Web Host 用于虚拟主机和证书校验，不用于指定远端地址；IP Host 必须与已关联的本机连接地址一致。
+布尔开关均接受显式 `=true` / `=false`。模块、端口与 Web 功能需要 `--middleware`，Web 功能还需要 `--ports`；不满足依赖会给出错误，不会静默扩大采集。Web Host 用于虚拟主机和证书校验，不用于指定远端地址；IP Host 必须与已关联的本机连接地址一致。
 
 也可复制 `collector.options.example.json`，修改布尔值后使用：
 
@@ -376,7 +395,7 @@ php-selfcheck collect --middleware --ports --web-probe \
 php-selfcheck collect --options collector.options.example.json --web-probe=false > host-report.json
 ```
 
-命令行显式值覆盖文件。采集器配置与服务端 `config.json` 分开，示例文件包含七个开关、php_binary、web_host、web_path、web_schemes、max_web_probes。
+命令行显式值覆盖文件。采集器配置与服务端 `config.json` 分开，示例文件包含采集开关、nginx_path、php_binary、web_host、web_path、web_schemes、max_web_probes。
 
 检测范围与证据边界：
 
@@ -499,7 +518,7 @@ php-selfcheck compare-reports --before before.json --after after.json --json
 
 权限和范围变更用于后续请求、新提交任务；已经提交的任务固定使用当时快照，结果及审计记录包含 `settings_revision`。管理员收紧范围不会中断已有任务，紧急撤销请停止服务。特殊地址、DNS 固定、TLS 校验和限流仍由程序校验。
 
-服务器配置 JSON 同样支持 `collection_defaults`；未设置时七项均默认关闭。`collection_defaults` 包含 `php_command`、`java_command`、`package_audit`、`middleware`、`php_modules`、`ports`、`web_probe` 七个布尔值，仅设置扫描页面所生成的本地采集命令默认选项；用户可修改本次采集选项。模块/端口/Web 需要中间件，Web 还需要端口采集。不远程运行采集命令，不能约束独立采集器。
+服务器配置 JSON 同样支持 `collection_defaults`，各项默认关闭。`collection_defaults` 包含 `php_command`、`java_command`、`java_attach`、`nginx2root`、`package_audit`、`middleware`、`php_modules`、`ports`、`web_probe` 等布尔值，仅设置扫描页面所生成的本地采集命令默认选项；用户可修改本次采集选项。模块/端口/Web 需要中间件，Web 还需要端口采集。不远程运行采集命令，不能约束独立采集器。
 
 部署地址、数据库路径、账号和密码由服务器配置及账号命令维护；后台只显示部署信息和账号名称，不返回密码或密码散列。特征 JSON 使用专门的特征库面板维护。配置面板支持的 JSON 是在线字段子集，可用文件导入完整部署 JSON：浏览器只提取在线字段，忽略账号、密码散列、部署路径和其他字段；也可导出当前在线字段 JSON 用于合并回服务器配置。不要把含凭据的完整配置粘贴到在线 JSON 文本框。
 

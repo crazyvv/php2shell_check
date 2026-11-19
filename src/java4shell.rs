@@ -82,6 +82,9 @@ fn numeric_version(raw: &str) -> Option<Vec<u64>> {
 }
 
 fn version_range(raw: &str) -> (&'static str, &'static str) {
+    if raw.bytes().all(|c| c.is_ascii_digit()) {
+        return ("unknown", "仅有 Java 主版本号，缺少构建证据");
+    }
     let Some(parts) = numeric_version(raw) else {
         return ("unknown", "版本格式无法解析");
     };
@@ -437,6 +440,38 @@ pub fn sanitize_host(raw: &Value) -> Value {
             "effective_flags_complete":false
         }))
         .collect::<Vec<_>>();
+    let audit = &raw["runtime_audit"];
+    let audit_processes: Vec<_> = audit["processes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item.is_object())
+        .take(48)
+        .map(|item| {
+            let flags = &item["effective_flags"];
+            let mappings: Vec<_> = item["mappings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .take(4)
+                .map(|m| {
+                    let release = &m["disk_evidence"]["release"];
+                    json!({"identity_source":bounded_string(&m["identity_source"],32),
+                    "disk_identity_matched":m["disk_identity_matched"].as_bool(),
+                    "disk_evidence":{"full_build":bounded_string(&release["full_build"],128),
+                        "vendor":bounded_string(&release["vendor"],128),
+                        "product":bounded_string(&release["product"],128),
+                        "build_status":bounded_string(&m["disk_evidence"]["build_status"],32)}})
+                })
+                .collect();
+            json!({"pid":item["pid"].as_u64(),"status":bounded_string(&item["status"],40),
+                "runtime_build":bounded_string(&item["runtime_build"],128),
+                "flag_status":bounded_string(&item["flag_status"],40),
+                "effective_flags":{"UseBASE64Intrinsics":flags["UseBASE64Intrinsics"].as_bool(),
+                    "UseAVX":flags["UseAVX"].as_u64()},"mappings":mappings})
+        })
+        .collect();
+
     let hardware = &raw["hardware"];
     json!({
         "status":bounded_string(&raw["status"], 80),
@@ -451,6 +486,7 @@ pub fn sanitize_host(raw: &Value) -> Value {
         },
         "runtimes":runtimes,
         "running_processes":processes,
+        "runtime_audit":{"processes":audit_processes,"cpu":{"manual_review":audit["cpu"]["manual_review"].as_bool()}},
         "checks":{
             "malformed_base64_sent":false,
             "poc_executed":false,

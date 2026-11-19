@@ -105,7 +105,7 @@ function settingsSwitches(){
     input.onchange=()=>{try{const current=JSON.parse($('settingsDocument').value);current[key]=input.checked;$('settingsDocument').value=JSON.stringify(current,null,2);settingsNotice('草稿已修改，保存后生效。');}catch(e){settingsNotice(e.message,true);}};
     const wrap=node('label');wrap.append(input,node('span',label));$('settingsSwitches').append(wrap);
   }
-  for(const [key,label] of [['php_command','默认采集 PHP 命令配置'],['java_command','默认采集 Java4Shell 主机条件'],['package_audit','默认采集软件包补丁'],['middleware','默认采集中间件'],['php_modules','默认采集 PHP 模块'],['ports','默认采集监听端口'],['web_probe','默认本机 Web 探测']]){
+  for(const [key,label] of [['php_command','默认采集 PHP 命令配置'],['java_command','默认采集 Java4Shell 主机条件'],['java_attach','默认读取 JVM 生效参数（诊断附加）'],['nginx2root','默认采集 Nginx2Root 主机条件'],['package_audit','默认采集软件包补丁'],['middleware','默认采集中间件'],['php_modules','默认采集 PHP 模块'],['ports','默认采集监听端口'],['web_probe','默认本机 Web 探测']]){
     const input=node('input');input.type='checkbox';input.checked=doc.collection_defaults?.[key]===true;input.disabled=settingsBusy;
     input.onchange=()=>{try{const current=JSON.parse($('settingsDocument').value);current.collection_defaults=current.collection_defaults || {};current.collection_defaults[key]=input.checked;$('settingsDocument').value=JSON.stringify(current,null,2);settingsNotice('采集默认选项草稿已修改，保存后生效。');}catch(e){settingsNotice(e.message,true);}};
     const wrap=node('label');wrap.append(input,node('span',label));$('settingsSwitches').append(wrap);

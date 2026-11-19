@@ -35,6 +35,8 @@ pub struct Policy {
 pub struct CollectionDefaults {
     pub php_command: bool,
     pub java_command: bool,
+    pub java_attach: bool,
+    pub nginx2root: bool,
     pub package_audit: bool,
     pub middleware: bool,
     pub php_modules: bool,
@@ -43,6 +45,10 @@ pub struct CollectionDefaults {
 }
 impl CollectionDefaults {
     pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.java_attach || self.java_command,
+            "JVM 诊断附加需要 java_command"
+        );
         anyhow::ensure!(
             !(self.php_modules || self.ports || self.web_probe) || self.middleware,
             "模块、端口和 Web 采集需要 middleware"

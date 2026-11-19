@@ -121,7 +121,7 @@ fn file_id(path: &Path) -> Option<(u64, u64)> {
 fn file_id(_: &Path) -> Option<(u64, u64)> {
     None
 }
-fn linux_device(dev: u64) -> (u64, u64) {
+pub(crate) fn linux_device(dev: u64) -> (u64, u64) {
     (
         ((dev >> 8) & 0xfff) | ((dev >> 32) & 0xfffff000),
         (dev & 0xff) | ((dev >> 12) & 0xffffff00),

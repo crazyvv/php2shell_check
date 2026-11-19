@@ -190,9 +190,27 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
     }
     let middleware = crate::middleware::collect(options).await;
     let package_audit = crate::hostaudit::collect(options.package_audit).await;
-    let java4shell = crate::java4shell::collect(options.java_command).await;
+    let mut java4shell = crate::java4shell::collect(options.java_command).await;
+    #[cfg(target_os = "linux")]
+    if options.java_command {
+        java4shell["checks"]["process_attach_requested"] = json!(options.java_attach);
+        let audit = crate::java_runtime_audit::collect(options.java_attach).await;
+        java4shell["checks"]["process_attached"] = json!(
+            audit["processes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|p| p["runtime_build"].is_string()
+                    || matches!(p["flag_status"].as_str(), Some("read" | "flags_missing")))
+        );
+        java4shell["runtime_audit"] = audit;
+    }
+    let nginx2root = crate::nginx2root::collect(
+        options.nginx2root || options.middleware,
+        options.nginx_path.as_deref(),
+    );
     bounded_report(
-        json!({"php_command":{"status":if options.php_command {"enabled"}else{"disabled"},"scope":"cli_only","detail":"显式开启才运行 PHP；CLI 配置不能代表 Web/FPM"},"java4shell":java4shell,"package_audit":package_audit,"collection_options":options,"middleware":middleware,"schema":"php-selfcheck-host/v1","hostname":std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim(),"collected_at":chrono::Utc::now().to_rfc3339(),"platform":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"source":"developer_supplied_unverified","checks":checks,"runtime_observations":runtime_observations,"processes":processes,"limitations":["CLI 版本不等于 Web/FPM 实例版本；报告不自动证明补丁或漏洞状态。","Java4Shell 核验只检查版本、VM、当前 CPU 与受限参数线索，不触发漏洞或确认可利用性。","仅检查当前主机可见进程与标准路径；容器、远端主机、自定义安装目录需另行核验。","此报告未签名，平台记录为开发者提交材料。"]}),
+        json!({"php_command":{"status":if options.php_command {"enabled"}else{"disabled"},"scope":"cli_only","detail":"显式开启才运行 PHP；CLI 配置不能代表 Web/FPM"},"java4shell":java4shell,"nginx2root":nginx2root,"package_audit":package_audit,"collection_options":options,"middleware":middleware,"schema":"php-selfcheck-host/v1","hostname":std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim(),"collected_at":chrono::Utc::now().to_rfc3339(),"platform":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"source":"developer_supplied_unverified","checks":checks,"runtime_observations":runtime_observations,"processes":processes,"limitations":["CLI 版本不等于 Web/FPM 实例版本；报告不自动证明补丁或漏洞状态。","Java4Shell 核验只检查版本、VM、当前 CPU 与受限参数线索，不触发漏洞或确认可利用性。","仅检查当前主机可见进程与标准路径；容器、远端主机、自定义安装目录需另行核验。","此报告未签名，平台记录为开发者提交材料。"]}),
     )
 }
 
@@ -207,6 +225,10 @@ fn bounded_report(mut report: Value) -> Value {
         "/middleware/web_probes",
         "/runtime_observations",
         "/package_audit/instances",
+        "/java4shell/runtime_audit/installations",
+        "/java4shell/runtime_audit/processes",
+        "/nginx2root/installations",
+        "/nginx2root/running_processes",
         "/java4shell/runtimes",
         "/java4shell/running_processes",
     ] {
@@ -264,6 +286,9 @@ pub struct CollectOptions {
     pub php_command: bool,
     pub php_binary: Option<PathBuf>,
     pub java_command: bool,
+    pub java_attach: bool,
+    pub nginx2root: bool,
+    pub nginx_path: Option<PathBuf>,
     pub package_audit: bool,
     pub middleware: bool,
     pub php_modules: bool,
@@ -281,6 +306,9 @@ impl Default for CollectOptions {
             php_command: false,
             php_binary: None,
             java_command: false,
+            java_attach: false,
+            nginx2root: false,
+            nginx_path: None,
             package_audit: false,
             middleware: false,
             php_modules: false,
@@ -295,6 +323,20 @@ impl Default for CollectOptions {
 }
 impl CollectOptions {
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.java_attach || self.java_command,
+            "--java-attach 需要 --java-command"
+        );
+        if let Some(path) = &self.nginx_path {
+            anyhow::ensure!(
+                self.nginx2root || self.middleware,
+                "--nginx-path 需要 --nginx2root 或 --middleware"
+            );
+            anyhow::ensure!(
+                path.is_absolute() && path.is_file(),
+                "NGINX 路径必须是存在的绝对文件路径"
+            );
+        }
         if let Some(file) = &self.fingerprint_file {
             crate::fingerprints::Library::load(file)?;
         }
@@ -360,6 +402,15 @@ pub struct CollectArgs {
     /// Java4Shell 主机核验：运行 java -version/PrintFlagsFinal 并读取 CPU 与受限 JVM 参数
     #[arg(long,num_args=0..=1,default_missing_value="true",require_equals=true)]
     pub java_command: Option<bool>,
+    /// 读取目标 JVM 的生效参数（需要 --java-command）
+    #[arg(long,num_args=0..=1,default_missing_value="true",require_equals=true)]
+    pub java_attach: Option<bool>,
+    /// 采集 Nginx2Root 本机二进制与 SCTP 线索
+    #[arg(long,num_args=0..=1,default_missing_value="true",require_equals=true)]
+    pub nginx2root: Option<bool>,
+    /// 将指定的 NGINX 文件加入本机盘点
+    #[arg(long)]
+    pub nginx_path: Option<PathBuf>,
     /// 从运行进程/模块反查软件包，核对厂商参考规则与旧进程状态
     #[arg(long,num_args=0..=1,default_missing_value="true",require_equals=true)]
     pub package_audit: Option<bool>,
@@ -410,6 +461,15 @@ impl CollectArgs {
         }
         if let Some(value) = self.php_binary {
             options.php_binary = Some(value);
+        }
+        if let Some(value) = self.java_attach {
+            options.java_attach = value;
+        }
+        if let Some(path) = self.nginx_path {
+            options.nginx_path = Some(path);
+        }
+        if let Some(value) = self.nginx2root {
+            options.nginx2root = value;
         }
         if let Some(value) = self.java_command {
             options.java_command = value;

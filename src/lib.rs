@@ -23,3 +23,7 @@ pub mod settings;
 pub mod evidence_lab;
 
 pub mod java4shell;
+
+#[cfg(target_os = "linux")]
+mod java_runtime_audit;
+mod nginx2root;

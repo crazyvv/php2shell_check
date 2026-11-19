@@ -84,6 +84,23 @@ function java4shellView(j) {
   const required=Array.isArray(j.required_evidence)?j.required_evidence:[];if(required.length)box.append(node('p','缺失证据：'+required.join('；'),'fine'));
   wrap.append(box);return wrap;
 }
+function nginx2rootView(n) {
+  const wrap=node('div');
+  if(!n?.status || ['disabled','not_observed'].includes(n.status))return wrap;
+  const box=node('div',undefined,'runtime-comparison java4shell-evidence');
+  box.append(node('strong','Nginx2Root · '+(n.status==='nginx_hint'?'HTTP 响应线索':'主机提交证据')));
+  const status={potential:'上游受影响范围',meets_upstream_reference:'达到上游版本基线',outside_upstream_range:'低于披露范围',unknown:'未知'};
+  const rows=[...(n.running_processes || []),...(n.installations || [])];
+  if(n.status==='nginx_hint')rows.push(n);
+  for(const row of rows.slice(0,24)){
+    box.append(node('p',`${row.pid ? 'PID '+row.pid+' · ' : ''}${row.path || 'NGINX'} · ${row.version || '版本未知'}`,'fine'));
+    for(const cve of (row.cves || []).slice(0,5))
+      box.append(node('p',`${cve.cve} · ${status[cve.status] || '未知'}`,'fine'));
+  }
+  if(n.sctp)box.append(node('p',`Linux ${n.sctp.kernel_release || '未知'} · SCTP 模块：${n.sctp.module_visible===true?'可见':'未确认'} · 内核补丁待核验`,'fine'));
+  box.append(node('p','根据上游公告解释所见版本；需要核对发行包回补和实际配置。','fine'));
+  wrap.append(box);return wrap;
+}
 function javaHostEvidenceView(j) {
   const wrap=node('div');if(!j || !j.status || j.status==='disabled')return wrap;
   const labels={candidate_found:'发现候选，需优先复核',no_runtime_found:'未发现可见 Java 运行时',no_candidate_in_discovered_scope:'已发现范围内未形成候选',unknown:'证据不足'};
@@ -93,6 +110,13 @@ function javaHostEvidenceView(j) {
   const statuses={affected_candidate:'受影响版本候选',affected_candidate_eol:'非支持线候选',candidate_hardware_unknown:'CPU 条件未知',candidate_default_mitigated:'采集器清洁环境观察到缓解默认值',fixed_release:'达到公开修复基线',not_in_disclosed_range:'不在披露版本范围',not_applicable_hardware:'当前节点硬件不适用',not_applicable_vm:'VM 实现不适用',unknown:'未知'};
   for(const r of (Array.isArray(j.runtimes)?j.runtimes:[]).slice(0,32))box.append(node('p',`${r.binary || 'Java 路径未知'} · ${r.vm || 'VM 未知'} · Java ${r.version || '版本未知'} · ${statuses[r.status] || r.status || '未知'} · ${r.detail || ''}`,'fine'));
   for(const p of (Array.isArray(j.running_processes)?j.running_processes:[]).slice(0,32)){const flags=Array.isArray(p.known_command_line_flags)?p.known_command_line_flags.join(', '):'';box.append(node('p',`JVM PID ${p.pid || '未知'} · ${p.name || ''} · 相关命令行参数 ${flags || '未观察到（环境与参数文件未读取）'}`,'fine'));}
+  for(const p of (j.runtime_audit?.processes || []).slice(0,32)){
+    box.append(node('p',`JVM PID ${p.pid ?? '未知'} · ${p.status || '未知'} · 运行构建 ${p.runtime_build || '未知'} · 生效参数 ${p.flag_status || '未知'}`,'fine'));
+    for(const m of (p.mappings || []).slice(0,4)){
+      const d=m.disk_evidence;
+      if(d?.full_build)box.append(node('p',`磁盘构建 ${d.full_build} · ${d.vendor || '发行商未知'} · ${m.disk_identity_matched===true?'身份匹配':'身份待核'}`,'fine'));
+    }
+  }
   box.append(node('p','该材料不确认外部输入到达 Base64 解码器，也不确认漏洞可利用或修复已独立验证。','fine'));wrap.append(box);return wrap;
 }
 function hostEvidenceView(e) {
@@ -100,7 +124,7 @@ function hostEvidenceView(e) {
   wrap.append(node('b','主机材料 / 手工复核：未经独立核验'));
   if(e.report_limits?.truncated) wrap.append(node('p','报告因大小限制省略了部分条目，结果不完整；未列出不代表不存在。','fine'));
   if(e.php_command?.status === 'disabled') wrap.append(node('p','本次未开启 PHP 命令采集。','fine'));
-  wrap.append(javaHostEvidenceView(e.java4shell));
+  wrap.append(javaHostEvidenceView(e.java4shell),nginx2rootView(e.nginx2root));
   for(const r of e.runtime_observations || []) {
     wrap.append(node('p',`${r.scope === 'cli_only' ? '仅 CLI，不能代表 Web' : r.scope === 'web_runtime_claimed' ? '提交人声明为 Web 实例' : '运行环境归属未知'} · SAPI ${r.sapi} · PHP ${r.version || '未知'} · upload_progress ${statusNames[r.upload_progress] || '未知'}`,'fine'));
   }
@@ -188,7 +212,7 @@ function renderJobs(jobs, endpoint='/api/jobs', showOwners=false, options={}) {
         const row=node('tr'), target=node('td'), verdict=node('td'), evidence=node('td');
         target.append(node('div',r.target),node('p',`${r.connected_ip || '—'} · HTTP ${r.http_status || '—'}`,'fine'));
         verdict.append(badge(r.verdict)); evidence.append(evidenceSummary(r));
-        evidence.append(assessmentView(r.assessment),fingerprintsView(r.fingerprints),java4shellView(r.java4shell));
+        evidence.append(assessmentView(r.assessment),fingerprintsView(r.fingerprints),java4shellView(r.java4shell),nginx2rootView(r.nginx2root));
         if(r.version_warnings?.length) evidence.append(node('p',`需优先复核的版本声明：${r.version_warnings.join('、')}。多版本冲突时仍需确认实际后端。`,'fine'));
         if(r.host_comparison) evidence.append(hostComparisonView(r.host_comparison));
         for(const h of r.host_evidence || []) evidence.append(hostEvidenceView(h.assessment));

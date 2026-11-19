@@ -42,7 +42,7 @@ async function boot() {
     if(!me.scope_configured) notice('管理员尚未配置资产网段白名单，检测将被拒绝。请先按部署说明配置。',true);
     probePermissions={multipart:Boolean(me.probe_multipart_allowed),progress:Boolean(me.probe_upload_progress_allowed)};updateProbeOptions();
     const defaults=me.collection_defaults || {};
-    for(const [id,key] of [['collectPhpCommand','php_command'],['collectJavaCommand','java_command'],['collectPackageAudit','package_audit'],['collectMiddleware','middleware'],['collectModules','php_modules'],['collectPorts','ports'],['collectWeb','web_probe']])if(typeof defaults[key]==='boolean')$(id).checked=defaults[key];
+    for(const [id,key] of [['collectPhpCommand','php_command'],['collectJavaCommand','java_command'],['collectJavaAttach','java_attach'],['collectNginx2Root','nginx2root'],['collectPackageAudit','package_audit'],['collectMiddleware','middleware'],['collectModules','php_modules'],['collectPorts','ports'],['collectWeb','web_probe']])if(typeof defaults[key]==='boolean')$(id).checked=defaults[key];
     updateCollectCommand();
     await refresh();
   } catch(e) { notice(e.message,true); }
@@ -52,15 +52,17 @@ boot();
 
 function updateCollectCommand(){
   const middleware=$('collectMiddleware').checked;
+  $('collectJavaAttach').disabled=!$('collectJavaCommand').checked;
+  if($('collectJavaAttach').disabled)$('collectJavaAttach').checked=false;
   for(const id of ['collectModules','collectPorts']){$(id).disabled=!middleware;if(!middleware)$(id).checked=false;}
   $('collectWeb').disabled=!middleware || !$('collectPorts').checked;if($('collectWeb').disabled)$('collectWeb').checked=false;
   $('collectHost').disabled=!$('collectWeb').checked;
   const command=['php-selfcheck collect'];
-  for(const [id,flag] of [['collectPhpCommand','--php-command'],['collectJavaCommand','--java-command'],['collectPackageAudit','--package-audit'],['collectMiddleware','--middleware'],['collectModules','--php-modules'],['collectPorts','--ports'],['collectWeb','--web-probe']])if($(id).checked)command.push(flag);
+  for(const [id,flag] of [['collectPhpCommand','--php-command'],['collectJavaCommand','--java-command'],['collectJavaAttach','--java-attach'],['collectNginx2Root','--nginx2root'],['collectPackageAudit','--package-audit'],['collectMiddleware','--middleware'],['collectModules','--php-modules'],['collectPorts','--ports'],['collectWeb','--web-probe']])if($(id).checked)command.push(flag);
   const host=$('collectHost').value.trim();
   if($('collectWeb').checked && host){if(!/^[a-zA-Z0-9._:[\]-]+$/.test(host)){$('collectCommand').textContent='请输入不含端口、凭据或路径的 Host；IPv6 使用方括号。';return;}command.push("--web-host '"+host+"'");}
   $('collectCommand').textContent=command.join(' ')+' > host-report.json';
 }
-for(const id of ['collectPhpCommand','collectJavaCommand','collectPackageAudit','collectMiddleware','collectModules','collectPorts','collectWeb'])$(id).onchange=updateCollectCommand;
+for(const id of ['collectPhpCommand','collectJavaCommand','collectJavaAttach','collectNginx2Root','collectPackageAudit','collectMiddleware','collectModules','collectPorts','collectWeb'])$(id).onchange=updateCollectCommand;
 $('collectHost').oninput=updateCollectCommand;
 updateCollectCommand();
