@@ -1,5 +1,5 @@
-use php_selfcheck::assessment::{self, remote};
 use serde_json::json;
+use x2shell_check::assessment::{self, remote};
 #[test]
 fn no_remote_sapi_or_progress_claim_from_generic_headers() {
     let a = remote(&[("Server".into(), "nginx/1.26".into())], b"", &[]);
@@ -111,11 +111,11 @@ fn vendor_reference_import_never_becomes_verified_or_promotes_verdict() {
 #[test]
 fn passive_surfaces_do_not_promote_version_or_confirm_new_cve() {
     let url = url::Url::parse("https://example.com/path").unwrap();
-    let r = php_selfcheck::scanner::inspect_with_library(
+    let r = x2shell_check::scanner::inspect_with_library(
         &[],
         br#"<form action="/upload?secret=hidden" enctype="multipart/form-data"><input name="f" type="file"></form>Failed to decode session object; Allowed memory size of 123 bytes exhausted"#,
         Some(&url),
-        &php_selfcheck::fingerprints::builtin(),
+        &x2shell_check::fingerprints::builtin(),
     );
     assert_eq!(r["verdict"], "未发现 PHP 特征");
     assert_eq!(r["exploitation_verified"], false);

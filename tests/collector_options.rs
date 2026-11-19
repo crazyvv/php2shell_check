@@ -1,5 +1,5 @@
 use clap::Parser;
-use php_selfcheck::collector::{CollectArgs, CollectOptions};
+use x2shell_check::collector::{CollectArgs, CollectOptions};
 #[derive(Parser)]
 struct Cli {
     #[command(flatten)]

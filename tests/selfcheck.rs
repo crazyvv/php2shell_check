@@ -1,9 +1,9 @@
-use php_selfcheck::{
+use serde_json::{Value, json};
+use std::{collections::BTreeMap, net::IpAddr, sync::Arc};
+use x2shell_check::{
     config::{self, Config},
     portal, scanner,
 };
-use serde_json::{Value, json};
-use std::{collections::BTreeMap, net::IpAddr, sync::Arc};
 fn cfg() -> Config {
     Config {
         collection_defaults: Default::default(),
@@ -1286,7 +1286,7 @@ async fn administrator_fingerprint_editor_authorization_validation_conflicts_and
         .config
         .fingerprint_library
         .clone()
-        .unwrap_or_else(php_selfcheck::fingerprints::builtin);
+        .unwrap_or_else(x2shell_check::fingerprints::builtin);
     let saved = admin_post(
         &admin,
         &p,
@@ -1315,7 +1315,7 @@ async fn administrator_fingerprint_editor_authorization_validation_conflicts_and
             &admin,
             &p,
             "/api/admin/fingerprints/save",
-            json!({"document":php_selfcheck::fingerprints::BUILTIN,"revision":0})
+            json!({"document":x2shell_check::fingerprints::BUILTIN,"revision":0})
         )
         .await
         .status(),
@@ -1335,7 +1335,7 @@ async fn administrator_fingerprint_editor_authorization_validation_conflicts_and
     );
     let restarted = portal::State::new(loaded).unwrap();
     let saved_doc =
-        php_selfcheck::rulebook::saved_document(std::path::Path::new(&restarted.config.database))
+        x2shell_check::rulebook::saved_document(std::path::Path::new(&restarted.config.database))
             .unwrap()
             .unwrap();
     assert_eq!(saved_doc.0, 1);
@@ -1385,7 +1385,7 @@ async fn administrator_fingerprint_editor_authorization_validation_conflicts_and
         )
         .unwrap();
     assert_eq!(count, 1);
-    let mut disabled: Value = serde_json::from_str(php_selfcheck::fingerprints::BUILTIN).unwrap();
+    let mut disabled: Value = serde_json::from_str(x2shell_check::fingerprints::BUILTIN).unwrap();
     disabled["disabled_rules"] = json!(["wordpress"]);
     let off = admin_post(
         &admin,
@@ -1658,7 +1658,7 @@ async fn administrator_settings_are_authorized_atomic_hot_and_persistent() {
     );
     db.execute_batch("DROP TRIGGER fail_settings_audit;")
         .unwrap();
-    let snapshot = php_selfcheck::settings::Snapshot::load(&db, &p.state.config).unwrap();
+    let snapshot = x2shell_check::settings::Snapshot::load(&db, &p.state.config).unwrap();
     assert_eq!(snapshot.revision, 1);
     assert!(snapshot.policy.headers_only);
     assert!(snapshot.policy.probe_multipart);

@@ -1,6 +1,6 @@
-use php_selfcheck::evidence_lab;
 use serde_json::{Value, json};
 use std::process::Command;
+use x2shell_check::evidence_lab;
 
 fn report(sapi: &str, version: &str, progress: &str, patched: bool) -> Value {
     json!({

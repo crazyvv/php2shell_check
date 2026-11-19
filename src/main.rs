@@ -1,11 +1,11 @@
 use anyhow::{Result, ensure};
 use clap::{Parser, Subcommand};
-use php_selfcheck::{
+use std::{collections::BTreeMap, net::IpAddr, path::PathBuf};
+use x2shell_check::{
     collector,
     config::{self, Config},
     evidence_lab, fingerprints, portal, scanner,
 };
-use std::{collections::BTreeMap, net::IpAddr, path::PathBuf};
 #[derive(Parser)]
 #[command(
     name = "x2shell-check",

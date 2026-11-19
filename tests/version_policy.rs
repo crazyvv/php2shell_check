@@ -1,4 +1,4 @@
-use php_selfcheck::scanner::{self, inspect, stable_version};
+use x2shell_check::scanner::{self, inspect, stable_version};
 #[test]
 fn raw_prerelease_unknown_and_distro_versions_are_not_truncated() {
     for raw in [

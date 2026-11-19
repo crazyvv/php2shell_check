@@ -1,9 +1,9 @@
-use php_selfcheck::{
+use serde_json::{Value, json};
+use url::Url;
+use x2shell_check::{
     fingerprints::{self, Library},
     scanner,
 };
-use serde_json::{Value, json};
-use url::Url;
 fn detect(headers: &[(&str, &str)], body: &str) -> Value {
     let url = Url::parse("https://app.example.com/").unwrap();
     fingerprints::builtin().detect(
@@ -279,7 +279,7 @@ fn match_limits_and_version_conflicts_are_explicit() {
 
 #[test]
 fn configuration_resolves_custom_files_and_rejects_invalid_rules_at_startup() {
-    use php_selfcheck::config::{self, Config};
+    use x2shell_check::config::{self, Config};
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     let file = dir.path().join("fingerprints.json");
