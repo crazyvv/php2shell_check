@@ -190,9 +190,10 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
     }
     let middleware = crate::middleware::collect(options).await;
     let package_audit = crate::hostaudit::collect(options.package_audit).await;
-    let mut java4shell = crate::java4shell::collect(options.java_command).await;
+    let java4shell = crate::java4shell::collect(options.java_command).await;
     #[cfg(target_os = "linux")]
-    if options.java_command {
+    let java4shell = if options.java_command {
+        let mut java4shell = java4shell;
         java4shell["checks"]["process_attach_requested"] = json!(options.java_attach);
         let audit = crate::java_runtime_audit::collect(options.java_attach).await;
         java4shell["checks"]["process_attached"] = json!(
@@ -204,7 +205,10 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
                     || matches!(p["flag_status"].as_str(), Some("read" | "flags_missing")))
         );
         java4shell["runtime_audit"] = audit;
-    }
+        java4shell
+    } else {
+        java4shell
+    };
     let mut nginx2root = crate::nginx2root::collect(
         options.nginx2root || options.middleware,
         options.nginx_path.as_deref(),
