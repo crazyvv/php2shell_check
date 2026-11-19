@@ -1,5 +1,6 @@
 //! Defensive Java4Shell inventory. It never decodes attacker data or runs a PoC.
 use regex::Regex;
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -301,6 +302,286 @@ fn processes(proc_root: &Path, binaries: &mut BTreeSet<PathBuf>) -> Vec<Value> {
     out
 }
 
+#[derive(Default, Serialize)]
+pub(crate) struct Release {
+    pub(crate) version: Option<String>,
+    pub(crate) full_build: Option<String>,
+    pub(crate) vendor: Option<String>,
+    pub(crate) vendor_version: Option<String>,
+    pub(crate) product: Option<String>,
+    pub(crate) graalvm_version: Option<String>,
+}
+
+pub(crate) fn release(data: &str) -> Release {
+    let fields: BTreeMap<_, _> = data
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            let value = value.trim().trim_matches('"');
+            (!value.is_empty() && value.len() <= 256).then_some((key, value))
+        })
+        .collect();
+    let get = |key| fields.get(key).map(|value| (*value).to_owned());
+    let version = get("JAVA_VERSION");
+    let full_build = get("JAVA_RUNTIME_VERSION")
+        .or_else(|| get("FULL_VERSION"))
+        .or_else(|| version.clone())
+        .filter(|value| value.contains('+') || value.contains("-b") || value.contains("-perf"));
+    let graalvm_version = get("GRAALVM_VERSION");
+    let edition = get("GRAALVM_EDITION")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let product = if edition.contains("enterprise edition")
+        || (edition == "ee"
+            && graalvm_version
+                .as_deref()
+                .is_some_and(|v| v.starts_with("21.3.")))
+    {
+        Some("Oracle GraalVM Enterprise Edition".into())
+    } else if graalvm_version.is_some() {
+        Some("GraalVM".into())
+    } else {
+        get("JAVA_VM_NAME")
+    };
+    Release {
+        version,
+        full_build,
+        vendor: get("IMPLEMENTOR"),
+        vendor_version: get("IMPLEMENTOR_VERSION"),
+        product,
+        graalvm_version,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum BuildStatus {
+    Affected,
+    NotAffected,
+    Unknown,
+}
+
+pub(crate) fn build_status(r: &Release) -> BuildStatus {
+    use BuildStatus::*;
+    let vendor = r.vendor.as_deref().unwrap_or_default();
+    let vendor_version = r.vendor_version.as_deref().unwrap_or_default();
+    if r.product.as_deref().is_some_and(|p| p.contains("OpenJ9")) {
+        return NotAffected;
+    }
+    if vendor == "Oracle Corporation"
+        && r.product.as_deref() == Some("Oracle GraalVM Enterprise Edition")
+        && r.graalvm_version.as_deref().or(r.version.as_deref()) == Some("21.3.20.0.3")
+    {
+        return Affected;
+    }
+    if r.product
+        .as_deref()
+        .is_some_and(|p| p.contains("GraalVM") || p.contains("OpenJ9"))
+        || vendor_version.contains("GraalVM")
+    {
+        return Unknown;
+    }
+    let Some(full) = r.full_build.as_deref() else {
+        return Unknown;
+    };
+    if vendor == "Oracle Corporation" {
+        match full {
+            "1.8.0_511-perf-b33" => return Affected,
+            "1.8.0_513-perf-b4" | "1.8.0_513-perf-b04" => return NotAffected,
+            _ => {}
+        }
+    }
+    let Some((version, build)) = full.split_once('+') else {
+        return Unknown;
+    };
+    let Ok(build) = build.split('-').next().unwrap_or_default().parse::<u32>() else {
+        return Unknown;
+    };
+    let Ok(numbers) = version
+        .split('.')
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return Unknown;
+    };
+    let [major, minor, update, extra, ..] = {
+        let mut padded = [0; 5];
+        if numbers.len() > padded.len() {
+            return Unknown;
+        }
+        padded[..numbers.len()].copy_from_slice(&numbers);
+        padded
+    };
+    let (first, last) = match major {
+        17 => (6, 21),
+        21 => (0, 13),
+        25 => (0, 5),
+        27 => (0, 1),
+        _ => return Unknown,
+    };
+    if minor != 0 {
+        return Unknown;
+    }
+    let oracle = vendor == "Oracle Corporation";
+    let corretto = vendor == "Amazon.com Inc.";
+    let known_openjdk = matches!(vendor, "OpenJDK" | "Eclipse Adoptium");
+    if !(oracle || corretto || known_openjdk) {
+        return Unknown;
+    }
+    if update < first {
+        return NotAffected;
+    }
+    if major == 17 && update == 6 && extra == 0 && build < 10 {
+        return Unknown;
+    }
+    if oracle && full == "17.0.21.0.3+1" {
+        return Affected;
+    }
+    if update < last || (update == last && numbers.len() <= 3) {
+        return Affected;
+    }
+    // Oracle's November CSPU release notes identify +4 for each of these lines.
+    if oracle && numbers.len() == 4 && update == last && extra == 1 && build == 4 {
+        return NotAffected;
+    }
+    if vendor == "OpenJDK"
+        && numbers.len() == 4
+        && update == last
+        && extra == 1
+        && build == if major == 27 { 4 } else { 2 }
+    {
+        return NotAffected;
+    }
+    if corretto && numbers.len() == 4 {
+        let fixed_build = if major == 27 { 4 } else { 2 };
+        let vendor_build = vendor_version
+            .strip_prefix("Corretto-")
+            .unwrap_or(vendor_version);
+        let fixed = format!("{major}.0.{last}.1.{fixed_build}");
+        if update == last && extra == 1 && vendor_build == fixed && build == fixed_build {
+            return NotAffected;
+        }
+    }
+    Unknown
+}
+
+#[derive(Default, Serialize)]
+pub(crate) struct Flags {
+    #[serde(rename = "UseBASE64Intrinsics")]
+    pub(crate) use_base64_intrinsics: Option<bool>,
+    #[serde(rename = "UseAVX")]
+    pub(crate) use_avx: Option<u32>,
+}
+
+pub(crate) fn decision(
+    build: BuildStatus,
+    cpu: Option<bool>,
+    flags: &Flags,
+) -> (&'static str, &'static str) {
+    if build == BuildStatus::NotAffected || cpu == Some(false) {
+        return ("not_affected", "excluded_build_or_cpu");
+    }
+    if (build == BuildStatus::Affected || cpu == Some(true))
+        && (flags.use_base64_intrinsics == Some(false) || flags.use_avx.is_some_and(|avx| avx <= 2))
+    {
+        return ("mitigated", "effective_vm_flags");
+    }
+    if build == BuildStatus::Affected
+        && cpu == Some(true)
+        && flags.use_base64_intrinsics == Some(true)
+        && flags.use_avx == Some(3)
+    {
+        return ("affected", "build_cpu_and_effective_vm_flags");
+    }
+    ("unknown", "incomplete_or_conflicting_evidence")
+}
+
+pub async fn launcher_gate(path: &Path) -> Value {
+    let command = crate::collector::run_clean_java(path, &["-version"]).await;
+    let output = command["output"].as_str().unwrap_or_default();
+    let mut metadata = path
+        .parent()
+        .and_then(Path::parent)
+        .and_then(|home| text_file(&home.join("release"), 65_536))
+        .map(|data| release(&data))
+        .unwrap_or_default();
+    let banner = VERSION
+        .captures(output)
+        .and_then(|caps| caps.get(1))
+        .map(|v| v.as_str());
+    let build = output
+        .lines()
+        .filter(|line| line.contains("Runtime Environment"))
+        .find_map(|line| {
+            line.split_once("(build ")?
+                .1
+                .split(|c: char| c == ')' || c == ',' || c.is_whitespace())
+                .next()
+        })
+        .filter(|value| !value.is_empty() && value.len() <= 128);
+    let conflicting = banner
+        .zip(metadata.version.as_deref())
+        .is_some_and(|(running, disk)| running != disk)
+        || build
+            .zip(metadata.full_build.as_deref())
+            .is_some_and(|(running, disk)| running != disk);
+    metadata.version = banner.map(str::to_owned);
+    metadata.full_build = build
+        .filter(|value| value.contains('+') || value.contains("-perf"))
+        .map(str::to_owned);
+    let lower = output.to_ascii_lowercase();
+    if lower.contains("openj9") || lower.contains("ibm j9") {
+        metadata.product = Some("OpenJ9".into());
+    }
+    let status = if command["exit_code"] == 0 && !conflicting && banner.is_some() {
+        build_status(&metadata)
+    } else {
+        BuildStatus::Unknown
+    };
+    let (verdict, reason) = match status {
+        BuildStatus::NotAffected => ("not_affected", "excluded_build"),
+        BuildStatus::Affected => ("potential", "version_gate_only"),
+        BuildStatus::Unknown if conflicting => {
+            ("unknown", "launcher_version_conflicts_with_release")
+        }
+        BuildStatus::Unknown => ("unknown", "insufficient_launcher_build_evidence"),
+    };
+    json!({"kind":"java-binary","binary":path,"version":metadata.full_build.as_ref().or(metadata.version.as_ref()),
+        "build_status":status,"status":verdict,"reason":reason,"vendor":metadata.vendor,"product":metadata.product,
+        "flag_source":"unavailable","effective_flags_complete":false,"command_exit_code":command["exit_code"]})
+}
+
+pub fn demo_report() -> Value {
+    let enabled = Flags {
+        use_base64_intrinsics: Some(true),
+        use_avx: Some(3),
+    };
+    let disabled = Flags {
+        use_base64_intrinsics: Some(false),
+        use_avx: Some(3),
+    };
+    let mut findings = Vec::new();
+    for (name, full, cpu, flags, expected) in [
+        ("affected", "17.0.21+9", true, &enabled, "affected"),
+        ("fixed", "21.0.13.1+2", true, &enabled, "not_affected"),
+        ("boundary_build", "17.0.6+10", true, &enabled, "affected"),
+        ("mitigated", "17.0.21+9", true, &disabled, "mitigated"),
+        ("cpu_excluded", "17.0.21+9", false, &enabled, "not_affected"),
+        ("build_gap", "17.0.21.0.4+2", true, &enabled, "unknown"),
+    ] {
+        let build = build_status(&Release {
+            full_build: Some(full.into()),
+            vendor: Some("OpenJDK".into()),
+            ..Release::default()
+        });
+        let (status, reason) = decision(build, Some(cpu), flags);
+        findings.push(json!({"name":name,"version":full,"expected":expected,"status":status,"reason":reason,"passed":status==expected}));
+    }
+    let passed = findings.iter().filter(|row| row["passed"] == true).count();
+    json!({"scope":"synthetic_java_demo","java4shell":{"cve":CVE,"demo":findings},
+        "audit":{"demo_passed":passed==findings.len(),"passed":passed,"total":findings.len()}})
+}
+
 pub(crate) fn application_inventory(root: &Path, depth: usize) -> Value {
     const PRODUCTS: [(&str, &str); 11] = [
         ("keycloak", "Keycloak"),
@@ -370,7 +651,17 @@ pub(crate) fn application_inventory(root: &Path, depth: usize) -> Value {
 
 #[cfg(target_os = "macos")]
 pub async fn collect_macos(options: &crate::collector::CollectOptions) -> Value {
-    let mut java = if options.java_processes_only {
+    let mut java = if let Some(path) = &options.java_path {
+        let row = launcher_gate(path).await;
+        let code = match row["status"].as_str() {
+            Some("potential") => 1,
+            Some("not_affected") => 0,
+            _ => 3,
+        };
+        return json!({"schema":"php-selfcheck-host/v1","source":"developer_supplied_unverified","platform":"macos",
+            "java4shell":{"status":"collected","cve":CVE,"runtimes":[row]},
+            "audit":{"risk_gate_hit":code==1,"evidence_incomplete":code==3,"exit_codes":{"java4shell":code}}});
+    } else if options.java_processes_only {
         json!({"status":"collected","scope":"launcher_only_macos","cve":CVE})
     } else {
         collect(true).await
@@ -440,6 +731,7 @@ pub fn format_audit(
         ("process", &java["runtime_audit"]["processes"]),
         ("installation", &java["runtime_audit"]["installations"]),
         ("launcher", &java["runtimes"]),
+        ("demo", &java["demo"]),
         ("application", &java["applications"]["findings"]),
     ] {
         for row in rows.as_array().into_iter().flatten() {
@@ -458,8 +750,9 @@ pub fn format_audit(
                 .or(row["version"].as_str())
                 .unwrap_or("");
             let status = row["status"].as_str().unwrap_or("unknown");
-            let reason = row["reason"]
+            let reason = row["name"]
                 .as_str()
+                .or(row["reason"].as_str())
                 .or(row["product"].as_str())
                 .unwrap_or("");
             let source = row["flag_source"].as_str().unwrap_or("");

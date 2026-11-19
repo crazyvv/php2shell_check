@@ -1,5 +1,6 @@
 //! Local evidence for CVE-2026-114938.
 use crate::collector::{run_clean_java, which};
+use crate::java4shell::{BuildStatus, Flags, Release, build_status, decision, release};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
@@ -185,166 +186,6 @@ fn small_file(path: &Path) -> Option<String> {
     let mut data = String::new();
     file.take(65537).read_to_string(&mut data).ok()?;
     (data.len() <= 65536).then_some(data)
-}
-
-#[derive(Default, Serialize)]
-struct Release {
-    version: Option<String>,
-    full_build: Option<String>,
-    vendor: Option<String>,
-    vendor_version: Option<String>,
-    product: Option<String>,
-    graalvm_version: Option<String>,
-}
-
-fn release(data: &str) -> Release {
-    let fields: BTreeMap<_, _> = data
-        .lines()
-        .filter_map(|line| {
-            let (key, value) = line.split_once('=')?;
-            let value = value.trim().trim_matches('"');
-            (!value.is_empty() && value.len() <= 256).then_some((key, value))
-        })
-        .collect();
-    let get = |key| fields.get(key).map(|value| (*value).to_owned());
-    let version = get("JAVA_VERSION");
-    let full_build = get("JAVA_RUNTIME_VERSION")
-        .or_else(|| get("FULL_VERSION"))
-        .or_else(|| version.clone())
-        .filter(|value| value.contains('+') || value.contains("-b") || value.contains("-perf"));
-    let graalvm_version = get("GRAALVM_VERSION");
-    let edition = get("GRAALVM_EDITION")
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let product = if edition.contains("enterprise edition")
-        || (edition == "ee"
-            && graalvm_version
-                .as_deref()
-                .is_some_and(|v| v.starts_with("21.3.")))
-    {
-        Some("Oracle GraalVM Enterprise Edition".into())
-    } else if graalvm_version.is_some() {
-        Some("GraalVM".into())
-    } else {
-        get("JAVA_VM_NAME")
-    };
-    Release {
-        version,
-        full_build,
-        vendor: get("IMPLEMENTOR"),
-        vendor_version: get("IMPLEMENTOR_VERSION"),
-        product,
-        graalvm_version,
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum BuildStatus {
-    Affected,
-    NotAffected,
-    Unknown,
-}
-
-fn build_status(r: &Release) -> BuildStatus {
-    use BuildStatus::*;
-    let vendor = r.vendor.as_deref().unwrap_or_default();
-    let vendor_version = r.vendor_version.as_deref().unwrap_or_default();
-    if r.product.as_deref().is_some_and(|p| p.contains("OpenJ9")) {
-        return NotAffected;
-    }
-    if vendor == "Oracle Corporation"
-        && r.product.as_deref() == Some("Oracle GraalVM Enterprise Edition")
-        && r.graalvm_version.as_deref().or(r.version.as_deref()) == Some("21.3.20.0.3")
-    {
-        return Affected;
-    }
-    if r.product
-        .as_deref()
-        .is_some_and(|p| p.contains("GraalVM") || p.contains("OpenJ9"))
-        || vendor_version.contains("GraalVM")
-    {
-        return Unknown;
-    }
-    let Some(full) = r.full_build.as_deref() else {
-        return Unknown;
-    };
-    if vendor == "Oracle Corporation" {
-        match full {
-            "1.8.0_511-perf-b33" => return Affected,
-            "1.8.0_513-perf-b4" | "1.8.0_513-perf-b04" => return NotAffected,
-            _ => {}
-        }
-    }
-    let Some((version, build)) = full.split_once('+') else {
-        return Unknown;
-    };
-    let Ok(build) = build.split('-').next().unwrap_or_default().parse::<u32>() else {
-        return Unknown;
-    };
-    let Ok(numbers) = version
-        .split('.')
-        .map(str::parse::<u32>)
-        .collect::<Result<Vec<_>, _>>()
-    else {
-        return Unknown;
-    };
-    let [major, minor, update, extra, ..] = {
-        let mut padded = [0; 5];
-        if numbers.len() > padded.len() {
-            return Unknown;
-        }
-        padded[..numbers.len()].copy_from_slice(&numbers);
-        padded
-    };
-    let (first, last) = match major {
-        17 => (6, 21),
-        21 => (0, 13),
-        25 => (0, 5),
-        27 => (0, 1),
-        _ => return Unknown,
-    };
-    if minor != 0 {
-        return Unknown;
-    }
-    let oracle = vendor == "Oracle Corporation";
-    let corretto = vendor == "Amazon.com Inc.";
-    let known_openjdk = matches!(vendor, "OpenJDK" | "Eclipse Adoptium");
-    if !(oracle || corretto || known_openjdk) {
-        return Unknown;
-    }
-    if update < first {
-        return NotAffected;
-    }
-    if major == 17 && update == 6 && extra == 0 && build < 10 {
-        return Unknown;
-    }
-    if update < last || (update == last && extra == 0) {
-        return Affected;
-    }
-    // Oracle's November CSPU release notes identify +4 for each of these lines.
-    if oracle && numbers.len() == 4 && update == last && extra == 1 && build == 4 {
-        return NotAffected;
-    }
-    if vendor == "OpenJDK"
-        && numbers.len() == 4
-        && update == last
-        && extra == 1
-        && build == if major == 27 { 4 } else { 2 }
-    {
-        return NotAffected;
-    }
-    if corretto && numbers.len() == 4 {
-        let fixed_build = if major == 27 { 4 } else { 2 };
-        let vendor_build = vendor_version
-            .strip_prefix("Corretto-")
-            .unwrap_or(vendor_version);
-        let fixed = format!("{major}.0.{last}.1.{fixed_build}");
-        if update == last && extra == 1 && vendor_build == fixed && build == fixed_build {
-            return NotAffected;
-        }
-    }
-    Unknown
 }
 
 #[derive(Serialize)]
@@ -533,14 +374,6 @@ fn cpu_evidence(
     (eligible, evidence)
 }
 
-#[derive(Default, Serialize)]
-struct Flags {
-    #[serde(rename = "UseBASE64Intrinsics")]
-    use_base64_intrinsics: Option<bool>,
-    #[serde(rename = "UseAVX")]
-    use_avx: Option<u32>,
-}
-
 fn parse_flags(data: &str) -> Flags {
     let mut flags = Flags::default();
     for line in data.lines() {
@@ -587,25 +420,6 @@ fn startup_flags(raw: &[u8]) -> Flags {
         }
     }
     flags
-}
-
-fn decision(build: BuildStatus, cpu: Option<bool>, flags: &Flags) -> (&'static str, &'static str) {
-    if build == BuildStatus::NotAffected || cpu == Some(false) {
-        return ("not_affected", "excluded_build_or_cpu");
-    }
-    if (build == BuildStatus::Affected || cpu == Some(true))
-        && (flags.use_base64_intrinsics == Some(false) || flags.use_avx.is_some_and(|avx| avx <= 2))
-    {
-        return ("mitigated", "effective_vm_flags");
-    }
-    if build == BuildStatus::Affected
-        && cpu == Some(true)
-        && flags.use_base64_intrinsics == Some(true)
-        && flags.use_avx == Some(3)
-    {
-        return ("affected", "build_cpu_and_effective_vm_flags");
-    }
-    ("unknown", "incomplete_or_conflicting_evidence")
 }
 
 pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value {

@@ -194,13 +194,16 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
         || options.java_no_processes
         || !options.java_pid.is_empty()
         || !options.java_jdk.is_empty();
-    let java4shell = if java_scoped {
+    let java4shell = if let Some(path) = &options.java_path {
+        let row = crate::java4shell::launcher_gate(path).await;
+        json!({"status":"collected","scope":"explicit_launcher","cve":crate::java4shell::CVE,"runtimes":[row]})
+    } else if java_scoped {
         json!({"status":"collected","checks":{},"scope":"runtime_audit"})
     } else {
         crate::java4shell::collect(options.java_command).await
     };
     #[cfg(target_os = "linux")]
-    let java4shell = if options.java_command {
+    let java4shell = if options.java_command && options.java_path.is_none() {
         let mut java4shell = java4shell;
         java4shell["checks"]["process_attach_requested"] = json!(options.java_attach);
         let audit = crate::java_runtime_audit::collect(options).await;
@@ -264,10 +267,14 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
             .flat_map(|section| report[*section].as_array().into_iter().flatten().cloned())
             .collect()
     };
-    let java_rows = rows(
-        &java4shell["runtime_audit"],
-        &["processes", "installations"],
-    );
+    let java_rows = if options.java_path.is_some() {
+        rows(&java4shell, &["runtimes"])
+    } else {
+        rows(
+            &java4shell["runtime_audit"],
+            &["processes", "installations"],
+        )
+    };
     let nginx_rows = rows(&nginx2root, &["running_processes", "installations"]);
     let apache_rows = rows(
         &apache2root,
@@ -439,6 +446,7 @@ pub struct CollectOptions {
     pub java_assume_flags_effective: bool,
     pub java_root: Vec<PathBuf>,
     pub java_jdk: Vec<PathBuf>,
+    pub java_path: Option<PathBuf>,
     pub java_root_depth: Option<usize>,
     pub java_pid: Vec<u32>,
     pub java_processes_only: bool,
@@ -473,6 +481,7 @@ impl Default for CollectOptions {
             java_assume_flags_effective: false,
             java_root: vec![],
             java_jdk: vec![],
+            java_path: None,
             java_root_depth: None,
             java_pid: vec![],
             java_processes_only: false,
@@ -497,6 +506,20 @@ impl Default for CollectOptions {
 }
 impl CollectOptions {
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.java_path.is_none()
+                || (self.java_command
+                    && !self.java_attach
+                    && self.java_pid.is_empty()
+                    && !self.java_processes_only
+                    && !self.java_no_processes
+                    && self.java_root.is_empty()
+                    && self.java_jdk.is_empty()
+                    && self.java_root_depth.is_none()
+                    && self.java_cpuinfo.is_none()
+                    && !self.java_assume_flags_effective),
+            "--java-path 为独立版本门禁，不能与 JVM 运行或安装盘点参数混用"
+        );
         anyhow::ensure!(
             self.java_cpuinfo.is_none() || self.java_no_processes,
             "--java-cpuinfo 需要 --java-no-processes，以免将离线 CPU 证据用于运行进程"
@@ -665,6 +688,12 @@ pub struct CollectArgs {
     /// Java 安装盘点额外递归根目录，可重复
     #[arg(long)]
     pub java_root: Vec<PathBuf>,
+    /// 对指定 Java 启动器执行一次 -version，仅判断构建证据
+    #[arg(long)]
+    pub java_path: Option<PathBuf>,
+    /// 内置 Java 判定演示，使用固定数据
+    #[arg(long, conflicts_with_all = ["all","java_command","java_path","nginx2root","apache2root","middleware","options","fail_on_risk"])]
+    pub demo: bool,
     /// 指定 JDK Home，可重复，替代默认安装目录
     #[arg(long)]
     pub java_jdk: Vec<PathBuf>,
@@ -778,6 +807,18 @@ impl CollectArgs {
                 *path = options_dir.join(&*path);
             }
         }
+        if let Some(path) = options.java_path.as_mut() {
+            if path.is_relative() {
+                *path = options_dir.join(&*path);
+            }
+        }
+        if self.java_path.is_some() {
+            options.java_path = self.java_path;
+        }
+        if let Some(path) = options.java_path.as_mut() {
+            *path = std::fs::canonicalize(&*path)?;
+            anyhow::ensure!(path.is_file(), "--java-path 需要存在的普通文件");
+        }
         if !self.java_jdk.is_empty() {
             options.java_jdk = self.java_jdk;
         }
@@ -868,6 +909,9 @@ impl CollectArgs {
             options.java_command = self.java_command.unwrap_or(true);
             options.nginx2root = self.nginx2root.unwrap_or(true);
             options.apache2root = self.apache2root.unwrap_or(true);
+        }
+        if options.java_path.is_some() {
+            options.java_command = true;
         }
         options.validate()?;
         Ok(options)

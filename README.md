@@ -395,6 +395,15 @@ x2shell-check collect --java-command --java-no-processes --java-cpuinfo ./cpuinf
 
 离线 CPU 文件只用于安装盘点，不与当前主机 CPUID 混用。显式指定 `--java-assume-flags-effective` 时，无法实测的进程可在映像身份确认后用标准 Java 启动器参数估算，报告区分估算和生效参数。macOS 可运行 `collect --java-command` 做启动器降级盘点，运行映像与生效参数保持未知。
 
+指定可信 Java 启动器做独立版本门禁，或运行内置固定样本：
+
+```bash
+x2shell-check collect --java-path /opt/jdk/bin/java --fail-on-risk
+x2shell-check collect --demo --format txt
+```
+
+版本门禁只执行指定启动器的 `-version` 并结合对应 `release` 核对完整构建。命中构建返回候选，运行 JVM 的参数需另行采集。演示使用合成数据，可输出 JSON、文本或 CSV。
+
 ### Apache2Root（CVE-2026-119618）
 
 ```bash

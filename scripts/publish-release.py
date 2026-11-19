@@ -53,6 +53,8 @@ def main(tag, directory):
 扫描工作台按 Apache、NGINX、Java/JVM 和 PHP 展示各自证据。知识库按组件和 CVE 索引，`/tools` 提供 Bash 下载、批量用法及退出码说明。Linux 的 Rust `collect` 生成可导入网页的主机报告。
 
 NGINX 和 Apache 的 Bash 检查补充了运行映像身份、配置线索与覆盖度。版本范围和配置线索用于安排复核，厂商回补与实际生效配置需要独立确认。
+
+Rust 主机采集新增 `collect --all --fail-on-risk` 批量门禁、NGINX 和 Apache 自定义配置入口，以及 Java 指定启动器版本门禁、内置演示、离线 CPU 文件和 CSV/文本报告。运行版本门禁前请确认指定的 Java 启动器来源可信。
 """, encoding="utf-8")
     existing = command("gh", "release", "view", tag, "--repo", repository,
                        "--json", "url,isDraft,assets,tagName", check=False)

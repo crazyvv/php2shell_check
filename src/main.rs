@@ -269,6 +269,15 @@ async fn main() -> Result<()> {
         Command::Collect(args) => {
             let fail_on_risk = args.fail_on_risk;
             let format = args.format;
+            if args.demo {
+                let report = x2shell_check::java4shell::demo_report();
+                println!(
+                    "{}",
+                    x2shell_check::java4shell::format_audit(&report, format)?.trim_end()
+                );
+                ensure!(report["audit"]["demo_passed"] == true, "Java 演示判定失败");
+                return Ok(());
+            }
             let options = args.resolve()?;
             let java_only = options.java_command
                 && !(options.nginx2root
