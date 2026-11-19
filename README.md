@@ -9,26 +9,26 @@
 | Nginx2Root | 五个 NGINX CVE、运行映像、配置和 SCTP 线索 |
 | Apache2Root | CVE-2026-119618、httpd 与独立 mod_h2 版本、mod_http2 映射和 HTTP/2 线索 |
 
-现有发行包的可执行命令继续使用 `php-selfcheck`。
+新发行包的可执行命令为 `x2shell-check`（Windows 为 `x2shell-check.exe`）。已有配置、数据库与主机报告格式可继续使用。 已发布的 v0.8.0 及更早附件沿用原文件名。当前源码可用 `cargo build --release --locked` 构建新命令。
 
 开发者页面只展示当前扫描，管理员通过独立账号访问历史记录与汇总。支持免密码扫描、可选资产白名单、检测证据展示、主机材料导入和 JSON/CSV 导出；同一目标的最近两份主机材料可按 Web／CLI 范围进行修复前后对比。
 
 ## 下载与运行
 
-从 [GitHub Releases](https://github.com/crazyvv/php2shell_check/releases) 下载与系统匹配的程序包：Windows x86_64 使用 ZIP，Linux x86_64 使用 musl 静态构建的 tar.gz。解压后阅读 `START-HERE.txt`，使用同一 Release 的 `SHA256SUMS` 校验文件。
+从 [GitHub Releases](https://github.com/crazyvv/x2shell-check/releases) 下载与系统匹配的程序包：Windows x86_64 使用 ZIP，Linux x86_64 使用 musl 静态构建的 tar.gz。解压后阅读 `START-HERE.txt`，使用同一 Release 的 `SHA256SUMS` 校验文件。
 
-Windows 在 PowerShell 中执行 `./php-selfcheck.exe`，Linux 执行 `./php-selfcheck`。两者都支持 Web 服务和 URL 检查，`collect` 主机采集仅支持 Linux。Linux 的 HTTPS 请求需要系统 CA 证书；Windows 如提示缺少运行库，安装微软官方 Visual C++ 2015–2022 Redistributable x64。
+Windows 在 PowerShell 中执行 `./x2shell-check.exe`，Linux 执行 `./x2shell-check`。两者都支持 Web 服务和 URL 检查，`collect` 主机采集仅支持 Linux。Linux 的 HTTPS 请求需要系统 CA 证书；Windows 如提示缺少运行库，安装微软官方 Visual C++ 2015–2022 Redistributable x64。
 
 ```powershell
 # Windows：初始化、保存随机管理员密码后启动
-./php-selfcheck.exe init --allow-anonymous --allow-without-whitelist
-./php-selfcheck.exe serve
+./x2shell-check.exe init --allow-anonymous --allow-without-whitelist
+./x2shell-check.exe serve
 ```
 
 ```bash
 # Linux：初始化、保存随机管理员密码后启动
-./php-selfcheck init --allow-anonymous --allow-without-whitelist
-./php-selfcheck serve
+./x2shell-check init --allow-anonymous --allow-without-whitelist
+./x2shell-check serve
 ```
 
 发布包不包含真实配置或数据库。上述示例显式启用免密码和无白名单扫描，其他配置方式见下文；团队部署仍需配置 HTTPS 反向代理与准确的 public_origin。
@@ -39,9 +39,9 @@ Windows 在 PowerShell 中执行 `./php-selfcheck.exe`，Linux 执行 `./php-sel
 
 ```bash
 cargo build --release --locked -j 4
-./target/release/php-selfcheck init
+./target/release/x2shell-check init
 # 保存终端显示的随机 admin 密码，编辑 config.json 中的资产范围
-./target/release/php-selfcheck serve
+./target/release/x2shell-check serve
 ```
 
 默认监听 `127.0.0.1:8080`。默认普通账号通过 Basic 认证登录；启用免密码后使用浏览器独立会话。管理员入口始终使用独立账号密码。`init` 不覆盖已有配置；配置权限为 600，密码使用 PBKDF2-SHA256（260000 次迭代），不存明文密码。不要将配置、报告和数据库提交到 Git。
@@ -62,9 +62,9 @@ cargo build --release --locked -j 4
 新增账号、修改监听地址或使用独立状态目录：
 
 ```bash
-./target/release/php-selfcheck add-user --user developer01
-./target/release/php-selfcheck init --config /path/to/existing-state-directory/config.json
-./target/release/php-selfcheck serve --config /path/to/existing-state-directory/config.json --bind 127.0.0.1 --port 8080
+./target/release/x2shell-check add-user --user developer01
+./target/release/x2shell-check init --config /path/to/existing-state-directory/config.json
+./target/release/x2shell-check serve --config /path/to/existing-state-directory/config.json --bind 127.0.0.1 --port 8080
 ```
 
 账号、范围、端口和 public_origin 的修改在重启后生效。数据库相对路径以配置文件所在目录为基准。默认 `data/selfcheck.sqlite3`，使用 SQLite WAL。运行中备份请使用 SQLite backup API，不要仅复制主数据库文件。
@@ -74,8 +74,8 @@ cargo build --release --locked -j 4
 新建配置可直接启用两个选项：
 
 ```bash
-./target/release/php-selfcheck init --allow-anonymous --allow-without-whitelist
-./target/release/php-selfcheck serve
+./target/release/x2shell-check init --allow-anonymous --allow-without-whitelist
+./target/release/x2shell-check serve
 ```
 
 也可将 `config.open.example.json` 复制为 `config.json` 后启动（已有配置请先备份）。
@@ -108,9 +108,9 @@ cargo build --release --locked -j 4
 在服务器终端创建管理员：
 
 ```bash
-./target/release/php-selfcheck add-admin --user admin
+./target/release/x2shell-check add-admin --user admin
 # 如需多个管理员，每人建立独立账号
-./target/release/php-selfcheck add-admin --user security02
+./target/release/x2shell-check add-admin --user security02
 # 保存各自随机密码，重启服务后访问 /admin
 ```
 
@@ -185,8 +185,8 @@ Java 产品命中只生成 `java4shell.status=java_product_hint`，不会从网�
 不设置或设为 `null` 时使用内置库。可先复制 `fingerprints.example.json` 作为扩展示例；也可导出完整库后编辑：
 
 ```bash
-php-selfcheck fingerprints export --output fingerprints.json
-php-selfcheck fingerprints validate --file fingerprints.json
+x2shell-check fingerprints export --output fingerprints.json
+x2shell-check fingerprints validate --file fingerprints.json
 ```
 
 导出不会覆盖已有文件。校验检查 schema、ID、正则、字段和资源上限；文件缺失或规则错误会阻止服务启动，避免静默使用其他规则。尚无后台保存记录时，文件修改后须重启服务；后台保存后以数据库规则为准。单次任务使用同一份已加载规则。
@@ -194,9 +194,9 @@ php-selfcheck fingerprints validate --file fingerprints.json
 也可显式指定文件（这里相对路径以当前终端目录为基准），作为启动文件或覆盖单次 check 的规则（已有后台保存时，服务仍优先使用数据库规则）：
 
 ```bash
-php-selfcheck serve --config config.json --fingerprints fingerprints.json
-php-selfcheck check https://app.example.com/ --config config.json --fingerprints fingerprints.json --json
-php-selfcheck collect --middleware --ports --web-probe --fingerprints fingerprints.json > host-report.json
+x2shell-check serve --config config.json --fingerprints fingerprints.json
+x2shell-check check https://app.example.com/ --config config.json --fingerprints fingerprints.json --json
+x2shell-check collect --middleware --ports --web-probe --fingerprints fingerprints.json > host-report.json
 ```
 
 本机采集的 `collector.options.example.json` 也支持 `fingerprint_file`，相对路径以采集器选项文件所在目录为基准；该文件需要放在被采集的机器上。命令行文件优先于选项文件。仅响应头模式不会匹配未取得的页面正文、generator、标题或资源路径。
@@ -250,8 +250,8 @@ php-selfcheck collect --middleware --ports --web-probe --fingerprints fingerprin
 命令行检查复用相同的资产范围及检测规则，不启动 Web 服务、不写入扫描历史：
 
 ```bash
-./target/release/php-selfcheck check https://app.example.com/ --config config.json --json
-./target/release/php-selfcheck check https://app.example.com/ --config config.json --headers-only --json
+./target/release/x2shell-check check https://app.example.com/ --config config.json --json
+./target/release/x2shell-check check https://app.example.com/ --config config.json --headers-only --json
 ```
 
 命令读取已初始化的配置，范围限制与 Web 扫描一致；目标可不写协议，默认 HTTPS。退出码用于 CI：
@@ -270,7 +270,7 @@ php-selfcheck collect --middleware --ports --web-probe --fingerprints fingerprin
 把匹配目标机器操作系统和架构的二进制拷贝到目标 Linux 主机，以普通账号执行：
 
 ```bash
-php-selfcheck collect > host-report.json
+x2shell-check collect > host-report.json
 ```
 
 默认读取可见进程名称、可执行文件路径和 PHP 包信息，**不执行 PHP 命令**，不自动上传。通过 Web 界面关联业务 URL 并导入报告。采集与命令查询有数量、时间和输出上限；权限不足时保留未知。报告按网页上传限制控制体积，过大时优先省略原始命令输出等条目，在 `report_limits` 记录省略数量，页面提示结果不完整。
@@ -279,13 +279,13 @@ php-selfcheck collect > host-report.json
 
 ```bash
 # 调用 PATH 中的 PHP/FPM 程序查询版本，并读取 PHP CLI 的选定配置
-php-selfcheck collect --php-command > host-report.json
+x2shell-check collect --php-command > host-report.json
 
 # 指定实际使用的 PHP CLI 路径
-php-selfcheck collect --php-command --php-binary /opt/php/bin/php > host-report.json
+x2shell-check collect --php-command --php-binary /opt/php/bin/php > host-report.json
 
 # 配置文件开启时，也可在命令行显式关闭
-php-selfcheck collect --options collector.options.example.json --php-command=false > host-report.json
+x2shell-check collect --options collector.options.example.json --php-command=false > host-report.json
 ```
 
 `--php-command` 默认关闭，独立于中间件采集。`--php-binary` 需要同时开启此选项，接受存在的绝对文件路径；不指定时检查常见 PHP/FPM 程序并去重，最多 16 个。版本查询使用 `-n -v`；CLI 配置使用 `-r` 读取选定 INI 项、SAPI、版本、PHP 程序及加载的 INI 文件路径，不调用 phpinfo 或输出环境。FPM 不执行 CLI 配置脚本。PHP-FPM 的中间件版本查询也受此开关控制。
@@ -295,7 +295,7 @@ PHP 命令所得配置始终标为 `cli_only`，不能证明 Web/FPM、容器或
 ### Java4Shell 主机核验
 
 ```bash
-php-selfcheck collect --java-command > host-report.json
+x2shell-check collect --java-command > host-report.json
 ```
 
 `--java-command` 默认关闭且独立于 PHP 与中间件选项。开启后只执行发现到的 Java 程序的 `-version` 和 `-XX:+PrintFlagsFinal -version`，并检查当前命名空间可见的 CPU flags、JVM 进程和 Java4Shell 相关启动参数。调用 Java 时清除采集器自身的 `JAVA_TOOL_OPTIONS`、`JDK_JAVA_OPTIONS` 与 `_JAVA_OPTIONS`，避免把采集环境选项误当成运行服务配置；不读取目标进程环境或保存其他命令行参数。诊断附加需单独开启 `--java-attach`。
@@ -356,9 +356,9 @@ bash scripts/x2shell-check.sh --nginx2root --json
 bash scripts/x2shell-check.sh --nginx2root --nginx-path /opt/nginx/sbin/nginx
 
 # Rust 主机采集
-php-selfcheck collect --nginx2root > nginx-report.json
-php-selfcheck collect --nginx2root --nginx-path /opt/nginx/sbin/nginx > nginx-report.json
-php-selfcheck collect --nginx2root --java-command --java-attach > host-report.json
+x2shell-check collect --nginx2root > nginx-report.json
+x2shell-check collect --nginx2root --nginx-path /opt/nginx/sbin/nginx > nginx-report.json
+x2shell-check collect --nginx2root --java-command --java-attach > host-report.json
 ```
 
 Nginx2Root 核验逐项给出五个 NGINX CVE 的上游版本参考。主机模式读取当前命名空间可见的 NGINX 进程映像和常见磁盘安装，输出版本、文件身份关联和 SCTP 可见性。SCTP 可见性不能确认内核补丁状态。Bash 模式返回 `1` 表示命中上游受影响范围，`3` 表示没有足够的版本或覆盖证据，`2` 表示参数错误。版本范围与已知修复分支来自 [NGINX 官方公告](https://nginx.org/en/security_advisories.html) 和 [CERT-EU 公告](https://cert.europa.eu/publications/security-advisories/2026-022/)。
@@ -377,7 +377,7 @@ Nginx2Root 检查项参考了研究披露、官方公告和两个只读检查器
 # 单项 Bash 检查，批量模式也包含此项
 bash scripts/x2shell-check.sh --apache2root --json
 # Rust 主机采集，--middleware 也会启用此项
-php-selfcheck collect --apache2root > apache-report.json
+x2shell-check collect --apache2root > apache-report.json
 ```
 
 Apache 官方披露的 httpd 影响范围为 `2.4.55–2.4.70`，`2.4.71` 发布修复。独立发布的 `mod_h2 2.0.8–2.0.42` 也在影响范围内，单独核对模块的版本和发行包回补。主机报告包括可见进程、主程序版本、`mod_http2.so` 映射、可识别的模块版本及标准磁盘配置中的 `Protocols` 和 `LoadModule` 线索。
@@ -388,10 +388,10 @@ Rust 网页检查从常规响应保存 Apache 版本、`h2/h2c` 声明和该次�
 
 ```bash
 # 独立启用，不执行 PHP 命令
-php-selfcheck collect --package-audit > host-report.json
+x2shell-check collect --package-audit > host-report.json
 
 # 与 CLI 配置及中间件采集一起使用
-php-selfcheck collect --php-command --package-audit --middleware --php-modules --ports > host-report.json
+x2shell-check collect --php-command --package-audit --middleware --php-modules --ports > host-report.json
 ```
 
 `--package-audit` 默认关闭。它从可见的 PHP-FPM/CGI 程序和 Apache/Nginx 等进程的 PHP 模块映射反查所属软件包，不使用 CLI 或 `php` 元包代替 Web 实例：
@@ -411,16 +411,16 @@ PHP 命令、Java4Shell 主机核验、软件包核验、中间件、PHP 模块�
 
 ```bash
 # 仅识别 Web 中间件
-php-selfcheck collect --middleware > host-report.json
+x2shell-check collect --middleware > host-report.json
 
 # 中间件 + PHP 模块线索 + 关联监听端口，不发送 Web 请求
-php-selfcheck collect --middleware --php-modules --ports > host-report.json
+x2shell-check collect --middleware --php-modules --ports > host-report.json
 
 # 额外尝试本机监听端口的 HTTP/HTTPS GET
-php-selfcheck collect --middleware --php-modules --ports --web-probe > host-report.json
+x2shell-check collect --middleware --php-modules --ports --web-probe > host-report.json
 
 # 指定虚拟主机 Host/SNI、只尝试 HTTPS、指定只读路径和请求上限
-php-selfcheck collect --middleware --ports --web-probe \
+x2shell-check collect --middleware --ports --web-probe \
   --web-host app.example.com --web-schemes https --web-path /index.php \
   --max-web-probes 8 > host-report.json
 ```
@@ -430,7 +430,7 @@ php-selfcheck collect --middleware --ports --web-probe \
 也可复制 `collector.options.example.json`，修改布尔值后使用：
 
 ```bash
-php-selfcheck collect --options collector.options.example.json --web-probe=false > host-report.json
+x2shell-check collect --options collector.options.example.json --web-probe=false > host-report.json
 ```
 
 命令行显式值覆盖文件。采集器配置与服务端 `config.json` 分开，示例文件包含采集开关、nginx_path、php_binary、web_host、web_path、web_schemes、max_web_probes。
@@ -495,12 +495,12 @@ Web 界面可导入 collect 报告，或不选文件直接填写手工复核：W
 也可使用项目提供的 Dockerfile 从源码构建容器镜像：
 
 ```bash
-docker build -t php-selfcheck:local .
+docker build -t x2shell-check:local .
 mkdir -m 700 state
 # 先使用本机构建的二进制生成 state/config.json，并修改范围与 HTTPS public_origin。
 # 将 state 所有权交给容器 UID/GID 10001，再运行：
-docker run -d --name php-selfcheck --restart unless-stopped \
-  -p 127.0.0.1:8080:8080 -v "$PWD/state:/state" php-selfcheck:local
+docker run -d --name x2shell-check --restart unless-stopped \
+  -p 127.0.0.1:8080:8080 -v "$PWD/state:/state" x2shell-check:local
 ```
 
 ## 规则与使用边界
@@ -533,8 +533,8 @@ docker run -d --name php-selfcheck --restart unless-stopped \
 `offline-poc` 用内置合成 JSON 验证六项证据规则。该命令不读取配置，不解析目标地址，不打开网络连接，不执行 PHP，也不构造 multipart、会话、LFI、OOM 或命令载荷：
 
 ```bash
-php-selfcheck offline-poc
-php-selfcheck offline-poc --json
+x2shell-check offline-poc
+x2shell-check offline-poc --json
 ```
 
 六项规则覆盖 CLI/Web 隔离、版本线索边界、配置范围、SAPI 适用面、五链缺失证据和修复前后对比。JSON 的 `guarantees` 明确记录网络请求、目标连接、PHP 命令、漏洞载荷和漏洞触发均为 0；`chain_matrix` 为 A–E 五条链逐项列出前置、传播、防守点与缺失证据。
@@ -542,8 +542,8 @@ php-selfcheck offline-poc --json
 可离线比较两份 `php-selfcheck-host/v1` 报告，单份文件限制为 1 MiB：
 
 ```bash
-php-selfcheck compare-reports --before before.json --after after.json
-php-selfcheck compare-reports --before before.json --after after.json --json
+x2shell-check compare-reports --before before.json --after after.json
+x2shell-check compare-reports --before before.json --after after.json --json
 ```
 
 命令只读取本地文件。达到上游版本基线、关闭 upload_progress 或提交完整修复字段都不会变成独立验证。字段和合成样本说明见 [离线证据实验](docs/evidence-lab.md)。

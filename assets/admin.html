@@ -4,7 +4,7 @@
 <main class="admin-main"><div id="notice" role="status" aria-live="polite"></div>
 <section class="card auth-card" id="loginPanel"><h1>管理员登录</h1><p>输入独立管理员账号和密码后查看全站历史扫描并维护特征库。普通扫描页无需管理员密码。</p>
 <form id="loginForm"><div class="importrow"><div><label for="adminUser">管理员账号</label><input id="adminUser" value="admin" autocomplete="username" maxlength="64" required></div><div><label for="adminPassword">密码</label><input id="adminPassword" type="password" autocomplete="current-password" maxlength="4096" required></div><button id="loginButton" class="primary" type="submit">登录</button></div></form>
-<p class="hint">已有配置首次启用后台时，在服务器运行 <code>php-selfcheck add-admin --user admin</code>，保存随机密码并重启服务。</p></section>
+<p class="hint">已有配置首次启用后台时，在服务器运行 <code>x2shell-check add-admin --user admin</code>，保存随机密码并重启服务。</p></section>
 <div id="dashboard" hidden><section class="card"><div class="sectionhead"><h1>全站扫描汇总</h1><div><span id="adminAccount"></span> <button id="logout" class="secondary">退出登录</button></div></div><div id="summary"></div></section>
 <nav class="admin-sections" aria-label="后台工作区"><a href="#settingsPanel">程序配置</a><a href="#fingerprintPanel">特征规则</a><a href="#historyPanel">历史记录</a></nav>
 <section class="card admin-panel" id="settingsPanel"><div class="sectionhead"><h2>扫描权限与程序配置</h2><button id="settingsReload" class="secondary">重新加载配置</button></div>

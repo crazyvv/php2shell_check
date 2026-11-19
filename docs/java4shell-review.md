@@ -17,7 +17,7 @@
 本地主机采集必须显式开启：
 
 ```bash
-php-selfcheck collect --java-command > host-report.json
+x2shell-check collect --java-command > host-report.json
 ```
 
 采集器检查最多 16 个可见 Java 程序和 128 个 JVM 进程：

@@ -226,7 +226,7 @@ function renderJobs(jobs, endpoint='/api/jobs', showOwners=false, options={}) {
     if(showOwners) head.append(node('span',`来源：${j.owner}`));
     head.append(node('span',`${new Date(j.created*1000).toLocaleString()} · ${states[j.state] || j.state} · ${j.results.length} 个结果${j.total_results != null && j.total_results !== j.results.length ? `（本次共 ${j.total_results} 个）` : ''}`));
     const links = node('div',undefined,'links');
-    for (const format of ['json','csv']) { const a = node('a',`导出 ${format.toUpperCase()}`); a.href = `${endpoint}/${j.id}?format=${format}${options.verdict ? '&verdict='+encodeURIComponent(options.verdict) : ''}`; a.download = `php-selfcheck.${format}`; links.append(a); }
+    for (const format of ['json','csv']) { const a = node('a',`导出 ${format.toUpperCase()}`); a.href = `${endpoint}/${j.id}?format=${format}${options.verdict ? '&verdict='+encodeURIComponent(options.verdict) : ''}`; a.download = `x2shell-check.${format}`; links.append(a); }
     if(options.deleteJob) {
       const remove=node('button','删除本次扫描','secondary');remove.disabled=['queued','running'].includes(j.state);
       remove.onclick=()=>options.deleteJob(j);links.append(remove);

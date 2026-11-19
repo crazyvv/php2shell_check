@@ -65,30 +65,30 @@ test('administrator filters, filtered exports and deletion confirmation',async()
 
 test('collector switches build a safe command and disable dependent probes',async()=>{
   const app=setup();await flush();const get=id=>app.document.getElementById(id);
-  assert.equal(get('collectCommand').textContent,'php-selfcheck collect > host-report.json');
+  assert.equal(get('collectCommand').textContent,'x2shell-check collect > host-report.json');
   get('collectMiddleware').checked=true;get('collectMiddleware').onchange();
   get('collectModules').checked=true;get('collectPorts').checked=true;get('collectPorts').onchange();get('collectWeb').checked=true;get('collectWeb').onchange();
   get('collectHost').value='app.internal';get('collectHost').oninput();
   assert(get('collectCommand').textContent.includes("--middleware --php-modules --ports --web-probe --web-host 'app.internal'"));
   get('collectHost').value="x'; touch /tmp/unsafe";get('collectHost').oninput();assert(!get('collectCommand').textContent.includes('touch'));
-  get('collectMiddleware').checked=false;get('collectMiddleware').onchange();assert.equal(get('collectWeb').checked,false);assert.equal(get('collectWeb').disabled,true);assert.equal(get('collectCommand').textContent,'php-selfcheck collect > host-report.json');
+  get('collectMiddleware').checked=false;get('collectMiddleware').onchange();assert.equal(get('collectWeb').checked,false);assert.equal(get('collectWeb').disabled,true);assert.equal(get('collectCommand').textContent,'x2shell-check collect > host-report.json');
 });
 
 test('PHP command and package audit are independent explicit collection switches',async()=>{
   const app=setup();await flush();const get=id=>app.document.getElementById(id);
   get('collectPhpCommand').checked=true;get('collectPhpCommand').onchange();
-  assert.equal(get('collectCommand').textContent,'php-selfcheck collect --php-command > host-report.json');
+  assert.equal(get('collectCommand').textContent,'x2shell-check collect --php-command > host-report.json');
   get('collectPackageAudit').checked=true;get('collectPackageAudit').onchange();
-  assert.equal(get('collectCommand').textContent,'php-selfcheck collect --php-command --package-audit > host-report.json');
+  assert.equal(get('collectCommand').textContent,'x2shell-check collect --php-command --package-audit > host-report.json');
   assert(!get('collectMiddleware').checked);
   get('collectPhpCommand').checked=false;get('collectPhpCommand').onchange();
-  assert.equal(get('collectCommand').textContent,'php-selfcheck collect --package-audit > host-report.json');
+  assert.equal(get('collectCommand').textContent,'x2shell-check collect --package-audit > host-report.json');
 });
 
 test('Java4Shell host collection is an independent explicit switch',async()=>{
   const app=setup();await flush();const get=id=>app.document.getElementById(id);
   get('collectJavaCommand').checked=true;get('collectJavaCommand').onchange();
-  assert.equal(get('collectCommand').textContent,'php-selfcheck collect --java-command > host-report.json');
+  assert.equal(get('collectCommand').textContent,'x2shell-check collect --java-command > host-report.json');
   assert(!get('collectPhpCommand').checked);assert(!get('collectMiddleware').checked);
 });
 

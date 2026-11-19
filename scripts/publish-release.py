@@ -25,8 +25,8 @@ def main(tag, directory):
     if not browser_report.is_file() or json.loads(browser_report.read_text(encoding="utf-8")).get("state") != "passed":
         raise RuntimeError("A successful real-browser verification report is required before publication")
     repository = os.environ["GITHUB_REPOSITORY"]
-    expected = {f"php-selfcheck-{tag}-linux-x86_64.tar.gz",
-                f"php-selfcheck-{tag}-windows-x86_64.zip"}
+    expected = {f"x2shell-check-{tag}-linux-x86_64.tar.gz",
+                f"x2shell-check-{tag}-windows-x86_64.zip"}
     archives = sorted(path for path in directory.iterdir() if path.name in expected)
     if {path.name for path in archives} != expected:
         raise RuntimeError("Both tested Windows and Linux archives are required")
@@ -35,21 +35,21 @@ def main(tag, directory):
     sums.write_text("".join(f"{digest}  {name}\n" for name, digest in sorted(hashes.items())), encoding="utf-8")
     attachments = archives + [sums]
     notes = directory / "release-notes.md"
-    notes.write_text(f"""PHP 安全自查台 {tag}
+    notes.write_text(f"""x2shell-check · 服务暴露面自查台 {tag}
 
 下载对应系统的程序包，解压后阅读 `START-HERE.txt` 和 `README.md`。
 
 | 附件 | 适用系统 |
 | --- | --- |
-| `php-selfcheck-{tag}-windows-x86_64.zip` | Windows x86_64，MSVC 构建 |
-| `php-selfcheck-{tag}-linux-x86_64.tar.gz` | Linux x86_64，musl 静态构建 |
+| `x2shell-check-{tag}-windows-x86_64.zip` | Windows x86_64，MSVC 构建 |
+| `x2shell-check-{tag}-linux-x86_64.tar.gz` | Linux x86_64，musl 静态构建 |
 | `SHA256SUMS` | 两个程序包的 SHA-256 校验值 |
 
 包含独立扫描页面、管理员历史/筛选/删除、SQLite 持久化、轻量响应头模式、CI 检查命令，以及可选 PHP/Java 命令、中间件、进程端口和厂商补丁参考核验。
 
 支持可配置的被动网站特征库：63 条内置规则，支持 CMS/框架、Java 产品、静态生成器、托管平台、中间件、CDN/WAF 与挑战页识别；JSON 扩展/覆盖/禁用、命中证据和规则版本追踪。规则不增加请求，产品版本不作为运行时版本，外部资源及托管平台线索不作为当前站点已修复证明。管理员后台可逐条编辑、新增、禁用/启用、删除、校验及保存，并持久化到 SQLite。
 
-新增 Java4Shell / CVE-2026-114938 防守识别：远程侧只显示 Java 产品被动线索；显式 `--java-command` 本机采集核验 Java build、VM、当前 CPU 指令集和受限 JVM 参数。不会发送畸形 Base64、运行 PoC、附加 JVM 或读取进程环境；结果不确认漏洞利用或独立验证修复。
+主机核验覆盖 PHP2Shell、Java4Shell、Nginx2Root 和 Apache2Root。Linux 包包含 `scripts/x2shell-check.sh`，无参数自动盘点 Java、NGINX 和 Apache。JVM 生效参数需显式启用诊断附加。网页线索和主机证据均按各自范围报告。
 
 本版新增默认关闭的上传进度基础观察：管理员允许后由开发者选择，仅一次普通 .txt 文件 POST，不指定会话 ID、不回读文件、不执行代码；Cookie 仅作线索，不确认配置或 CVE。增加会话销毁错误识别和 strict_mode/进度频率等配置采集，附社区判据复核与流程文档。新增公开只读 `/knowledge` 漏洞知识库，整理五类利用链、补丁边界、证据层级和 IOC 使用方法，并逐项链接来源；不包含可执行载荷。
 
@@ -74,7 +74,7 @@ PHP 版本声明与厂商参考规则匹配不能直接证明已修复；部分�
                     "--clobber", *(str(path) for path in attachments))
     else:
         command("gh", "release", "create", tag, "--repo", repository, "--verify-tag",
-                "--draft", "--title", f"PHP 安全自查台 {tag}",
+                "--draft", "--title", f"x2shell-check · 服务暴露面自查台 {tag}",
                 "--notes-file", str(notes), *(str(path) for path in attachments))
     # Never overwrite an already published release; it may only be verified again.
     with tempfile.TemporaryDirectory() as temp:

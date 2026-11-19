@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::process::Command;
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_php-selfcheck"))
+    Command::new(env!("CARGO_BIN_EXE_x2shell-check"))
 }
 #[test]
 fn cli_check_exit_codes_invalid_config_and_special_address_denial() {

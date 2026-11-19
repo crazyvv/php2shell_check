@@ -130,6 +130,6 @@ $('settingsFile').onchange=async()=>{
     $('settingsDocument').value=JSON.stringify(doc,null,2);settingsSwitches();settingsNotice('已导入在线字段为草稿，校验并保存后生效；账号、部署路径及其他字段不会导入。');
   }catch(e){settingsNotice(e.message,true);}finally{$('settingsFile').value='';}
 };
-$('settingsExport').onclick=()=>{try{const text=JSON.stringify(JSON.parse($('settingsDocument').value),null,2),url=URL.createObjectURL(new Blob([text],{type:'application/json'})),link=node('a');link.href=url;link.download='php-selfcheck-online-settings.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),0);settingsNotice('已导出当前草稿的在线字段，不含账号凭据；可合并到服务器配置 JSON。');}catch(e){settingsNotice(e.message,true);}};
+$('settingsExport').onclick=()=>{try{const text=JSON.stringify(JSON.parse($('settingsDocument').value),null,2),url=URL.createObjectURL(new Blob([text],{type:'application/json'})),link=node('a');link.href=url;link.download='x2shell-check-online-settings.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),0);settingsNotice('已导出当前草稿的在线字段，不含账号凭据；可合并到服务器配置 JSON。');}catch(e){settingsNotice(e.message,true);}};
 $('settingsValidate').onclick=()=>submitSettings(false);$('settingsSave').onclick=()=>submitSettings(true);
 (async()=>{try{const me=await api('/api/admin/me');await enterDashboard(me.user);}catch(e){showLogin();if(e.status!==401)notice(e.message,true);}})();

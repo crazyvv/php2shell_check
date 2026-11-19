@@ -13,7 +13,7 @@
 | E5 | 五类链路都列出缺失证据 | 单一 Cookie、500、表单或错误关键词补齐整条链 |
 | E6 | 修复前后对比不升级为独立验证 | “字段变好”被写成“漏洞已修复” |
 
-`php-selfcheck offline-poc --json` 使用两份合成报告：修复前报告故意让 CLI 为 8.5.12、Web FPM 为 8.4.26，以验证 CLI 不能覆盖 Web；修复后 Web 为 8.4.27，并提供合成的公告、包修订、运行映像、worker 重启和后端覆盖声明。即使六项规则通过，输出仍保持 `patch_independently_verified: false`、`exploitability_confirmed: false`。
+`x2shell-check offline-poc --json` 使用两份合成报告：修复前报告故意让 CLI 为 8.5.12、Web FPM 为 8.4.26，以验证 CLI 不能覆盖 Web；修复后 Web 为 8.4.27，并提供合成的公告、包修订、运行映像、worker 重启和后端覆盖声明。即使六项规则通过，输出仍保持 `patch_independently_verified: false`、`exploitability_confirmed: false`。
 
 ## 五类链路矩阵
 

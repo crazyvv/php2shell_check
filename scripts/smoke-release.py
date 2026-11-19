@@ -57,7 +57,7 @@ def smoke(binary):
                         raise RuntimeError("Web service failed its local smoke check")
                     time.sleep(0.2)
             with opener.open(config["public_origin"] + "/", timeout=2) as response:
-                assert "PHP 安全自查台" in response.read().decode("utf-8")
+                assert "服务暴露面自查台" in response.read().decode("utf-8")
         finally:
             process.terminate()
             try:

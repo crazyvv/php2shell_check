@@ -114,7 +114,7 @@ fn every_observed_web_backend_must_reach_the_fix_baseline() {
 
 #[test]
 fn cli_offline_poc_and_bounded_report_comparison_are_machine_readable() {
-    let binary = env!("CARGO_BIN_EXE_php-selfcheck");
+    let binary = env!("CARGO_BIN_EXE_x2shell-check");
     let output = Command::new(binary)
         .args(["offline-poc", "--json"])
         .output()

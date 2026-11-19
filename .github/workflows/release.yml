@@ -33,11 +33,11 @@ jobs:
           - platform: linux-x86_64
             os: ubuntu-22.04
             target: x86_64-unknown-linux-musl
-            executable: php-selfcheck
+            executable: x2shell-check
           - platform: windows-x86_64
             os: windows-2022
             target: x86_64-pc-windows-msvc
-            executable: php-selfcheck.exe
+            executable: x2shell-check.exe
     defaults:
       run:
         shell: bash

@@ -246,7 +246,7 @@ async fn request_method(u: &Url, ip: IpAddr, kind: RequestKind) -> Result<Reply>
     let mut response = request
         .header(
             "User-Agent",
-            format!("Company-PHP-SelfCheck/{}", env!("CARGO_PKG_VERSION")),
+            format!("x2shell-check/{}", env!("CARGO_PKG_VERSION")),
         )
         .header("Accept", "text/html,application/json")
         .header("Accept-Encoding", "identity")

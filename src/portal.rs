@@ -503,9 +503,9 @@ pub(crate) fn job_response(
     r.headers_mut().insert(
         header::CONTENT_DISPOSITION,
         if csv {
-            "attachment; filename=\"php-selfcheck.csv\""
+            "attachment; filename=\"x2shell-check.csv\""
         } else {
-            "attachment; filename=\"php-selfcheck.json\""
+            "attachment; filename=\"x2shell-check.json\""
         }
         .parse()?,
     );
@@ -635,7 +635,7 @@ fn post(state: Arc<State>, user: &str, path: &str, body: Value) -> Result<Respon
             };
             let report = &body["report"];
             if !report.is_object() || report["schema"] != "php-selfcheck-host/v1" {
-                return Ok(error(400, "报告格式不匹配，请使用 php-selfcheck collect"));
+                return Ok(error(400, "报告格式不匹配，请使用 x2shell-check collect"));
             }
             let review = match crate::assessment::review(&body["review"]) {
                 Ok(v) => v,

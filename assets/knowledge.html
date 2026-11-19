@@ -46,9 +46,9 @@
     <tr><td>软件包与进程材料</td><td>安装修订、运行映像是否一致、是否需要重启</td><td>厂商回补范围仍须对照公告；提交材料仍未经独立核验</td></tr>
   </tbody></table></div>
   <div class="before-after"><article><span>修复前示例</span><b>Web FPM · PHP 8.4.26</b><p>低于上游基线；CLI 即使为 8.5.12，也不能覆盖 Web 风险线索。</p></article><i>→</i><article><span>修复后示例</span><b>Web FPM · PHP 8.4.27</b><p>同时检查厂商公告、包修订、运行映像、worker 重启和全部后端；结论仍标为提交材料。</p></article></div>
-  <p>同一目标导入至少两份主机材料后，扫描结果会自动展示最近两份报告的 Web 版本、SAPI、upload_progress、serialize_handler、CLI 版本和修复材料变化。也可离线运行 <code>php-selfcheck compare-reports --before before.json --after after.json --json</code>。</p></section>
+  <p>同一目标导入至少两份主机材料后，扫描结果会自动展示最近两份报告的 Web 版本、SAPI、upload_progress、serialize_handler、CLI 版本和修复材料变化。也可离线运行 <code>x2shell-check compare-reports --before before.json --after after.json --json</code>。</p></section>
 
-  <section class="card poc-card"><h2>离线无害 PoC：六项证据规则</h2><p>运行 <code>php-selfcheck offline-poc --json</code>。它只读取程序内置的两份合成 JSON，不解析目标地址，不打开套接字，不执行 PHP，也不生成 multipart、会话、LFI、OOM 或命令载荷。</p><div class="evidence-rules">
+  <section class="card poc-card"><h2>离线无害 PoC：六项证据规则</h2><p>运行 <code>x2shell-check offline-poc --json</code>。它只读取程序内置的两份合成 JSON，不解析目标地址，不打开套接字，不执行 PHP，也不生成 multipart、会话、LFI、OOM 或命令载荷。</p><div class="evidence-rules">
     <div><b>E1</b><span>CLI 与 Web 运行时严格分离</span></div><div><b>E2</b><span>版本只产生基线线索</span></div><div><b>E3</b><span>配置证据绑定运行时范围</span></div><div><b>E4</b><span>SAPI 只约束链路适用面</span></div><div><b>E5</b><span>五类链路必须列出缺失证据</span></div><div><b>E6</b><span>前后对比不升级为独立验证</span></div>
   </div><p class="fine">JSON 输出包含 <code>network_requests: 0</code>（网络请求为 0）、<code>target_connections: 0</code>、<code>exploit_payloads: 0</code>、六项规则逐项依据、前后报告对比和五链矩阵。该 PoC 验证的是本项目的证据判定器，不验证 PHP 漏洞。</p></section>
 

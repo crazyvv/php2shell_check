@@ -3,6 +3,11 @@ name = "php-selfcheck"
 version = "0.8.0"
 edition = "2024"
 rust-version = "1.91"
+autobins = false
+
+[[bin]]
+name = "x2shell-check"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"

@@ -11,8 +11,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGETS = {
-    "x86_64-unknown-linux-musl": ("linux-x86_64", "php-selfcheck", ".tar.gz"),
-    "x86_64-pc-windows-msvc": ("windows-x86_64", "php-selfcheck.exe", ".zip"),
+    "x86_64-unknown-linux-musl": ("linux-x86_64", "x2shell-check", ".tar.gz"),
+    "x86_64-pc-windows-msvc": ("windows-x86_64", "x2shell-check.exe", ".zip"),
 }
 FILES = ["README.md", "THIRD_PARTY_NOTICES.md", "config.open.example.json",
          "collector.options.example.json", "fingerprints.example.json", "nginx.conf.example"]
@@ -33,7 +33,7 @@ def package(target, tag, output):
     binary = ROOT / "target" / target / "release" / executable
     if not binary.is_file():
         raise FileNotFoundError(binary)
-    name = f"php-selfcheck-{tag}-{platform}"
+    name = f"x2shell-check-{tag}-{platform}"
     output.mkdir(parents=True, exist_ok=True)
     archive = output / (name + extension)
     with tempfile.TemporaryDirectory() as temp:
@@ -44,9 +44,12 @@ def package(target, tag, output):
             shutil.copy2(ROOT / filename, directory / filename)
         for subdir in ["licenses", "rules", "tools", "docs"]:
             shutil.copytree(ROOT / subdir, directory / subdir)
-        prefix = ".\\php-selfcheck.exe" if "windows" in target else "./php-selfcheck"
+        if platform.startswith("linux-"):
+            (directory / "scripts").mkdir()
+            shutil.copy2(ROOT / "scripts/x2shell-check.sh", directory / "scripts/x2shell-check.sh")
+        prefix = ".\\x2shell-check.exe" if "windows" in target else "./x2shell-check"
         (directory / "START-HERE.txt").write_text(
-            f"PHP 安全自查台 {tag} / {platform}\n\n"
+            f"x2shell-check · 服务暴露面自查台 {tag} / {platform}\n\n"
             f"在解压目录打开终端运行：\n{prefix} init --allow-anonymous --allow-without-whitelist\n"
             f"{prefix} serve\n\n访问 http://127.0.0.1:8080/；管理员入口 /admin。\n"
             "保存 init 输出的管理员随机密码。init 不覆盖已有 config.json。\n"
