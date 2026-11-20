@@ -52,11 +52,11 @@ def main(tag, directory):
 
 扫描工作台按 Apache、NGINX、Java/JVM 和 PHP 展示各自证据。知识库按组件和 CVE 索引，`/tools` 提供 Bash 下载、批量用法及退出码说明。Linux 的 Rust `collect` 生成可导入网页的主机报告。
 
-## 变更日志（自 v0.8.10）
+## 变更日志（自 v0.8.11）
 
-- **Java 应用盘点**。Bash 的 `--apps` 将目录名匹配标记为待核验线索，JSON 新增 `evidence: "directory_name"`。文本和 CSV 同步说明证据边界，目录名匹配不会触发风险门禁。
-- **Java4Shell 知识库**。明确以实际执行业务的 JVM 为准，并说明如何核验嵌入式 JRE、容器镜像中的运行时与升级后仍在运行的旧进程。
-- **文档与回归**。补充 NGINX 防御巡检范围说明，新增 Java 目录线索的 JSON、文本和 CSV 回归。独立 Bash 脚本版本为 1.2.4。
+- **Java PID 范围**。macOS 按 `--pid` 列表查询指定进程，缺失或不可核实的 PID 报告为证据不足。`--pid` 与 `--no-processes` 同时使用时返回 `2`。
+- **NGINX 配置取证**。同一次扫描中复用同一配置入口的解析结果。worker 在父进程、映像、根目录和挂载命名空间核验通过后，可关联 master 的配置参数。
+- **JSON 编码**。将路径和元数据中的非法 UTF-8 字节输出为替换字符，保留有效的 Unicode 内容。独立 Bash 脚本版本为 1.2.5。
 
 源码提供可选的体积优化构建，执行 `cargo build --profile release-small --locked -j 4` 即可。下方平台附件使用标准 Release 配置。
 """, encoding="utf-8")
