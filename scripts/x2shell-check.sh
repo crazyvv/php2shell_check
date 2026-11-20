@@ -37,7 +37,7 @@ CVE="CVE-2026-114938"
 NICKNAME="Java4Shell"
 RULES_AS_OF="2026-11-18"
 PROG=${0##*/}
-SCRIPT_VERSION="1.2.3"
+SCRIPT_VERSION="1.2.4"
 
 OS=$(uname -s 2>/dev/null || echo unknown)
 ARCH_RAW=$(uname -m 2>/dev/null || echo unknown)

@@ -52,11 +52,11 @@ def main(tag, directory):
 
 扫描工作台按 Apache、NGINX、Java/JVM 和 PHP 展示各自证据。知识库按组件和 CVE 索引，`/tools` 提供 Bash 下载、批量用法及退出码说明。Linux 的 Rust `collect` 生成可导入网页的主机报告。
 
-## 变更日志（自 v0.8.9）
+## 变更日志（自 v0.8.10）
 
-- **Bash 进程覆盖**。Java 自动扫描、NGINX 和 Apache 在检测到容器或受限的 `/proc` 时，会记录 `coverage.process_visibility_limited`。风险命中仍返回 `1`，仅有覆盖不足时返回 `3`。磁盘安装发现会保留。
-- **软件包查询超时**。RPM 和 dpkg 查询超时后有 1 秒退出宽限，之后会被强制终止。失败查询的部分输出不会作为软件包证据。
-- **巡检说明与回归**。更新覆盖不足的解读，验证受限进程视图、批量退出码和软件包查询超时。独立 Bash 脚本版本为 1.2.3。
+- **Java 应用盘点**。Bash 的 `--apps` 将目录名匹配标记为待核验线索，JSON 新增 `evidence: "directory_name"`。文本和 CSV 同步说明证据边界，目录名匹配不会触发风险门禁。
+- **Java4Shell 知识库**。明确以实际执行业务的 JVM 为准，并说明如何核验嵌入式 JRE、容器镜像中的运行时与升级后仍在运行的旧进程。
+- **文档与回归**。补充 NGINX 防御巡检范围说明，新增 Java 目录线索的 JSON、文本和 CSV 回归。独立 Bash 脚本版本为 1.2.4。
 
 源码提供可选的体积优化构建，执行 `cargo build --profile release-small --locked -j 4` 即可。下方平台附件使用标准 Release 配置。
 """, encoding="utf-8")
