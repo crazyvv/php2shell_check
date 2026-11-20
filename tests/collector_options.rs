@@ -182,3 +182,116 @@ fn explicit_java_launcher_checks_build_and_rejects_conflicting_metadata() {
         assert!(report["java4shell"]["runtime_audit"].is_null());
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn batch_java_inventory_does_not_execute_discovered_java() {
+    use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("executed");
+    let launcher = dir.path().join("java");
+    fs::write(&launcher, "#!/bin/sh\n: > \"$JAVA_TEST_MARKER\"\n").unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(dir.path().to_owned())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_x2shell-check"))
+        .args(["collect", "--all"])
+        .env("PATH", path)
+        .env("JAVA_TEST_MARKER", &marker)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(report["java4shell"]["runtime_audit"].is_object());
+    assert!(!marker.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn middleware_inventory_does_not_execute_discovered_programs() {
+    use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("executed");
+    for name in ["apache2", "nginx"] {
+        let launcher = dir.path().join(name);
+        fs::write(&launcher, "#!/bin/sh\n: > \"$MIDDLEWARE_TEST_MARKER\"\n").unwrap();
+        fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_x2shell-check"))
+        .args(["collect", "--middleware", "--php-modules"])
+        .env("PATH", dir.path())
+        .env("MIDDLEWARE_TEST_MARKER", &marker)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["middleware"]["binaries"][dir.path().join("nginx").to_str().unwrap()]["status"],
+        "unknown"
+    );
+    assert!(!marker.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn java_command_limits_report_complete_json_and_stop_helpers() {
+    use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+
+    let dir = tempfile::tempdir().unwrap();
+    let launcher = dir.path().join("java");
+    let helper = dir.path().join("helper-pid");
+    fs::write(
+        &launcher,
+        "#!/bin/sh\nprintf '%s\\n' 'java version \"21.0.13.1\"' >&2\nhead -c 65537 /dev/zero >&2\n",
+    )
+    .unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700)).unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_x2shell-check"))
+            .args(["collect", "--java-path"])
+            .arg(&launcher)
+            .args(args)
+            .env("JAVA_TEST_HELPER", &helper)
+            .output()
+            .unwrap()
+    };
+    let output = run(&["--fail-on-risk"]);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["java4shell"]["runtimes"][0]["reason"],
+        "launcher_output_limit"
+    );
+
+    fs::write(
+        &launcher,
+        "#!/bin/sh\ntrap '' TERM\nsleep 20 &\nprintf '%s\\n' \"$!\" > \"$JAVA_TEST_HELPER\"\nwait\n",
+    )
+    .unwrap();
+    let output = run(&["--scan-timeout", "2"]);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["coverage"]["scan_timed_out"], true);
+    assert_eq!(report["audit"]["evidence_incomplete"], true);
+    let pid = fs::read_to_string(helper).unwrap();
+    let proc = format!("/proc/{}/stat", pid.trim());
+    let active = || {
+        fs::read_to_string(&proc).is_ok_and(|stat| {
+            stat.rsplit_once(')').is_some_and(|(_, fields)| {
+                !matches!(fields.split_whitespace().next(), Some("Z" | "X"))
+            })
+        })
+    };
+    for _ in 0..10 {
+        if !active() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(!active(), "helper still running after scan timeout");
+}

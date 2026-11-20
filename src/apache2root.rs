@@ -226,7 +226,7 @@ pub(crate) fn collect(
     #[cfg(target_os = "linux")]
     {
         use std::{
-            collections::BTreeSet,
+            collections::{BTreeMap, BTreeSet},
             fs,
             io::Read,
             os::unix::fs::MetadataExt,
@@ -235,6 +235,7 @@ pub(crate) fn collect(
         let mut out = evidence("collected");
         let mut running = vec![];
         let mut matched = BTreeSet::new();
+        let mut version_cache = BTreeMap::<(u64, u64), Option<String>>::new();
         let paths = [
             "/usr/sbin/apache2",
             "/usr/sbin/httpd",
@@ -255,11 +256,15 @@ pub(crate) fn collect(
         let proc = fs::read_dir("/proc");
         let proc_available = proc.is_ok();
         let mut truncated = false;
-        for entry in proc.into_iter().flatten().flatten() {
-            let pid = entry.file_name().to_string_lossy().parse::<u32>();
-            let Ok(pid) = pid else {
-                continue;
-            };
+        let entries = proc.into_iter().flatten().flatten().filter_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
+            Some((pid, entry))
+        });
+        for (index, (pid, entry)) in entries.enumerate() {
+            if index == crate::collector::PROCESS_SCAN_LIMIT {
+                truncated = true;
+                break;
+            }
             let dir = entry.path();
             let comm = fs::read_to_string(dir.join("comm")).unwrap_or_default();
             if !matches!(comm.trim(), "apache2" | "httpd") {
@@ -274,7 +279,16 @@ pub(crate) fn collect(
             let path = fs::read_link(&exe).ok();
             let id = |p: &Path| fs::metadata(p).ok().map(|m| (m.dev(), m.ino()));
             let before = id(&exe);
-            let raw = elf_version(&exe, false);
+            let raw = before.and_then(|key| {
+                if let Some(version) = version_cache.get(&key) {
+                    return version.clone();
+                }
+                let version = elf_version(&exe, false);
+                if id(&exe) == before {
+                    version_cache.insert(key, version.clone());
+                }
+                version
+            });
             let mut map_data = String::new();
             let readable = fs::File::open(dir.join("maps"))
                 .and_then(|f| f.take(1_048_577).read_to_string(&mut map_data))

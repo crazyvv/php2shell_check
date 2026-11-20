@@ -13,6 +13,8 @@ use std::{
 };
 
 const FEATURES: [&str; 4] = ["avx512f", "avx512bw", "avx512vbmi", "bmi2"];
+const MAPS_READ_LIMIT: u64 = 8 * 1024 * 1024;
+const MAPS_TOTAL_LIMIT: u64 = 64 * 1024 * 1024;
 const ORACLE: &str = "https://www.oracle.com/security-alerts/cspunov2026.html";
 const UPSTREAM: &str = "https://openjdk.org/groups/vulnerability/advisories/2026-11-17";
 const DISCLOSURE: &str = "https://calif.io/java4shell/";
@@ -80,31 +82,49 @@ fn parse_mapping(line: &str) -> Option<Mapping> {
     })
 }
 
-fn mappings(proc_dir: &Path) -> io::Result<BTreeSet<Mapping>> {
-    let mut reader = BufReader::new(File::open(proc_dir.join("maps"))?.take(8 * 1024 * 1024));
-    let mut line = Vec::new();
-    let mut found: BTreeSet<Mapping> = BTreeSet::new();
-    while reader.read_until(b'\n', &mut line)? != 0 {
-        if let Ok(line) = std::str::from_utf8(&line)
-            && let Some(mapping) = parse_mapping(line.trim_end_matches('\n'))
-        {
-            if !found.iter().any(|item| {
-                item.path == mapping.path
-                    && item.id == mapping.id
-                    && item.deleted == mapping.deleted
-            }) {
-                if found.len() >= 32 {
-                    return Err(io::Error::other("mapping_count_limit"));
-                }
-                found.insert(mapping);
-            }
+struct MapsBudget {
+    remaining: u64,
+    limited: bool,
+}
+
+impl MapsBudget {
+    fn read(&mut self, proc_dir: &Path) -> io::Result<BTreeSet<Mapping>> {
+        let cap = self.remaining.min(MAPS_READ_LIMIT + 1);
+        if cap == 0 {
+            self.limited = true;
+            return Err(io::Error::other("maps_total_limit"));
         }
-        line.clear();
+        let mut reader = BufReader::new(File::open(proc_dir.join("maps"))?.take(cap));
+        let result = (|| {
+            let mut line = Vec::new();
+            let mut found: BTreeSet<Mapping> = BTreeSet::new();
+            while reader.read_until(b'\n', &mut line)? != 0 {
+                if let Ok(line) = std::str::from_utf8(&line)
+                    && let Some(mapping) = parse_mapping(line.trim_end_matches('\n'))
+                    && !found.iter().any(|item| {
+                        item.path == mapping.path
+                            && item.id == mapping.id
+                            && item.deleted == mapping.deleted
+                    })
+                {
+                    if found.len() >= 32 {
+                        self.limited = true;
+                        return Err(io::Error::other("mapping_count_limit"));
+                    }
+                    found.insert(mapping);
+                }
+                line.clear();
+            }
+            Ok(found)
+        })();
+        let unused = reader.get_ref().limit();
+        self.remaining -= cap - unused;
+        if unused == 0 {
+            self.limited = true;
+            return Err(io::Error::other("maps_size_limit"));
+        }
+        result
     }
-    if reader.get_ref().limit() == 0 {
-        return Err(io::Error::other("maps_size_limit"));
-    }
-    Ok(found)
 }
 
 fn mapped_disk_id(proc_dir: &Path, mapping: &Mapping) -> Option<(FileId, &'static str)> {
@@ -176,6 +196,10 @@ fn handles_sigquit(proc_dir: &Path) -> bool {
 }
 
 fn small_file(path: &Path) -> Option<String> {
+    small_file_with_limit(path, 65_536)
+}
+
+fn small_file_with_limit(path: &Path, limit: u64) -> Option<String> {
     if !path.metadata().ok()?.is_file() {
         return None;
     }
@@ -184,8 +208,8 @@ fn small_file(path: &Path) -> Option<String> {
         return None;
     }
     let mut data = String::new();
-    file.take(65537).read_to_string(&mut data).ok()?;
-    (data.len() <= 65536).then_some(data)
+    file.take(limit + 1).read_to_string(&mut data).ok()?;
+    (data.len() as u64 <= limit).then_some(data)
 }
 
 #[derive(Serialize)]
@@ -425,28 +449,20 @@ fn startup_flags(raw: &[u8]) -> Flags {
 pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value {
     let attach = options.java_attach;
     let (cpu, evidence) = if let Some(path) = &options.java_cpuinfo {
-        let mut content = String::new();
-        let readable = File::open(path)
-            .and_then(|file| file.take(2_097_153).read_to_string(&mut content))
-            .is_ok_and(|bytes| bytes <= 2_097_152);
-        let profiles = if readable {
-            cpu_profiles(&content)
-        } else {
-            BTreeMap::new()
-        };
+        let content = small_file_with_limit(path, 2_097_152);
+        let profiles = content.as_deref().map(cpu_profiles).unwrap_or_default();
         let eligible =
             (profiles.len() == 1).then(|| profiles.keys().next().unwrap().iter().all(|flag| *flag));
         (
             eligible,
-            json!({"source":"offline_cpuinfo","file":path,"readable":readable,
+            json!({"source":"offline_cpuinfo","file":path,"readable":content.is_some(),
             "cpuid_leaf_7_subleaf_0":null,"manual_review":profiles.len()>1,"eligible":eligible,
             "proc_cpuinfo_profiles":profiles.into_iter().map(|(flags,count)| json!({"flags":named_flags(flags),"logical_cpus":count})).collect::<Vec<_>>()}),
         )
     } else {
         cpu_evidence(
             cpuid(),
-            fs::read_to_string("/proc/cpuinfo")
-                .ok()
+            small_file_with_limit(Path::new("/proc/cpuinfo"), 2_097_152)
                 .as_deref()
                 .map(cpu_profiles)
                 .unwrap_or_default(),
@@ -466,6 +482,11 @@ pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value
     let mut active = BTreeSet::new();
     let mut unreadable_maps = 0;
     let mut unstable_snapshots = 0;
+    let mut process_limit_reached = false;
+    let mut maps_budget = MapsBudget {
+        remaining: MAPS_TOTAL_LIMIT,
+        limited: false,
+    };
     let owner = fs::metadata("/proc/self").ok().map(|m| m.uid());
     let entries =
         (!options.java_no_processes && options.java_pid.is_empty()).then(|| fs::read_dir("/proc"));
@@ -480,13 +501,18 @@ pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value
             .flatten()
             .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok()),
     );
-    for pid in targets {
-        if processes.len() >= 128 {
+    for (index, pid) in targets.enumerate() {
+        if index == crate::collector::PROCESS_SCAN_LIMIT || processes.len() >= 128 {
+            process_limit_reached = true;
+            break;
+        }
+        if maps_budget.remaining == 0 {
+            maps_budget.limited = true;
             break;
         }
         let proc_dir = PathBuf::from(format!("/proc/{pid}"));
         let started = start_time(&proc_dir);
-        let maps = match mappings(&proc_dir) {
+        let maps = match maps_budget.read(&proc_dir) {
             Ok(maps) if maps.is_empty() => {
                 if !options.java_pid.is_empty() {
                     processes.push(json!({"pid":pid,"status":"unknown","reason":"no_jvm_mapping"}));
@@ -517,7 +543,7 @@ pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value
             }
             (Some(exe), true, Some(started))
                 if start_time(&proc_dir) == Some(started)
-                    && mappings(&proc_dir).is_ok_and(|current| current == maps) =>
+                    && maps_budget.read(&proc_dir).is_ok_and(|current| current == maps) =>
             {
                 let pid = pid.to_string();
                 let limit = deadline.min(tokio::time::Instant::now() + Duration::from_secs(2));
@@ -564,7 +590,7 @@ pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value
                     | "attach_budget_exhausted"
             )
             && start_time(&proc_dir) == Some(started)
-            && mappings(&proc_dir).is_ok_and(|current| current == maps)
+            && maps_budget.read(&proc_dir).is_ok_and(|current| current == maps)
             && let Ok(command) = tokio::time::timeout_at(
                 deadline.min(tokio::time::Instant::now() + Duration::from_secs(2)),
                 run_clean_java(exe, &[&pid.to_string(), "VM.version"]),
@@ -604,7 +630,7 @@ pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value
             .collect();
         let stable = started.is_some()
             && started == start_time(&proc_dir)
-            && mappings(&proc_dir).is_ok_and(|current| current == maps)
+            && maps_budget.read(&proc_dir).is_ok_and(|current| current == maps)
             && runtimes
                 .iter()
                 .all(|(mapping, matched, _)| mapped_disk_id(&proc_dir, mapping) == *matched)
@@ -648,7 +674,7 @@ pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value
                 .is_ok_and(|n| n <= 65_536)
                 && started.is_some()
                 && start_time(&proc_dir) == started
-                && mappings(&proc_dir).is_ok_and(|current| current == maps)
+                && maps_budget.read(&proc_dir).is_ok_and(|current| current == maps)
             {
                 let hint = startup_flags(&raw);
                 if hint.use_base64_intrinsics.is_some() || hint.use_avx.is_some() {
@@ -720,7 +746,7 @@ pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value
             "https://alas.aws.amazon.com/AL2023/ALAS2023-2026-3480.html",
             "https://alas.aws.amazon.com/AL2027/ALAS2027-2026-374.html"],
         "coverage":{"proc_available":proc_available,"unreadable_maps":unreadable_maps,
-            "unstable_snapshots":unstable_snapshots,"process_limit_reached":processes.len() >= 128,"disk_roots":if options.java_jdk.is_empty() && !options.java_processes_only { ROOTS.as_slice() } else { &[] },"explicit_jdk_homes":options.java_jdk,"extra_roots":options.java_root,"disk_max_depth":depth,"root_depth_truncated":depth_boundaries,"process_scan_enabled":!options.java_no_processes,
+            "unstable_snapshots":unstable_snapshots,"process_limit_reached":process_limit_reached,"maps_budget_exhausted":maps_budget.limited,"disk_roots":if options.java_jdk.is_empty() && !options.java_processes_only { ROOTS.as_slice() } else { &[] },"explicit_jdk_homes":options.java_jdk,"extra_roots":options.java_root,"disk_max_depth":depth,"root_depth_truncated":depth_boundaries,"process_scan_enabled":!options.java_no_processes,
             "disk_budget_exhausted":disk_budget_exhausted,"unreadable_directories":unreadable_directories},
     })
 }
@@ -728,6 +754,22 @@ pub(crate) async fn collect(options: &crate::collector::CollectOptions) -> Value
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_mappings_use_the_same_byte_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let maps = "1000-2000 r-xp 00000000 00:2e 123 /opt/jdk/lib/server/libjvm.so\n";
+        fs::write(dir.path().join("maps"), maps).unwrap();
+        let mut budget = MapsBudget {
+            remaining: maps.len() as u64 + 1,
+            limited: false,
+        };
+        assert_eq!(budget.read(dir.path()).unwrap().len(), 1);
+        assert_eq!(budget.remaining, 1);
+        assert!(budget.read(dir.path()).is_err());
+        assert!(budget.limited);
+        assert_eq!(budget.remaining, 0);
+    }
 
     #[test]
     fn maps_require_device_and_inode_and_do_not_relabel_replaced_libraries() {

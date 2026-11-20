@@ -766,20 +766,24 @@ pub(crate) fn collect(
         );
         let mut running = Vec::new();
         let mut cache = BTreeMap::new();
+        let mut config_cache = BTreeMap::new();
         let mut matched_images = BTreeSet::new();
         let mut truncated = false;
         let proc = fs::read_dir("/proc");
         let proc_available = proc.is_ok();
-        for entry in proc.into_iter().flatten().flatten() {
-            let dir = entry.path();
-            if !entry
+        let entries = proc.into_iter().flatten().flatten().filter(|entry| {
+            entry
                 .file_name()
                 .as_encoded_bytes()
                 .iter()
                 .all(u8::is_ascii_digit)
-            {
-                continue;
+        });
+        for (index, entry) in entries.enumerate() {
+            if index == crate::collector::PROCESS_SCAN_LIMIT {
+                truncated = true;
+                break;
             }
+            let dir = entry.path();
             let name = fs::read_to_string(dir.join("comm")).unwrap_or_default();
             if !matches!(name.trim(), "nginx" | "openresty" | "tengine") {
                 continue;
@@ -840,7 +844,10 @@ pub(crate) fn collect(
                     .is_some_and(|(a, b)| (a.dev(), a.ino()) == (b.dev(), b.ino()))
                 && let Some(config) = process_config_entry(&dir)
             {
-                let configuration = config_hints([config.clone()]);
+                let configuration = config_cache
+                    .entry(config.clone())
+                    .or_insert_with(|| config_hints([config.clone()]))
+                    .clone();
                 row["configuration_entry"] = json!(config);
                 row["configuration"] = configuration;
                 row["configuration_entry_source"] = json!("process_argument");

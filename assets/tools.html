@@ -40,7 +40,7 @@
     <div class="tools-coverage">
       <article><h3><a href="/knowledge#java4shell">Java / JVM</a></h3><p>核对运行中的 JVM、磁盘 JDK、构建号、CPU 特性与缓解参数线索。生效参数可选诊断附加。</p></article>
       <article><h3><a href="/knowledge#nginx2root">NGINX</a></h3><p>核对运行映像、版本、五项 CVE 的上游范围，以及二进制模块、磁盘配置与 SCTP 线索。可关联同一挂载命名空间内进程的绝对配置入口，限量展开常见 include 并标出证据文件与行号。</p></article>
-      <article><h3><a href="/knowledge#apache2root">Apache HTTP Server</a></h3><p>核对 httpd、mod_http2、独立模块版本，并区分虚拟主机块内外的 HTTP/2 配置线索。</p></article>
+      <article><h3><a href="/knowledge#apache2root">Apache HTTP Server</a></h3><p>分别核对 httpd 和已加载的 mod_http2。运行模块以进程映射和文件身份为准，模块无法核实时标记覆盖不足。Apache 配置解析有界展开绝对 Include，以及能够确定 ServerRoot 的相对 Include，未能解析的包含项计入跳过。</p></article>
     </div>
   </section>
 
@@ -75,6 +75,7 @@ printf 'exit_code=%s\n' "$status"</code></pre>
   <section id="production-safety" class="card">
     <h2>生产运行与资源上限</h2>
     <p>常规批量巡检使用 <code>bash x2shell-check.sh --all --json</code>，并由批量平台限制并发及单主机任务时长。Linux 每个专项最多检查 2,048 个 PID，NGINX 和 Apache 各最多深入检查 24 个匹配进程。macOS 的 Java 进程清点最多处理 2,048 条进程记录。</p>
+    <p>整次巡检默认限时 120 秒。超时后终止扫描进程组并返回 <code>3</code>。JSON 输出用 <code>coverage.scan_timed_out</code> 标记中断，已中断的巡检需要重新运行才能得到完整报告。Bash 用脚本顶部的 <code>SCAN_TIMEOUT</code> 调整时限。Rust 用 <code>collect --scan-timeout 秒数</code> 调整。</p>
     <p>Java 的显式 <code>--root</code> 总计最多遍历 10,000 个条目，<code>--apps</code> 另有 10,000 个条目额度。两者都限制在起始文件系统内，并遵守各自的搜索深度。达到条目上限且后面还有数据时，报告会标记覆盖不足。没有命中风险门禁时返回 <code>3</code>，已有命中仍返回 <code>1</code>。条目上限约束读取量，单次文件系统访问仍取决于目标主机的 I/O 响应。</p>
     <ul>
       <li><code>--jcmd</code> 会主动附加到 JVM，可能启动诊断监听器或造成短暂停顿。延迟敏感业务保持默认设置。</li>
@@ -85,8 +86,10 @@ printf 'exit_code=%s\n' "$status"</code></pre>
       <p>打开 <code>x2shell-check.sh</code>，在开头的「资源上限」区修改对应变量的数值。按正整数填写，保留等号两边的写法。修改后直接用原命令执行，建议先在单台主机验证覆盖和运行时间，再分发同一份脚本。</p>
       <dl>
         <dt>进程和目录</dt><dd><code>PROCESS_SCAN_LIMIT=2048</code>、<code>WEB_PROCESS_MATCH_LIMIT=24</code> 和 <code>DIRECTORY_ENTRY_LIMIT=10000</code>。<code>ROOT_DEPTH=8</code> 和 <code>APPS_DEPTH=3</code> 是默认深度，可分别由 <code>--root-depth</code> 和 <code>--apps-depth</code> 覆盖。</dd>
-        <dt>Web 文件读取</dt><dd><code>WEB_CONFIG_FILE_LIMIT=64</code>、<code>WEB_CONFIG_BYTE_LIMIT=65536</code>、<code>NGINX_INCLUDE_DEPTH_LIMIT=8</code>、<code>WEB_BINARY_BYTE_LIMIT=16777216</code> 和 <code>APACHE_MAPS_BYTE_LIMIT=1048576</code>。离线 CPU 信息另由 <code>CPUINFO_BYTE_LIMIT=1048576</code> 限制。带 <code>BYTE</code> 的值以字节计。</dd>
-        <dt>单次命令超时</dt><dd><code>PACKAGE_QUERY_TIMEOUT=2</code>、<code>JCMD_TIMEOUT=3</code> 和 <code>JAVA_VERSION_TIMEOUT=30</code>，单位为秒。软件包查询收到超时终止信号后还有 1 秒退出时间，随后会被强制终止。主机需要有 <code>timeout</code> 工具。Java 版本查询也支持 <code>gtimeout</code>。</dd>
+        <dt>Web 文件读取</dt><dd><code>WEB_CONFIG_FILE_LIMIT=64</code>、<code>WEB_CONFIG_BYTE_LIMIT=65536</code> 和 <code>WEB_CONFIG_DIRECTORY_LIMIT=2048</code> 分别限制解析文件数、单文件字节数和目录枚举条目数。目录额度包含通配符未匹配的条目，截断会记入覆盖缺口。<code>NGINX_INCLUDE_DEPTH_LIMIT=8</code> 和 <code>APACHE_INCLUDE_DEPTH_LIMIT=8</code> 限制包含深度。<code>SCTP_CONFIG_FILE_LIMIT=128</code> 限制 SCTP 配置文件数。<code>WEB_BINARY_BYTE_LIMIT=16777216</code>、<code>APACHE_MAPS_BYTE_LIMIT=1048576</code> 和 <code>APACHE_MAPPED_MODULE_LIMIT=24</code> 限制二进制、Apache 进程映射和运行模块读取。</dd>
+        <dt>Java 映射读取</dt><dd><code>JVM_MAPS_BYTE_LIMIT=8388608</code> 和 <code>JVM_MAPS_TOTAL_BYTE_LIMIT=67108864</code>。总额度包括每次重新核对身份的读取。达到任一上限时，Java 报告标记 <code>coverage.jvm_maps_limited</code>。</dd>
+        <dt>子命令时限</dt><dd><code>PACKAGE_QUERY_TIMEOUT=2</code>、<code>JCMD_TIMEOUT=3</code>、<code>JCMD_TOTAL_TIMEOUT=15</code> 和 <code>JAVA_VERSION_TIMEOUT=30</code>，单位为秒。单次命令收到超时终止信号后有 1 秒退出宽限。软件包查询需要 <code>timeout</code>，Java 版本和诊断查询也支持 <code>gtimeout</code>。</dd>
+        <dt>子命令输出</dt><dd><code>PACKAGE_OUTPUT_BYTE_LIMIT=32768</code>、<code>JCMD_OUTPUT_BYTE_LIMIT=262144</code> 和 <code>JAVA_VERSION_OUTPUT_BYTE_LIMIT=65536</code>，单位为字节。超限的输出无效，显式 Java 版本查询会标记为未知。</dd>
       </dl>
     </details>
   </section>

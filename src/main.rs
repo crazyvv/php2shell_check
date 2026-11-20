@@ -120,9 +120,142 @@ fn check_target(value: &str) -> std::result::Result<String, String> {
         .map(|u| u.to_string())
         .map_err(|e| e.to_string())
 }
-#[tokio::main]
-async fn main() -> Result<()> {
-    match Cli::parse().command {
+
+const COLLECT_WORKER: &str = "--internal-collect-worker";
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn supervise_collect(seconds: u64, format: collector::CollectFormat) -> Result<i32> {
+    use std::{io::Write as _, process::Stdio, time::Duration};
+    use tokio::{
+        io::AsyncReadExt as _,
+        signal::unix::{SignalKind, signal},
+    };
+
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut hangup = signal(SignalKind::hangup())?;
+    #[cfg(target_os = "linux")]
+    let reap_helpers = unsafe {
+        libc::prctl(
+            libc::PR_SET_CHILD_SUBREAPER,
+            1 as libc::c_ulong,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+        )
+    } == 0;
+    let mut child = tokio::process::Command::new(std::env::current_exe()?)
+        .arg(COLLECT_WORKER)
+        .args(std::env::args_os().skip(1))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn()?;
+    let pid = child.id().expect("new worker has a process ID") as libc::pid_t;
+    let mut pipe = child.stdout.take().expect("piped worker output");
+    let mut output = Vec::new();
+    let result = async {
+        // The collector's host report budget is 190 kB. Allow extra space for CSV formatting.
+        const MAX_REPORT: u64 = 1024 * 1024;
+        (&mut pipe)
+            .take(MAX_REPORT + 1)
+            .read_to_end(&mut output)
+            .await?;
+        if output.len() as u64 > MAX_REPORT {
+            return Err(std::io::Error::other("本机巡检报告超过输出上限"));
+        }
+        // Observe exit while retaining the group leader's PID reservation.
+        loop {
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let code = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+                )
+            };
+            if code == 0 {
+                if unsafe { info.si_pid() } == pid {
+                    return Ok(());
+                }
+            } else {
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(error);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    };
+    let (result, interruption) = tokio::select! {
+        result = result => (Some(result), None),
+        _ = tokio::time::sleep(Duration::from_secs(seconds)) => (None, None),
+        _ = interrupt.recv() => (None, Some(130)),
+        _ = terminate.recv() => (None, Some(143)),
+        _ = hangup.recv() => (None, Some(129)),
+    };
+    // Signal before reaping the leader. Its numerical process group cannot be recycled here.
+    if !matches!(&result, Some(Err(error)) if error.raw_os_error() == Some(libc::ECHILD)) {
+        unsafe { libc::kill(-pid, libc::SIGKILL) };
+    }
+    let status = tokio::time::timeout(Duration::from_millis(100), child.wait()).await;
+    #[cfg(target_os = "linux")]
+    if reap_helpers && child.id().is_none() {
+        let _ = tokio::time::timeout(Duration::from_millis(100), async {
+            loop {
+                // The worker is reaped. Any remaining children in this group are orphaned helpers.
+                match unsafe { libc::waitpid(-pid, std::ptr::null_mut(), libc::WNOHANG) } {
+                    ..=-1 => break,
+                    0 => tokio::time::sleep(Duration::from_millis(5)).await,
+                    _ => {}
+                }
+            }
+        })
+        .await;
+    }
+    if let Some(code) = interruption {
+        return Ok(code);
+    }
+    if let Some(result) = result {
+        result?;
+        let status = status??;
+        std::io::stdout().lock().write_all(&output)?;
+        return Ok(status.code().unwrap_or(3));
+    }
+
+    eprintln!("巡检超过 {seconds} 秒，已终止，报告不完整。");
+    if matches!(format, collector::CollectFormat::Json) {
+        let report = serde_json::json!({
+            "schema":"php-selfcheck-host/v1","source":"developer_supplied_unverified","status":"timeout",
+            "coverage":{"scan_timed_out":true,"scan_timeout_seconds":seconds},
+            "audit":{"evidence_incomplete":true,"reason":"scan_timeout"}
+        });
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    }
+    Ok(3)
+}
+
+fn main() -> Result<()> {
+    let mut args = std::env::args_os();
+    let executable = args.next().expect("executable argument");
+    let mut args = args.peekable();
+    let collect_worker = args.next_if(|arg| arg == COLLECT_WORKER).is_some();
+    let command = Cli::parse_from(std::iter::once(executable).chain(args)).command;
+    let mut runtime = if matches!(&command, Command::Collect(_)) {
+        tokio::runtime::Builder::new_current_thread()
+    } else {
+        tokio::runtime::Builder::new_multi_thread()
+    };
+    runtime
+        .enable_all()
+        .build()?
+        .block_on(run(command, collect_worker))
+}
+
+async fn run(command: Command, collect_worker: bool) -> Result<()> {
+    match command {
         Command::Fingerprints { action } => match action {
             FingerprintCommand::Export { output } => {
                 use std::io::Write;
@@ -278,6 +411,12 @@ async fn main() -> Result<()> {
                 ensure!(report["audit"]["demo_passed"] == true, "Java 演示判定失败");
                 return Ok(());
             }
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            if !collect_worker {
+                std::process::exit(supervise_collect(args.scan_timeout, format).await?);
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            let _ = collect_worker;
             let options = args.resolve()?;
             let java_only = options.java_command
                 && !(options.nginx2root

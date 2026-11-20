@@ -231,77 +231,6 @@ fn find_java(root: &Path, out: &mut BTreeSet<PathBuf>) {
     }
 }
 
-fn known_process_flags(raw: &[u8]) -> Vec<String> {
-    let mut found = BTreeMap::<&str, String>::new();
-    for value in raw
-        .split(|byte| *byte == 0)
-        .filter_map(|value| std::str::from_utf8(value).ok())
-    {
-        for (key, prefix) in [
-            ("UseBASE64Intrinsics", "-XX:"),
-            ("UseAVX", "-XX:UseAVX="),
-            ("TieredStopAtLevel", "-XX:TieredStopAtLevel="),
-        ] {
-            if (key == "UseBASE64Intrinsics"
-                && matches!(
-                    value,
-                    "-XX:-UseBASE64Intrinsics" | "-XX:+UseBASE64Intrinsics"
-                ))
-                || (key != "UseBASE64Intrinsics" && value.starts_with(prefix))
-            {
-                found.insert(key, value.chars().take(80).collect());
-            }
-        }
-        if value == "-Xint" {
-            found.insert("execution_mode", value.into());
-        }
-    }
-    found.into_values().collect()
-}
-
-fn processes(proc_root: &Path, binaries: &mut BTreeSet<PathBuf>) -> Vec<Value> {
-    let mut out = vec![];
-    let Ok(entries) = std::fs::read_dir(proc_root) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        if out.len() >= 128 {
-            break;
-        }
-        let pid = entry.file_name().to_string_lossy().into_owned();
-        if !pid.bytes().all(|c| c.is_ascii_digit()) {
-            continue;
-        }
-        let dir = entry.path();
-        let name = std::fs::read_to_string(dir.join("comm"))
-            .unwrap_or_default()
-            .trim()
-            .chars()
-            .take(100)
-            .collect::<String>();
-        let maps = text_file(&dir.join("maps"), 262_144);
-        let jvm_loaded = maps.as_deref().is_some_and(|maps| {
-            maps.lines()
-                .any(|line| line.contains("libjvm.so") || line.contains("libjvm.dylib"))
-        });
-        if !jvm_loaded && !name.to_ascii_lowercase().contains("java") {
-            continue;
-        }
-        let exe = std::fs::read_link(dir.join("exe")).ok();
-        if exe
-            .as_ref()
-            .is_some_and(|path| path.file_name().is_some_and(|name| name == "java"))
-            && let Some(path) = &exe
-        {
-            binaries.insert(std::fs::canonicalize(path).unwrap_or_else(|_| path.clone()));
-        }
-        let cmdline = std::fs::read(dir.join("cmdline")).unwrap_or_default();
-        let flags = known_process_flags(&cmdline[..cmdline.len().min(65_536)]);
-        out.push(json!({"pid":pid,"name":name,"executable":exe,"jvm_library_loaded":jvm_loaded,"known_command_line_flags":flags,"flag_scope":"仅保留 Java4Shell 相关参数；其他参数不保存，进程环境不读取","effective_flags_complete":false}));
-    }
-    out
-}
-
 #[derive(Default, Serialize)]
 pub(crate) struct Release {
     pub(crate) version: Option<String>,
@@ -568,6 +497,9 @@ pub async fn launcher_gate(path: &Path) -> Value {
     let (verdict, reason) = match status {
         BuildStatus::NotAffected => ("not_affected", "excluded_build"),
         BuildStatus::Affected => ("potential", "version_gate_only"),
+        BuildStatus::Unknown if command["error"] == "command_output_limit" => {
+            ("unknown", "launcher_output_limit")
+        }
         BuildStatus::Unknown if conflicting => {
             ("unknown", "launcher_version_conflicts_with_release")
         }
@@ -575,7 +507,7 @@ pub async fn launcher_gate(path: &Path) -> Value {
     };
     json!({"kind":"java-binary","binary":path,"version":metadata.full_build.as_ref().or(metadata.version.as_ref()),
         "build_status":status,"status":verdict,"reason":reason,"vendor":metadata.vendor,"product":metadata.product,
-        "flag_source":"unavailable","effective_flags_complete":false,"command_exit_code":command["exit_code"]})
+        "flag_source":"unavailable","effective_flags_complete":false,"command_exit_code":command["exit_code"],"command_error":command["error"]})
 }
 
 pub fn demo_report() -> Value {
@@ -836,47 +768,31 @@ pub async fn collect(enabled: bool) -> Value {
     for root in ["/usr/lib/jvm", "/usr/java", "/opt/java", "/opt/jdk"] {
         find_java(Path::new(root), &mut binaries);
     }
-    let running_processes = processes(Path::new("/proc"), &mut binaries);
     let mut runtimes = vec![];
     for exe in binaries.into_iter().take(16) {
-        let version = crate::collector::run_clean_java(&exe, &["-version"]).await;
-        let flags =
-            crate::collector::run_clean_java(&exe, &["-XX:+PrintFlagsFinal", "-version"]).await;
-        let version_output = version["output"].as_str().unwrap_or("");
-        let flags_output = flags["output"].as_str().unwrap_or("");
-        let mut assessment = assess_runtime(version_output, flags_output, &hardware);
-        assessment["binary"] = json!(exe);
-        assessment["version_command_status"] = if version["exit_code"] == 0 {
-            json!("completed")
-        } else {
-            json!("failed")
+        let metadata = exe
+            .parent()
+            .and_then(Path::parent)
+            .and_then(|home| text_file(&home.join("release"), 65_536))
+            .map(|data| release(&data))
+            .unwrap_or_default();
+        let build = build_status(&metadata);
+        let (status, reason) = match build {
+            BuildStatus::NotAffected => ("not_affected", "excluded_disk_build"),
+            BuildStatus::Affected => ("potential", "disk_build_only"),
+            BuildStatus::Unknown => ("unknown", "launcher_release_unavailable_or_unverified"),
         };
-        assessment["version_banner"] = json!(
-            version_output
-                .lines()
-                .take(4)
-                .collect::<Vec<_>>()
-                .join("\n")
-                .chars()
-                .take(1000)
-                .collect::<String>()
-        );
-        runtimes.push(assessment);
+        runtimes.push(json!({"binary":exe,"version":metadata.full_build.or(metadata.version),
+            "vendor":metadata.vendor,"product":metadata.product,"build_status":build,
+            "status":status,"reason":reason,"version_command_status":"disabled",
+            "flag_source":"unavailable","effective_flags_complete":false}));
     }
-    let any_candidate = runtimes.iter().any(|runtime| {
-        runtime["status"].as_str().is_some_and(|status| {
-            status.starts_with("affected_candidate") || status.starts_with("candidate_")
-        })
-    });
-    let unknown = runtimes
-        .iter()
-        .any(|runtime| runtime["status"] == "unknown");
     json!({
-        "status":if any_candidate{"candidate_found"}else if runtimes.is_empty(){"no_runtime_found"}else if unknown{"unknown"}else{"no_candidate_in_discovered_scope"},
-        "cve":CVE,"hardware":hardware,"runtimes":runtimes,"running_processes":running_processes,
+        "status":if runtimes.is_empty(){"no_runtime_found"}else{"collected"},
+        "cve":CVE,"hardware":hardware,"runtimes":runtimes,"running_processes":[],
         "sources":[ORACLE_ADVISORY,CVE_RECORD,RESEARCH],"source_snapshot_date":"2026-11-18",
         "checks":{"malformed_base64_sent":false,"poc_executed":false,"process_attached":false,"process_environment_read":false},
-        "limitations":["只覆盖当前命名空间可见的标准目录、最多 16 个 Java 程序和 128 个 JVM 进程；容器与镜像须逐个采集。","采集器清洁环境中的 JVM 默认值不等于服务进程实际参数；进程环境、参数文件和后置覆盖未读取。","网页产品指纹、Java 版本或 CPU 条件均不能单独确认漏洞；厂商回补、输入路径与服务重启仍需核验。","当前节点缺少 CPU 指令集只说明当前放置不适用，迁移到其他节点后必须重新检查。"]
+        "limitations":["启动器清点仅从磁盘 release 读取版本，无法证明运行映像或服务进程使用的生效参数。","当前节点缺少 CPU 指令集只说明当前放置不适用，迁移到其他节点后必须重新检查。"]
     })
 }
 

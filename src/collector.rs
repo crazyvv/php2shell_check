@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+pub(crate) const PROCESS_SCAN_LIMIT: usize = 2048;
+
 pub(crate) fn which(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|p| p.join(name))
@@ -37,44 +39,50 @@ async fn run_command(exe: &Path, args: &[&str], clear_java_options: bool) -> Val
                 .env_remove("_JAVA_OPTIONS");
         }
         let mut child = process
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()?;
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
-        // PrintFlagsFinal is commonly larger than the ordinary command limit. It is only used by
-        // the explicit Java collector and is reduced to allowlisted flags before serialization.
-        let output_limit = if clear_java_options { 262_144 } else { 24_000 };
+        let output_limit = match (clear_java_options, args) {
+            (true, ["-version"]) => 65_536,
+            (true, _) => 262_144,
+            (false, _) => 24_000,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let bytes_read = AtomicUsize::new(0);
         async fn read(
             mut pipe: impl tokio::io::AsyncRead + Unpin,
             output_limit: usize,
+            bytes_read: &AtomicUsize,
         ) -> std::io::Result<Vec<u8>> {
             let mut output = vec![];
-            let mut buf = [0; 4096];
+            let mut buffer = [0; 4096];
             loop {
-                let n = pipe.read(&mut buf).await?;
-                if n == 0 {
-                    break;
+                let length = pipe.read(&mut buffer).await?;
+                if length == 0 {
+                    return Ok(output);
                 }
-                let take = n.min(output_limit.saturating_sub(output.len()));
-                output.extend_from_slice(&buf[..take]);
+                if bytes_read.fetch_add(length, Ordering::Relaxed) + length > output_limit {
+                    return Err(std::io::Error::other("command_output_limit"));
+                }
+                output.extend_from_slice(&buffer[..length]);
             }
-            Ok(output)
         }
         let (out, err, status) = tokio::time::timeout(Duration::from_secs(10), async {
-            tokio::join!(
-                read(stdout, output_limit),
-                read(stderr, output_limit),
+            tokio::try_join!(
+                read(stdout, output_limit, &bytes_read),
+                read(stderr, output_limit, &bytes_read),
                 child.wait()
             )
         })
-        .await?;
-        let mut bytes = out?;
-        bytes.extend(err?);
-        bytes.truncate(output_limit);
+        .await??;
+        let mut bytes = out;
+        bytes.extend(err);
         Ok((
-            status?.code().unwrap_or(-1),
+            status.code().unwrap_or(-1),
             String::from_utf8_lossy(&bytes).into_owned(),
         ))
     }
@@ -169,12 +177,21 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
         )
     }
     let mut processes = vec![];
+    let mut process_limit_reached = false;
     if let Ok(entries) = std::fs::read_dir("/proc") {
-        for entry in entries.flatten() {
-            let pid = entry.file_name().to_string_lossy().into_owned();
-            if !pid.bytes().all(|c| c.is_ascii_digit()) {
-                continue;
+        let entries = entries.flatten().filter(|entry| {
+            entry
+                .file_name()
+                .as_encoded_bytes()
+                .iter()
+                .all(u8::is_ascii_digit)
+        });
+        for (index, entry) in entries.enumerate() {
+            if index == PROCESS_SCAN_LIMIT {
+                process_limit_reached = true;
+                break;
             }
+            let pid = entry.file_name().to_string_lossy().into_owned();
             if let Ok(name) = std::fs::read_to_string(entry.path().join("comm")) {
                 let name = name.trim();
                 if name.to_lowercase().contains("php")
@@ -188,16 +205,11 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
             }
         }
     }
-    let middleware = crate::middleware::collect(options).await;
     let package_audit = crate::hostaudit::collect(options.package_audit).await;
-    let java_scoped = options.java_processes_only
-        || options.java_no_processes
-        || !options.java_pid.is_empty()
-        || !options.java_jdk.is_empty();
     let java4shell = if let Some(path) = &options.java_path {
         let row = crate::java4shell::launcher_gate(path).await;
         json!({"status":"collected","scope":"explicit_launcher","cve":crate::java4shell::CVE,"runtimes":[row]})
-    } else if java_scoped {
+    } else if options.java_command && cfg!(target_os = "linux") {
         json!({"status":"collected","checks":{},"scope":"runtime_audit"})
     } else {
         crate::java4shell::collect(options.java_command).await
@@ -261,6 +273,7 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
             }
         }
     }
+    let middleware = crate::middleware::collect_with_sources(options, &nginx2root, &apache2root).await;
     let rows = |report: &Value, sections: &[&str]| -> Vec<Value> {
         sections
             .iter()
@@ -296,6 +309,8 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
                 || java4shell["applications"]["coverage_incomplete"] == true
                 || java4shell["runtime_audit"]["coverage"]["proc_available"] == false
                 || java4shell["runtime_audit"]["coverage"]["process_limit_reached"] == true
+                || java4shell["runtime_audit"]["coverage"]["maps_budget_exhausted"] == true
+                || java4shell["runtime_audit"]["cpu"]["readable"] == false
                 || java4shell["runtime_audit"]["coverage"]["disk_budget_exhausted"] == true
                 || [
                     "unreadable_maps",
@@ -349,7 +364,7 @@ pub async fn collect_with_options(options: &CollectOptions) -> Value {
         });
     }
     bounded_report(
-        json!({"php_command":{"status":if options.php_command {"enabled"}else{"disabled"},"scope":"cli_only","detail":"显式开启才运行 PHP；CLI 配置不能代表 Web/FPM"},"java4shell":java4shell,"nginx2root":nginx2root,"apache2root":apache2root,"package_audit":package_audit,"collection_options":options,"audit":audit,"middleware":middleware,"schema":"php-selfcheck-host/v1","hostname":std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim(),"collected_at":chrono::Utc::now().to_rfc3339(),"platform":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"source":"developer_supplied_unverified","checks":checks,"runtime_observations":runtime_observations,"processes":processes,"limitations":["CLI 版本不等于 Web/FPM 实例版本；报告不自动证明补丁或漏洞状态。","Java4Shell 核验只检查版本、VM、当前 CPU 与受限参数线索，不触发漏洞或确认可利用性。","仅检查当前主机可见进程与标准路径；容器、远端主机、自定义安装目录需另行核验。","此报告未签名，平台记录为开发者提交材料。"]}),
+        json!({"php_command":{"status":if options.php_command {"enabled"}else{"disabled"},"scope":"cli_only","detail":"显式开启才运行 PHP；CLI 配置不能代表 Web/FPM"},"java4shell":java4shell,"nginx2root":nginx2root,"apache2root":apache2root,"package_audit":package_audit,"collection_options":options,"audit":audit,"middleware":middleware,"schema":"php-selfcheck-host/v1","hostname":std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim(),"collected_at":chrono::Utc::now().to_rfc3339(),"platform":format!("{} {}",std::env::consts::OS,std::env::consts::ARCH),"source":"developer_supplied_unverified","checks":checks,"runtime_observations":runtime_observations,"processes":processes,"coverage":{"process_limit_reached":process_limit_reached},"limitations":["CLI 版本不等于 Web/FPM 实例版本；报告不自动证明补丁或漏洞状态。","Java4Shell 核验只检查版本、VM、当前 CPU 与受限参数线索，不触发漏洞或确认可利用性。","仅检查当前主机可见进程与标准路径；容器、远端主机、自定义安装目录需另行核验。","此报告未签名，平台记录为开发者提交材料。"]}),
     )
 }
 
@@ -656,6 +671,9 @@ pub enum CollectFormat {
 
 #[derive(clap::Args, Debug)]
 pub struct CollectArgs {
+    /// 整次本机巡检的超时秒数
+    #[arg(long, default_value_t = 120, value_parser = clap::value_parser!(u64).range(1..=3600))]
+    pub scan_timeout: u64,
     /// 本机 Web 探测使用的被动特征库 JSON
     #[arg(long)]
     pub fingerprints: Option<PathBuf>,
@@ -665,7 +683,7 @@ pub struct CollectArgs {
     /// 自定义 PHP CLI 的绝对路径（需要 --php-command）
     #[arg(long)]
     pub php_binary: Option<PathBuf>,
-    /// Java4Shell 主机核验：运行 java -version/PrintFlagsFinal 并读取 CPU 与受限 JVM 参数
+    /// 读取 CPU、JDK 元数据和运行中的 JVM 映射，默认不启动 Java
     #[arg(long,num_args=0..=1,default_missing_value="true",require_equals=true)]
     pub java_command: Option<bool>,
     /// 读取目标 JVM 的生效参数（需要 --java-command）
@@ -765,7 +783,17 @@ impl CollectArgs {
             .unwrap_or(Path::new("."))
             .to_path_buf();
         let mut options: CollectOptions = match self.options {
-            Some(path) => serde_json::from_slice(&std::fs::read(path)?)?,
+            Some(path) => {
+                use std::io::Read as _;
+                const OPTIONS_LIMIT: u64 = 1024 * 1024;
+                anyhow::ensure!(path.is_file(), "--options 需要存在的普通文件");
+                let mut data = Vec::new();
+                std::fs::File::open(path)?
+                    .take(OPTIONS_LIMIT + 1)
+                    .read_to_end(&mut data)?;
+                anyhow::ensure!(data.len() as u64 <= OPTIONS_LIMIT, "--options 超过 1 MiB");
+                serde_json::from_slice(&data)?
+            }
             None => CollectOptions::default(),
         };
         for path in options

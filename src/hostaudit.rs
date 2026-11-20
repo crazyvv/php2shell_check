@@ -416,11 +416,19 @@ async fn collect_at(proc: &Path, release: &Path) -> Value {
         Err(e) => return json!({"status":"unavailable","error":e.to_string(),"instances":[]}),
     };
     let self_ns = fs::read_link(proc.join("self/ns/mnt")).ok();
-    for entry in entries.flatten() {
-        let pid = entry.file_name().to_string_lossy().into_owned();
-        if pid.is_empty() || !pid.bytes().all(|b| b.is_ascii_digit()) {
-            continue;
+    let entries = entries.flatten().filter(|entry| {
+        entry
+            .file_name()
+            .as_encoded_bytes()
+            .iter()
+            .all(u8::is_ascii_digit)
+    });
+    for (index, entry) in entries.enumerate() {
+        if index == crate::collector::PROCESS_SCAN_LIMIT {
+            errors.push("进程检查达到上限");
+            break;
         }
+        let pid = entry.file_name().to_string_lossy().into_owned();
         let root = entry.path();
         let name = read(&root.join("comm"))
             .unwrap_or_default()

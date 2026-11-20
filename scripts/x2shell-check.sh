@@ -45,18 +45,29 @@ ARCH_NORM=$(printf '%s' "$ARCH_RAW" | tr '[:upper:]' '[:lower:]')
 
 # 资源上限（按需直接修改右侧的正整数，字节上限单位为字节）
 # 上限适用于单次巡检。将数值调高会增加主机开销。
+SCAN_TIMEOUT=120               # 整次巡检超时（秒），终止扫描进程组
 PROCESS_SCAN_LIMIT=2048         # 每个专项最多检查的进程记录数
 WEB_PROCESS_MATCH_LIMIT=24      # NGINX 和 Apache 各自深入检查的匹配进程数
 DIRECTORY_ENTRY_LIMIT=10000     # Java --root 合计与 --apps 各自的目录条目上限
 WEB_CONFIG_FILE_LIMIT=64        # 单次配置解析最多检查的文件数
 WEB_CONFIG_BYTE_LIMIT=65536      # 单个 Web 配置文件的读取上限
+WEB_CONFIG_DIRECTORY_LIMIT=2048 # 单次 Web 配置解析最多枚举的目录条目（含未匹配项）
+SCTP_CONFIG_FILE_LIMIT=128      # SCTP 模块配置线索最多检查的文件数
+APACHE_INCLUDE_DEPTH_LIMIT=8    # Apache Include 最大递归深度
 NGINX_INCLUDE_DEPTH_LIMIT=8     # NGINX include 最大递归深度
 WEB_BINARY_BYTE_LIMIT=16777216   # 单个 Web 二进制的版本线索读取上限
-APACHE_MAPS_BYTE_LIMIT=1048576   # Apache 模块映射的读取上限
+APACHE_MAPS_BYTE_LIMIT=1048576   # 每个 Apache 进程的映射读取上限
+APACHE_MAPPED_MODULE_LIMIT=24   # 一次巡检最多读取的不同运行模块二进制
+JVM_MAPS_BYTE_LIMIT=8388608     # 单次 JVM 进程映射读取上限
+JVM_MAPS_TOTAL_BYTE_LIMIT=67108864 # Java 专项映射总读取上限，含身份复核
 PACKAGE_QUERY_TIMEOUT=2        # 单次软件包查询超时（秒）
+PACKAGE_OUTPUT_BYTE_LIMIT=32768 # 单次软件包查询输出上限
 JCMD_TIMEOUT=3                 # 单次 JVM 诊断超时（秒）
+JCMD_TOTAL_TIMEOUT=15          # 本次 JVM 诊断的累计时间预算（秒）
+JCMD_OUTPUT_BYTE_LIMIT=262144  # 单次 JVM 诊断输出上限
 CPUINFO_BYTE_LIMIT=1048576      # 离线 CPU 信息文件读取上限
 JAVA_VERSION_TIMEOUT=30        # 显式 Java 启动器版本查询超时（秒）
+JAVA_VERSION_OUTPUT_BYTE_LIMIT=65536 # Java 启动器版本输出上限
 ROOT_DEPTH=8                   # --root 默认搜索深度，可由 --root-depth 覆盖
 APPS_DEPTH=3                   # --apps 默认搜索深度，可由 --apps-depth 覆盖
 
@@ -77,6 +88,7 @@ ASSUME_FEFF=0
 JCMD=0
 PROCESS_LIMIT_REACHED=false
 PROCESS_VISIBILITY_LIMITED=false
+JVM_MAPS_LIMITED=false
 ROOT_ENTRY_LIMIT_REACHED=false
 APPS_ENTRY_LIMIT_REACHED=false
 APPS_SCAN_ERRORS=0
@@ -152,7 +164,7 @@ Java4Shell / Nginx2Root / Apache2Root 主机暴露面检测（$PROG v$SCRIPT_VER
   0  未命中 --fail-on
   1  命中 --fail-on（默认：存在 affected 或 potential 资产）
   2  参数或 IO 错误
-  3  无失败项，但存在无法判断（unknown）的资产
+  3  无失败项但证据不足，或超过整次巡检的 ${SCAN_TIMEOUT} 秒上限
 
 示例:
   $PROG
@@ -181,6 +193,27 @@ EOF
 # 基础工具
 # ---------------------------------------------------------------------------
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# Keep nested commands in the scan's process group when the watchdog is active.
+bounded_command() (
+    local limiter=$1 seconds=$2 limit=$3 output size rc=0 merge=0
+    local -a opts=(-k 1s)
+    shift 3
+    if [[ $1 == --merge-stderr ]]; then merge=1; shift; fi
+    if [[ -n ${SCAN_WORK:-} ]]; then opts+=(--foreground); fi
+    export LC_ALL=C
+    output=$(mktemp "${SCAN_WORK:-${WORK:-${TMPDIR:-/tmp}}}/command.XXXXXX") || return 1
+    trap 'rm -f -- "$output"' EXIT
+    set -o pipefail
+    {
+        if (( merge )); then exec 2>&1; fi
+        exec "$limiter" "${opts[@]}" "$seconds" "$@" </dev/null
+    } | head -c "$((limit + 1))" > "$output" || rc=$?
+    size=$(wc -c < "$output") || return 1
+    (( size <= limit )) || return 125
+    (( rc == 0 )) || return "$rc"
+    cat -- "$output"
+)
 
 lower() { printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'; }
 
@@ -413,7 +446,7 @@ installation_rpm_metadata() {
         "$root"/jre/lib/*/*/libjvm.so "$root/bin/java" "$root/jre/bin/java"; do
         [ -f "$file" ] || continue
         file=$(real_path "$(resolve_symlinks "$file")")
-        row=$(LC_ALL=C timeout -k 1s "$PACKAGE_QUERY_TIMEOUT" rpm -qf --qf '%{NAME}\t%{VERSION}\t%{VENDOR}\n' -- "$file" 2>/dev/null) || continue
+        row=$(bounded_command timeout "$PACKAGE_QUERY_TIMEOUT" "$PACKAGE_OUTPUT_BYTE_LIMIT" rpm -qf --qf '%{NAME}\t%{VERSION}\t%{VENDOR}\n' -- "$file" 2>/dev/null) || continue
         # 多包归属或非预期包名不作为确定版本证据。
         [[ $row != *$'\n'* ]] || continue
         IFS=$'\t' read -r name version vendor <<< "$row"
@@ -428,10 +461,10 @@ installation_rpm_metadata() {
 }
 
 java_name() {
-    case $(lower "${1##*/}") in
-        java|javaw|java.exe|javaw.exe) return 0 ;;
-        *) return 1 ;;
+    case ${1##*/} in
+        [jJ][aA][vV][aA]|[jJ][aA][vV][aA][wW]|[jJ][aA][vV][aA].[eE][xX][eE]|[jJ][aA][vV][aA][wW].[eE][xX][eE]) return 0 ;;
     esac
+    return 1
 }
 
 # 列出待盘点的 JDK Home
@@ -473,7 +506,11 @@ scan_root_dirs() {
             warn "无法搜索安装目录: $r"
             continue
         fi
-        r=$(real_path "$r")
+        if ! r=$(CDPATH= cd -P -- "$r" && printf '%s.' "$PWD"); then
+            printf 'error\n' >> "$ROOT_COVERAGE_FILE"
+            continue
+        fi
+        r=${r%.}
         bounded_find "$remaining" "$ROOT_COVERAGE_FILE" "$WORK/root-entries" \
             "$r" -xdev -maxdepth "$ROOT_DEPTH"
         while IFS= read -r -d '' entry; do
@@ -488,33 +525,42 @@ scan_root_dirs() {
                 continue
             fi
             [[ ${entry##*/} == libjvm.so && ( -f "$entry" || -L "$entry" ) ]] || continue
-            home=$(root_of_lib "$entry")
+            home=$(root_of_lib "$entry"; printf '.')
+            home=${home%.}
             [ -n "$home" ] && [ -d "$home" ] || continue
-            printf '%s\n' "$(real_path "$home")"
+            jdk_root_record "$home"
         done < "$WORK/root-entries"
         if grep -qx entry_limit "$ROOT_COVERAGE_FILE"; then break; fi
     done
 }
+
+# Record each path with a NUL delimiter, including names containing newlines.
+jdk_root_record() (
+    local root=$1
+    if CDPATH= cd -P -- "$root" 2>/dev/null; then root=$PWD; fi
+    root=$(normalize_java_root "$root"; printf '.')
+    printf '%s\0' "${root%.}"
+)
 
 list_roots() {
     local d j pat f
     if [ ${#JDK_ARGS[@]} -gt 0 ]; then
         for d in ${JDK_ARGS[@]+"${JDK_ARGS[@]}"}; do
             [ -n "$d" ] || continue
-            printf '%s\n' "$(real_path "$(resolve_symlinks "$d")")"
+            jdk_root_record "$d"
         done
         scan_root_dirs
         return
     fi
 
     if [ -n "${JAVA_HOME:-}" ] && [ -d "${JAVA_HOME:-}" ]; then
-        printf '%s\n' "$(real_path "$(resolve_symlinks "$JAVA_HOME")")"
+        jdk_root_record "$JAVA_HOME"
     fi
 
     if j=$(command -v java 2>/dev/null); then
         j=$(resolve_symlinks "$j")
         if [ "$OS" != "Darwin" ] || [ "$j" != "/usr/bin/java" ]; then
-            printf '%s\n' "$(real_path "$(resolve_symlinks "$(java_root_of "$j")")")"
+            jdk_root_record "$(java_root_of "$j")"
         fi
     fi
 
@@ -535,7 +581,7 @@ list_roots() {
     for f in $pat; do
         [ -f "$f" ] || continue
         release_is_jdk "$f" || continue
-        printf '%s\n' "$(real_path "$(resolve_symlinks "$(dirname "$f")")")"
+        jdk_root_record "${f%/*}"
     done
 
     scan_root_dirs
@@ -974,8 +1020,12 @@ scan_installations() {
     local root version vendor product vm arch notes build cpu status mit flags feff vmname vmtext openj9
     local bevid reason bevid_and_build lib lib_id matched rpm_meta rpm_name rpm_file
 
-    while IFS= read -r root; do
+    local seen_roots=$'\n' root_key
+    while LC_ALL=C IFS= read -r -d '' root; do
         [ -n "$root" ] || continue
+        printf -v root_key '%q' "$root"
+        [[ $seen_roots != *$'\n'"$root_key"$'\n'* ]] || continue
+        seen_roots+="$root_key"$'\n'
         matched=0
         for lib in "$root"/lib/libjvm.so "$root"/lib/*/libjvm.so                    "$root"/lib/*/*/libjvm.so "$root"/jre/lib/*/libjvm.so "$root"/jre/lib/*/*/libjvm.so; do
             [ -f "$lib" ] || continue
@@ -1042,31 +1092,59 @@ scan_installations() {
 
         emit_finding "install:$root" "installation" "$status" "$reason" "$build" "$bevid" \
             "$cpu" "$version" "$root" "$vendor" "$product" "$vm" "$arch" "$flags" "$feff" "" "$NOTES"
-    # 先归一化再去重，避免 JAVA_HOME 指向 jre 时与父 JDK 重复清点。
-    done < <(list_roots | while IFS= read -r root; do
-        normalize_java_root "$root"
-        printf '\n'
-    done | LC_ALL=C sort -u)
+    done < <(list_roots)
 }
 
 # ---------------------------------------------------------------------------
 # 采集：进程
 # ---------------------------------------------------------------------------
 java_process_start() {
-    sed 's/^.*) //' "/proc/$1/stat" 2>/dev/null | awk '{print $20}'
+    local stat
+    local -a fields
+    { IFS= read -r -d '' stat < "/proc/$1/stat"; } 2>/dev/null || :
+    [[ -n ${stat:-} ]] || return 0
+    IFS=$' \n' read -r -a fields <<< "${stat##*) }"
+    printf '%s\n' "${fields[19]:-}"
 }
 
 libjvm_meta() {
-    awk '
+    local proc=$1 limit=$JVM_MAPS_BYTE_LIMIT used=0 counter=/dev/null ceiling=/dev/null rows
+    if [[ -n ${WORK:-} ]]; then
+        counter="$WORK/java-maps-bytes"
+        ceiling="$WORK/java-maps-limit"
+        if [[ -f $counter ]]; then IFS= read -r used < "$counter" || return 1; fi
+        (( limit <= JVM_MAPS_TOTAL_BYTE_LIMIT - used )) || limit=$((JVM_MAPS_TOTAL_BYTE_LIMIT - used))
+        if (( limit <= 0 )); then : > "$ceiling"; return 1; fi
+    fi
+    rows=$(
+        set -o pipefail
+        LC_ALL=C head -c "$((limit + 1))" -- "$proc/maps" 2>/dev/null |
+        LC_ALL=C X2_MAP_COUNTER="$counter" X2_MAP_CEILING="$ceiling" \
+            awk -v cap="$limit" -v used="$used" '
+        BEGIN { counter = ENVIRON["X2_MAP_COUNTER"]; ceiling = ENVIRON["X2_MAP_CEILING"] }
+        { bytes += length($0) + 1 }
         /\/libjvm\.so( \(deleted\))?$/ && $5 != "0" {
             dev = $4; inode = $5; path = $0
             for (i = 0; i < 5; i++) sub(/^[[:space:]]*[^[:space:]]+/, "", path)
             sub(/^[[:space:]]+/, "", path)
             if (path !~ /^\//) next
             row = dev "\037" inode "\037" path
-            if (!seen[row]++) print row "\037" $1
+            if (!(row in seen)) {
+                if (rows >= 32) { too_many = 1; next }
+                seen[row] = ++rows
+                print row "\037" $1
+            }
         }
-    ' "$1/maps" 2>/dev/null
+        END {
+            printf "%.0f\n", used + (bytes > cap + 1 ? cap + 1 : bytes) > counter
+            if (bytes > cap || too_many) {
+                if (counter != "/dev/null") print "limited" > ceiling
+                exit 1
+            }
+        }
+        ' 2>/dev/null
+    ) || return 1
+    printf '%s' "$rows"
 }
 
 mapping_identity() {
@@ -1083,8 +1161,7 @@ mapping_identity() {
 
 jcmd_version() {
     local pid=$1 jc=$2 out
-    have timeout || return 1
-    out=$(timeout -k 1s "$JCMD_TIMEOUT" "$jc" "$pid" VM.version 2>/dev/null) || return 1
+    out=$(run_jcmd "$jc" "$pid" VM.version 2>/dev/null) || return 1
     printf '%s\n' "$out" | awk '
         / VM version / {
             for (i = 1; i < NF; ++i) {
@@ -1133,14 +1210,24 @@ handles_sigquit() {
 # 用 jcmd 读真实生效 flags，输出 "UseBASE64Intrinsics UseAVX"（未知为 unknown）
 jcmd_flags() {
     local pid=$1 jc=$2 out="" b64="" avx=""
-    have timeout || return 1
-    out=$(timeout -k 1s "$JCMD_TIMEOUT" "$jc" "$pid" VM.flags -all 2>/dev/null) || return 1
+    out=$(run_jcmd "$jc" "$pid" VM.flags -all 2>/dev/null) || return 1
     [ -n "$out" ] || return 1
     b64=$(printf '%s\n' "$out" | awk '$2 == "UseBASE64Intrinsics" && ($3 == "=" || $3 == ":=") { print $4; exit }')
     avx=$(printf '%s\n' "$out" | awk '$2 == "UseAVX" && ($3 == "=" || $3 == ":=") { print $4; exit }')
     [ -n "$b64" ] || [ -n "$avx" ] || return 1
     printf '%s %s\n' "${b64:-unknown}" "${avx:-unknown}"
 }
+
+run_jcmd() (
+    local limiter seconds=$JCMD_TIMEOUT
+    limiter=$(type -P timeout || type -P gtimeout) || return 1
+    if [[ -n ${jcmd_deadline:-} ]] && (( seconds > jcmd_deadline - SECONDS )); then
+        seconds=$((jcmd_deadline - SECONDS))
+    fi
+    (( seconds > 0 )) || return 1
+    unset JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS
+    bounded_command "$limiter" "$seconds" "$JCMD_OUTPUT_BYTE_LIMIT" "$@"
+)
 
 jvm_root_from_lib() {
     local proc=$1 lib=$2 server libdir root
@@ -1221,7 +1308,7 @@ scan_processes() {
     local runtime_version disk_version version_conflict weak_identity
     local identity_confidence disk_hint_version disk_hint_vendor disk_hint_product disk_hint_build
 
-    local scanned=0
+    local scanned=0 jcmd_deadline=
     if [ ${#PID_ARGS[@]} -gt 0 ]; then explicit=1; fi
     while IFS= read -r pid; do
         [ -n "$pid" ] || continue
@@ -1241,12 +1328,8 @@ scan_processes() {
 
         start1=$(java_process_start "$pid")
 
-        exe=$(readlink "$proc/exe" 2>/dev/null || echo "")
-        exe_clean=${exe% (deleted)}
         named=0
-        java_name "$exe_clean" && named=1
-        if [ "$named" -eq 0 ] && [ -r "$proc/comm" ]; then
-            comm=$(tr -d '\n' < "$proc/comm" 2>/dev/null)
+        if { IFS= read -r comm < "$proc/comm"; } 2>/dev/null; then
             java_name "$comm" && named=1
         fi
 
@@ -1257,6 +1340,11 @@ scan_processes() {
         else
             maps_ok=0
             if [ -d "$proc" ]; then LIMITED_PROCS=$((LIMITED_PROCS + 1)); fi
+        fi
+        if (( named || has_jvm || !maps_ok || explicit )); then
+            exe=$(readlink "$proc/exe" 2>/dev/null || :)
+            exe_clean=${exe% (deleted)}
+            java_name "$exe_clean" && named=1
         fi
         if [ "$maps_ok" -eq 0 ] && { [ "$explicit" -eq 1 ] || [ "$named" -eq 1 ]; }; then
             emit_finding "pid:$pid" "process" "unknown" "无法读取进程映射，无法核实运行中 JVM。" \
@@ -1389,6 +1477,7 @@ scan_processes() {
                 add_note "目标 JVM 未注册 SIGQUIT 处理器（attach 监听器未启用），跳过 jcmd"
             elif [ -n "$start1" ] && [ "$(java_process_start "$pid")" = "$start1" ] &&
                  [ "$(libjvm_meta "$proc")" = "$libmeta" ]; then
+                jcmd_deadline=${jcmd_deadline:-$((SECONDS + JCMD_TOTAL_TIMEOUT))}
                 if jcf=$(jcmd_flags "$pid" "$jc"); then
                     read -r b64 eavx <<< "$jcf"
                     measured_state=$(flag_assessment "$b64" "$eavx")
@@ -1518,7 +1607,7 @@ scan_processes() {
         if [ "$explicit" -eq 1 ]; then
             printf '%s\n' ${PID_ARGS[@]+"${PID_ARGS[@]}"}
         else
-            for proc in /proc/[0-9]*; do printf '%s\n' "${proc#/proc/}"; done
+            web_process_paths | while IFS= read -r proc; do printf '%s\n' "${proc#/proc/}"; done
         fi
     )
 }
@@ -1595,10 +1684,18 @@ scan_java_binary() {
     timeout_bin=$(type -P timeout || type -P gtimeout) ||
         die "--java-path 需要 timeout 或 gtimeout；未执行 Java 启动器"
     [[ $bin == /* ]] || bin="$PWD/$bin"
-    out=$("$timeout_bin" -k 1s "$JAVA_VERSION_TIMEOUT" "$bin" -version 2>&1) || rc=$?
+    out=$(
+        unset JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS
+        bounded_command "$timeout_bin" "$JAVA_VERSION_TIMEOUT" "$JAVA_VERSION_OUTPUT_BYTE_LIMIT" --merge-stderr "$bin" -version
+    ) || rc=$?
     if [ "$rc" -ne 0 ]; then
+        if [ "$rc" -eq 125 ]; then
+            reason="Java 版本查询输出超过 ${JAVA_VERSION_OUTPUT_BYTE_LIMIT} 字节，无法核验完整输出。"
+        else
+            reason="Java 版本查询失败或超时（退出码 $rc）。"
+        fi
         emit_finding "java:$bin" "java-binary" "unknown" \
-            "Java 版本查询失败或超时（退出码 $rc）。" "unknown" "" \
+            "$reason" "unknown" "" \
             "$(cpu_assess "$ARCH_RAW" "$CPU_STATE")" "" "$bin" "" "" "" "$ARCH_RAW" "" "false" "" ""
         return
     fi
@@ -1968,9 +2065,9 @@ report_json() {
     printf '  "cpu": {"arch": %s, "state": %s, "required_features": %s, "counts": %s, "source": %s},\n' \
         "$(jstr "$ARCH_RAW")" "$(jstr "$CPU_STATE")" "$(jstr "$REQ_FEATURES")" "$(jstr "$CPU_COUNTS")" "$(jstr "$CPU_SOURCE")"
 
-    printf '  "coverage": {"root_max_depth": %s, "root_depth_boundaries": %s, "root_scan_errors": %s, "unreadable_process_maps": %s, "process_limit_reached": %s, "process_visibility_limited": %s, "root_entry_limit_reached": %s, "apps_entry_limit_reached": %s, "apps_scan_errors": %s},\n' \
+    printf '  "coverage": {"root_max_depth": %s, "root_depth_boundaries": %s, "root_scan_errors": %s, "unreadable_process_maps": %s, "process_limit_reached": %s, "process_visibility_limited": %s, "root_entry_limit_reached": %s, "apps_entry_limit_reached": %s, "apps_scan_errors": %s, "jvm_maps_limited": %s},\n' \
         "$((10#$ROOT_DEPTH))" "$ROOT_DEPTH_BOUNDARIES" "$ROOT_SCAN_ERRORS" "$LIMITED_PROCS" \
-        "$PROCESS_LIMIT_REACHED" "$PROCESS_VISIBILITY_LIMITED" "$ROOT_ENTRY_LIMIT_REACHED" "$APPS_ENTRY_LIMIT_REACHED" "$APPS_SCAN_ERRORS"
+        "$PROCESS_LIMIT_REACHED" "$PROCESS_VISIBILITY_LIMITED" "$ROOT_ENTRY_LIMIT_REACHED" "$APPS_ENTRY_LIMIT_REACHED" "$APPS_SCAN_ERRORS" "$JVM_MAPS_LIMITED"
 
     printf '  "warnings": ['
     first=1
@@ -2518,6 +2615,29 @@ nginx_config_skip() {
     printf '}\n'
 }
 
+# Count directory entries before matching, even if the directory has no matching files.
+# The caller owns the bounded matches array and shares the counter with nested includes.
+web_config_matches() {
+    local dir=$1 pattern=$2 entry name
+    matches=()
+    (( directory_entries < WEB_CONFIG_DIRECTORY_LIMIT )) || return 1
+    # Unsorted one-per-line ls streams entries. Its -b escapes keep newlines in names intact.
+    while IFS= read -r entry; do
+        [[ -n $entry ]] && (( directory_entries < WEB_CONFIG_DIRECTORY_LIMIT )) || return 1
+        directory_entries=$((directory_entries + 1))
+        printf -v name '%b' "${entry//\\ / }"
+        [[ $name != .* || $pattern == .* ]] || continue
+        [[ $name != $pattern ]] || matches+=("${dir%/}/$name")
+    done < <(LC_ALL=C ls -1UbA -- "$dir" 2>/dev/null || printf '\n')
+    return 0
+}
+
+sorted_config_matches() {
+    if [[ -n ${matches[1]:-} ]]; then printf '%s\0' "${matches[@]}" | LC_ALL=C sort -z
+    elif [[ -n ${matches[0]:-} ]]; then printf '%s\0' "${matches[0]}"
+    fi
+}
+
 nginx_config_stream() {
     local path=$1 base=$2 depth=$3 id size content entry target dir pattern match fs_path fs_dir status problem_line reason
     local -a includes=() matches=()
@@ -2574,12 +2694,11 @@ nginx_config_stream() {
                 nginx_config_skip include_directory_unreadable "$target"
                 continue
             fi
-            if [[ $pattern == .* ]]; then matches=("$fs_dir"/.*); else matches=("$fs_dir"/*); fi
-            for match in ${matches[@]+"${matches[@]}"}; do
-                [[ ${match##*/} != . && ${match##*/} != .. && ${match##*/} == $pattern ]] || continue
-                [[ -e $match || -L $match ]] || continue
+            web_config_matches "$fs_dir" "$pattern" ||
+                nginx_config_skip include_directory_incomplete "$target"
+            while IFS= read -r -d '' match; do
                 nginx_config_stream "$dir/${match##*/}" "$base" "$((depth + 1))" || break
-            done
+            done < <(sorted_config_matches)
         else
             nginx_config_stream "$target" "$base" "$((depth + 1))" || break
         fi
@@ -2587,8 +2706,8 @@ nginx_config_stream() {
 }
 
 nginx2root_config() {
-    local config config_root= count=0 explicit_roots=0
-    local -a configs=()
+    local config config_root= count=0 explicit_roots=0 directory_entries=0 entry dir
+    local -a configs=() matches=()
     if [[ ${1:-} == --root ]]; then
         config_root=$2
         shift 2
@@ -2597,13 +2716,23 @@ nginx2root_config() {
         configs=("$@")
         explicit_roots=1
     else
-        configs=(/etc/nginx/nginx.conf /etc/nginx/conf.d/*.conf
-                 /etc/nginx/sites-enabled/* /usr/local/nginx/conf/nginx.conf)
+        configs=(/etc/nginx/nginx.conf '/etc/nginx/conf.d/*.conf'
+                 '/etc/nginx/sites-enabled/*' /usr/local/nginx/conf/nginx.conf)
     fi
     (
         local seen_files=' '
         for config in "${configs[@]}"; do
-            nginx_config_stream "$config" "$(dirname -- "$config")" 0 || break
+            dir=$(dirname -- "$config")
+            if [[ $explicit_roots == 0 && ${config##*/} == *'*'* ]]; then
+                [ -d "$dir" ] || continue
+                web_config_matches "$dir" "${config##*/}" ||
+                    nginx_config_skip include_directory_incomplete "$config"
+                while IFS= read -r -d '' entry; do
+                    nginx_config_stream "$entry" "$dir" 0 || break 2
+                done < <(sorted_config_matches)
+            else
+                nginx_config_stream "$config" "$dir" 0 || break
+            fi
         done
     ) | awk '
         /^@file / { files++; file=substr($0,7); next }
@@ -2630,20 +2759,31 @@ nginx2root_config() {
 }
 
 nginx2root_sctp() {
-    local file loaded=false automatic_block_hint=false in_use=null
+    local dir file size loaded=false automatic_block_hint=false in_use=null
+    local directories_incomplete=false directory_entries=0 files=0
+    local -a matches=()
     [ ! -d /sys/module/sctp ] || loaded=true
     if [ -r /proc/net/sctp/assocs ]; then
         in_use=$(awk 'NR > 1 && NF {found=1; exit} END {print found ? "true" : "false"}' /proc/net/sctp/assocs 2>/dev/null) || in_use=null
     fi
-    for file in /etc/modprobe.d/*.conf /usr/lib/modprobe.d/*.conf /lib/modprobe.d/*.conf; do
-        [ -f "$file" ] && [ -r "$file" ] || continue
-        if grep -Eq '^[[:space:]]*install[[:space:]]+sctp[[:space:]]+(/usr)?/bin/false([[:space:]]|$)' "$file" 2>/dev/null; then
-            automatic_block_hint=true
-            break
-        fi
+    for dir in /etc/modprobe.d /usr/lib/modprobe.d /lib/modprobe.d; do
+        [ -d "$dir" ] || continue
+        web_config_matches "$dir" '*.conf' || directories_incomplete=true
+        for file in ${matches[@]+"${matches[@]}"}; do
+            [ -f "$file" ] && [ -r "$file" ] || continue
+            if ((files >= SCTP_CONFIG_FILE_LIMIT)); then directories_incomplete=true; break 2; fi
+            files=$((files + 1))
+            size=$(stat -Lc '%s' -- "$file" 2>/dev/null) || size=
+            [[ $size =~ ^[0-9]+$ && $size -le $WEB_CONFIG_BYTE_LIMIT ]] || { directories_incomplete=true; continue; }
+            if head -c "$WEB_CONFIG_BYTE_LIMIT" -- "$file" 2>/dev/null |
+                grep -Eq '^[[:space:]]*install[[:space:]]+sctp[[:space:]]+(/usr)?/bin/false([[:space:]]|$)'; then
+                automatic_block_hint=true
+                break 2
+            fi
+        done
     done
-    printf '{"kernel_release":%s,"module_visible":%s,"associations_visible":%s,"modprobe_install_block_hint":%s,"patch_status":"unknown"}' \
-        "$(jstr "$(cat /proc/sys/kernel/osrelease 2>/dev/null || :)")" "$loaded" "$in_use" "$automatic_block_hint"
+    printf '{"kernel_release":%s,"module_visible":%s,"associations_visible":%s,"modprobe_install_block_hint":%s,"modprobe_config_incomplete":%s,"patch_status":"unknown"}' \
+        "$(jstr "$(cat /proc/sys/kernel/osrelease 2>/dev/null || :)")" "$loaded" "$in_use" "$automatic_block_hint" "$directories_incomplete"
 }
 
 apache_reference() {
@@ -2663,30 +2803,123 @@ apache_reference() {
     fi
 }
 
+apache_config_stream() {
+    local file=$1 depth=$2 ancestors=$3 id size content line target optional directory section_depth=0
+    local include_pattern='^[[:blank:]]*Include(Optional)?[[:blank:]]+(.+)$'
+    local server_root_pattern='^[[:blank:]]*ServerRoot[[:blank:]]+(.+)$'
+    local section_start='^[[:blank:]]*<[[:alpha:]]' section_end='^[[:blank:]]*</[[:alpha:]]'
+    local argument_pattern='^("([^"]+)"|([^[:space:]"]+))[[:blank:]]*(#.*)?$'
+    local -a matches=()
+    local IFS=$IFS
+    id=$(file_id "$file") || { printf '@skipped\n'; return 0; }
+    if (( depth == 0 )) && [[ $seen_files == *" $id "* ]]; then return 0; fi
+    if [[ $ancestors == *" $id "* ]]; then printf '@skipped\n'; return 0; fi
+    if (( count >= WEB_CONFIG_FILE_LIMIT )); then printf '@skipped\n'; return 1; fi
+    count=$((count + 1))
+    seen_files+="$id "
+    size=$(stat -Lc '%s' -- "$file" 2>/dev/null) || size=
+    if [[ ! $size =~ ^[0-9]+$ ]] || [ "$size" -gt "$WEB_CONFIG_BYTE_LIMIT" ] ||
+       ! content=$(head -c "$((WEB_CONFIG_BYTE_LIMIT + 1))" -- "$file" 2>/dev/null) ||
+       [ "${#content}" -gt "$WEB_CONFIG_BYTE_LIMIT" ]; then
+        printf '@skipped\n'
+        return 0
+    fi
+    printf '@file\n'
+    while IFS= read -r line; do
+        printf '@line %s\n' "$line"
+        if [[ $line =~ $section_start ]]; then
+            section_depth=$((section_depth + 1))
+        elif [[ $line =~ $section_end ]] && (( section_depth > 0 )); then
+            section_depth=$((section_depth - 1))
+        fi
+        if [[ $line =~ $server_root_pattern ]]; then
+            target=${BASH_REMATCH[1]}
+            server_root=
+            if (( depth == 0 && section_depth == 0 )) && [[ $target =~ $argument_pattern ]]; then
+                target=${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}
+                if [[ $target == /* && $target != *[\$\\\*\?\[]* ]]; then server_root=$target; fi
+            fi
+        fi
+        [[ $line =~ $include_pattern ]] || continue
+        optional=${BASH_REMATCH[1]}
+        target=${BASH_REMATCH[2]}
+        if [[ ! $target =~ $argument_pattern ]]; then printf '@skipped\n'; continue; fi
+        target=${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}
+        if [[ $target == *'$'* || $target == *'\'* || $target == *[[:cntrl:]]* ||
+              $depth -ge APACHE_INCLUDE_DEPTH_LIMIT ]]; then
+            printf '@skipped\n'
+            continue
+        fi
+        if [[ $target != /* ]]; then
+            if [[ -z $server_root ]]; then printf '@skipped\n'; continue; fi
+            target=$server_root/$target
+        fi
+
+        if [[ $target == *[\*\?\[]* ]]; then
+            directory=${target%/*}
+            if [[ $directory == *[\*\?\[]* ]]; then printf '@skipped\n'; continue; fi
+            if [[ ! -d ${directory:-/} || ! -r ${directory:-/} || ! -x ${directory:-/} ]]; then
+                if [[ -z $optional || -e $directory || -L $directory ]]; then printf '@skipped\n'; fi
+                continue
+            fi
+            web_config_matches "${directory:-/}" "${target##*/}" || printf '@skipped\n'
+        else
+            matches=("$target")
+        fi
+        if [[ -z ${matches[0]:-} && -z $optional ]]; then printf '@skipped\n'; fi
+        while IFS= read -r -d '' target; do
+            if [ -f "$target" ]; then
+                apache_config_stream "$target" "$((depth + 1))" "$ancestors$id " || return 1
+            elif [[ -z $optional || -e $target || -L $target ]]; then
+                printf '@skipped\n'
+            fi
+        done < <(sorted_config_matches)
+    done <<< "$content"
+    return 0
+}
+
+apache_config_entry() {
+    local file=$1 server_root=
+    [ -f "$file" ] || return 0
+    case $file in
+        /etc/apache2/*) server_root=/etc/apache2 ;;
+        /etc/httpd/*) server_root=/etc/httpd ;;
+        /usr/local/apache2/*) server_root=/usr/local/apache2 ;;
+    esac
+    printf '@root\n'
+    apache_config_stream "$file" 0 ' '
+}
+
 apache_config_hints() {
-    local file size count=0
-    local -a configs=()
+    local file count=0 seen_files=" " directory_entries=0 explicit_roots=0 dir entry
+    local -a configs=() matches=()
     if [ "$#" -gt 0 ]; then
         configs=("$@")
+        explicit_roots=1
     else
-        configs=(/etc/apache2/apache2.conf /etc/apache2/{mods,conf,sites}-enabled/*.conf
-                 /etc/apache2/mods-enabled/*.load /etc/httpd/conf/httpd.conf /etc/httpd/conf.d/*.conf
-                 /etc/httpd/conf.modules.d/*.conf /usr/local/apache2/conf/httpd.conf)
+        configs=(/etc/apache2/apache2.conf /etc/apache2/{mods,conf,sites}'-enabled/*.conf'
+                 '/etc/apache2/mods-enabled/*.load' /etc/httpd/conf/httpd.conf '/etc/httpd/conf.d/*.conf'
+                 '/etc/httpd/conf.modules.d/*.conf' /usr/local/apache2/conf/httpd.conf)
     fi
     (
+        shopt -s nocasematch
         for file in "${configs[@]}"; do
-            [ -f "$file" ] || continue
-            count=$((count + 1))
-            [ "$count" -le "$WEB_CONFIG_FILE_LIMIT" ] || { printf '@skipped\n'; break; }
-            size=$(stat -Lc '%s' -- "$file" 2>/dev/null) || size=
-            if ! [[ $size =~ ^[0-9]+$ ]] || [ "$size" -gt "$WEB_CONFIG_BYTE_LIMIT" ] || ! head -c "$WEB_CONFIG_BYTE_LIMIT" -- "$file" 2>/dev/null; then
-                printf '\n@skipped\n'; continue
+            if [[ $explicit_roots == 0 && ${file##*/} == *'*'* ]]; then
+                dir=${file%/*}
+                [ -d "$dir" ] || continue
+                web_config_matches "$dir" "${file##*/}" || printf '@skipped\n'
+                while IFS= read -r -d '' entry; do
+                    apache_config_entry "$entry" || break 2
+                done < <(sorted_config_matches)
+            else
+                apache_config_entry "$file" || break
             fi
-            printf '\n@file\n'
         done
     ) | awk '
-        /^@file$/ {files++; vhost=0; next}
-        /^@skipped$/ {skipped++; vhost=0; next}
+        /^@root$/ {vhost=0; next}
+        /^@file$/ {files++; next}
+        /^@skipped$/ {skipped++; next}
+        /^@line / { $0=substr($0,7) }
         { sub(/#.*/, ""); gsub(/"/, ""); $0=tolower($0) }
         /^[[:space:]]*<virtualhost[[:space:]]/ {vhost=1; next}
         /^[[:space:]]*<\/virtualhost[[:space:]]*>/ {vhost=0; next}
@@ -2711,12 +2944,27 @@ apache_config_hints() {
 }
 
 apache_mapped_http2() {
-    local file=$1 data limit=$APACHE_MAPS_BYTE_LIMIT
+    local file=$1 data maps limit=$APACHE_MAPS_BYTE_LIMIT
     [ -r "$file" ] || { printf null; return; }
-    if ! data=$(head -c "$((limit + 1))" -- "$file" 2>/dev/null); then printf null; return; fi
-    if grep -Eq '/mod_http2\.so( \(deleted\))?$' <<< "$data"; then printf true
-    elif [ "${#data}" -ge "$((limit - 1))" ]; then printf null
-    else printf false
+    # Keep the trailing newline for an exact byte count.
+    if ! data=$(LC_ALL=C head -c "$((limit + 1))" -- "$file" 2>/dev/null && printf '.'); then printf null; return; fi
+    data=${data%.}
+    local LC_ALL=C
+    if (( ${#data} > limit )); then printf null; return; fi
+    maps=$(awk '
+        /\/mod_http2\.so( \(deleted\))?$/ && $5 ~ /^[1-9][0-9]*$/ {
+            range=$1; dev=$4; inode=$5; path=$0
+            for (i=0; i<5; i++) sub(/^[[:space:]]*[^[:space:]]+/, "", path)
+            sub(/^[[:space:]]+/, "", path)
+            if (path !~ /^\//) next
+            key=dev "\037" inode "\037" path
+            if (!seen[key]++) print dev "\037" inode "\037" range "\037" path
+        }' <<< "$data") || { printf null; return; }
+    if [ -z "$maps" ]; then
+        printf false
+    else
+        printf true
+        if [[ ${2:-} == details ]]; then printf '\n%s' "$maps"; fi
     fi
 }
 
@@ -2735,7 +2983,7 @@ linux_inventory_unavailable() {
 apache_module_rpm_version() {
     local path=$1 info name version
     have rpm && have timeout || return 0
-    info=$(timeout -k 1s "$PACKAGE_QUERY_TIMEOUT" rpm -qf --qf '%{NAME}\t%{VERSION}\n' -- "$path" 2>/dev/null) || return 0
+    info=$(bounded_command timeout "$PACKAGE_QUERY_TIMEOUT" "$PACKAGE_OUTPUT_BYTE_LIMIT" rpm -qf --qf '%{NAME}\t%{VERSION}\n' -- "$path" 2>/dev/null) || return 0
     [[ $info != *$'\n'* ]] || return 0
     IFS=$'\t' read -r name version <<< "$info"
     [[ $name == mod_http2 && $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
@@ -2744,9 +2992,13 @@ apache_module_rpm_version() {
 
 apache_inventory() {
     local format=txt proc name pid path id start row= seen=' ' rows=0 disk=0 comma= version reference mapped config
-    local inspected=0 visibility_limited=false
+    local inspected=0 visibility_limited=false coverage_incomplete=false config_incomplete=false module_probe_limit=false
     local gate=0 modules=0 unknown=0 explicit= proc_limit=false unresolved=0 image_state match package_hint http2_evidence disk_http2=condition_not_observed module_version_source
-    local -a configs=()
+    local mapped_info module_path module_dev module_inode module_range module_id expected major minor
+    local runtime_modules module_version module_reference module_identity module_comma module_gate module_unknown
+    local module_index module_count=0 module_probed
+    local image_index image_count=0
+    local -a configs=() module_ids=() module_versions=() image_ids=() image_versions=()
     while (($#)); do
         case $1 in
             --json) format=json ;;
@@ -2785,17 +3037,79 @@ apache_inventory() {
         start=$(java_process_start "$pid")
         path=$(readlink "$proc/exe" 2>/dev/null || :)
         id=$(file_id "$proc/exe" || :)
-        version=$(apache_version "$proc/exe" httpd)
-        mapped=$(apache_mapped_http2 "$proc/maps")
+        version=
+        if [[ -n $id ]]; then
+            for ((image_index=0; image_index<image_count; image_index++)); do
+                [[ ${image_ids[image_index]} != "$id" ]] || break
+            done
+            if (( image_index < image_count )); then
+                version=${image_versions[image_index]}
+            else
+                version=$(apache_version "$proc/exe" httpd)
+                if [[ $(file_id "$proc/exe") == "$id" ]]; then
+                    image_ids[image_count]=$id
+                    image_versions[image_count]=$version
+                    image_count=$((image_count + 1))
+                fi
+            fi
+        fi
+        mapped_info=$(apache_mapped_http2 "$proc/maps" details)
+        mapped=${mapped_info%%$'\n'*}
+        runtime_modules= module_comma= module_gate=0 module_unknown=0
+        if [[ $mapped == true && -n $start && -n $id ]]; then
+            while IFS=$'\037' read -r module_dev module_inode module_range module_path; do
+                module_version=
+                module_identity=unverified
+                module_probed=false
+                major=${module_dev%%:*}
+                minor=${module_dev#*:}
+                if [[ $module_path != *" (deleted)" && $module_dev == *:* &&
+                      $major =~ ^[[:xdigit:]]{1,8}$ && $minor =~ ^[[:xdigit:]]{1,8}$ &&
+                      -f "$proc/root$module_path" ]] && module_id=$(file_id "$proc/root$module_path"); then
+                    expected="$((16#$major)) $((16#$minor)) $module_inode"
+                    if mapping_identity "$proc" "$module_range" "$expected" "$module_id" >/dev/null; then
+                        module_identity=matched
+                        for ((module_index=0; module_index<module_count; module_index++)); do
+                            [[ ${module_ids[module_index]} != "$module_id" ]] || break
+                        done
+                        if (( module_index == module_count )); then
+                            if (( module_count < APACHE_MAPPED_MODULE_LIMIT )); then
+                                module_ids[module_index]=$module_id
+                                module_versions[module_index]=
+                                module_count=$((module_count + 1))
+                                module_version=$(apache_version "$proc/root$module_path" module)
+                                module_probed=true
+                            else
+                                module_probe_limit=true
+                            fi
+                        else
+                            module_version=${module_versions[module_index]}
+                        fi
+                        if [[ $(file_id "$proc/root$module_path") != "$module_id" ]]; then
+                            module_identity=unverified
+                            module_version=
+                        elif [ "$module_probed" = true ]; then
+                            module_versions[module_index]=$module_version
+                        fi
+                    fi
+                fi
+                module_reference=$(apache_reference "$module_version" module)
+                [[ $module_reference != potential ]] || module_gate=1
+                [[ $module_reference != unknown ]] || module_unknown=1
+                runtime_modules+="$module_comma{\"path\":$(jstr "$(san_field "$module_path")"),\"version\":$(jstr "$module_version"),\"version_status\":\"$module_reference\",\"disk_identity_status\":\"$module_identity\"}"
+                module_comma=,
+            done <<< "${mapped_info#*$'\n'}"
+        fi
         image_state=$(web_disk_identity "$proc" "$path" "$id")
         if [[ -z $id || -z $start || $(file_id "$proc/exe") != "$id" ||
               $(java_process_start "$pid") != "$start" ]]; then
             version=
             mapped=null
+            runtime_modules= module_gate=0 module_unknown=0
             image_state=unverified
         fi
         match=$(web_identity_boolean "$image_state")
-        if [[ $image_state != matched || $mapped == null ]]; then
+        if [[ $image_state != matched || $mapped == null || $module_unknown -eq 1 ]]; then
             unresolved=$((unresolved + 1))
         fi
         http2_evidence=$disk_http2
@@ -2803,11 +3117,13 @@ apache_inventory() {
         reference=$(apache_reference "$version")
         [[ $reference != potential ]] || gate=1
         [[ $reference != unknown ]] || unknown=1
+        [ "$module_gate" -ne 1 ] || gate=1
         if [ "$format" = json ]; then
-            row+="$comma{\"kind\":\"process\",\"pid\":$pid,\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"mod_http2_mapped\":$mapped,\"http2_evidence\":\"$http2_evidence\",\"disk_identity_matched\":$match,\"disk_identity_status\":\"$image_state\"}"
+            row+="$comma{\"kind\":\"process\",\"pid\":$pid,\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"mod_http2_mapped\":$mapped,\"mapped_http2_modules\":[$runtime_modules],\"http2_evidence\":\"$http2_evidence\",\"disk_identity_matched\":$match,\"disk_identity_status\":\"$image_state\"}"
             comma=,
         else
             printf 'Apache PID %s · %q · %s · %s · mod_http2 映射 %s · 磁盘身份 %s · HTTP/2 证据 %s\n' "$pid" "$path" "${version:-版本未知}" "$reference" "$mapped" "$image_state" "$http2_evidence"
+            if [[ -n $runtime_modules ]]; then printf '  已映射模块证据: [%s]\n' "$runtime_modules"; fi
         fi
         rows=$((rows + 1))
     done < <(web_process_paths)
@@ -2858,9 +3174,13 @@ apache_inventory() {
     done
     local status=observed
     ((rows + disk + modules > 0)) || status=not_observed
+    if [[ $config =~ \"skipped\":[1-9] ]]; then config_incomplete=true; fi
+    if web_coverage_incomplete "$proc_limit" "$unresolved" "$config" "$visibility_limited" || [ "$unknown" -eq 1 ]; then
+        coverage_incomplete=true
+    fi
     if [ "$format" = json ]; then
-        printf '{"status":"%s","cve":"CVE-2026-119618","patch_verified":false,"configuration":%s,"proc_limit_reached":%s,"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d,"process_visibility_limited":%s},"findings":[%s]}' \
-            "$status" "$config" "$proc_limit" "$proc_limit" "$unresolved" "$visibility_limited" "$row"
+        printf '{"status":"%s","cve":"CVE-2026-119618","patch_verified":false,"configuration":%s,"proc_limit_reached":%s,"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d,"process_visibility_limited":%s,"configuration_incomplete":%s,"module_probe_limit_reached":%s,"evidence_incomplete":%s},"findings":[%s]}' \
+            "$status" "$config" "$proc_limit" "$proc_limit" "$unresolved" "$visibility_limited" "$config_incomplete" "$module_probe_limit" "$coverage_incomplete" "$row"
     else
         if [ "$status" = not_observed ]; then printf 'Apache · 当前范围未观察到安装或进程\n'; fi
         printf 'Apache CVE-2026-119618 · 磁盘配置线索: %s\n' "$config"
@@ -2870,7 +3190,7 @@ apache_inventory() {
         printf '进程覆盖 · 达到上限 %s · 证据不完整 %s\n' "$proc_limit" "$unresolved"
     fi
     if [ "$gate" -eq 1 ]; then return 1; fi
-    if web_coverage_incomplete "$proc_limit" "$unresolved" "$config" "$visibility_limited" || [ "$unknown" -eq 1 ]; then return 3; fi
+    if [ "$coverage_incomplete" = true ]; then return 3; fi
     return 0
 }
 
@@ -2939,17 +3259,18 @@ web_identity_boolean() {
 }
 
 web_process_paths() {
-    local proc count=0
-    for proc in /proc/[0-9]*; do
-        [ -d "$proc" ] || continue
-        printf '%s\n' "$proc"
+    local pid count=0
+    while IFS= read -r pid; do
+        [[ $pid =~ ^[0-9]+$ ]] || continue
+        printf '/proc/%s\n' "$pid"
         count=$((count + 1))
         if ((count > PROCESS_SCAN_LIMIT)); then break; fi
-    done
+    done < <(LC_ALL=C ls -1U -- /proc 2>/dev/null)
 }
 
 linux_process_visibility_limited() {
     local procfs=${1:-/proc}
+    have ls || return 0
     [ -r "$procfs/self/stat" ] && [ -r "$procfs/1/comm" ] &&
         [ -r "$procfs/self/mountinfo" ] || return 0
     if [[ -n $(container_hint "$procfs/self") ]]; then return 0; fi
@@ -3006,11 +3327,11 @@ web_package_hint() {
     have timeout || return 0
     [[ $path == /* ]] || return 0
     if have dpkg-query; then
-        owner=$(timeout -k 1s "$PACKAGE_QUERY_TIMEOUT" dpkg-query -S -- "$path" 2>/dev/null) || return 0
+        owner=$(bounded_command timeout "$PACKAGE_QUERY_TIMEOUT" "$PACKAGE_OUTPUT_BYTE_LIMIT" dpkg-query -S -- "$path" 2>/dev/null) || return 0
         owner=$(awk -F ': ' -v target="$path" '$2 == target { print $1 }' <<< "$owner")
         [[ $owner =~ ^[[:alnum:].+:-]+$ ]] || return 0
         manager=dpkg
-        result=$(timeout -k 1s "$PACKAGE_QUERY_TIMEOUT" dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\t${Architecture}\t${db:Status-Status}' -- "$owner" 2>/dev/null) || return 0
+        result=$(bounded_command timeout "$PACKAGE_QUERY_TIMEOUT" "$PACKAGE_OUTPUT_BYTE_LIMIT" dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\t${Architecture}\t${db:Status-Status}' -- "$owner" 2>/dev/null) || return 0
         [[ $result != *$'\n'* ]] || return 0
         IFS=$'\t' read -r name version source source_version arch status <<< "$result"
         [[ $status == installed ]] || return 0
@@ -3022,7 +3343,7 @@ web_package_hint() {
         fi
     elif have rpm; then
         manager=rpm
-        result=$(timeout -k 1s "$PACKAGE_QUERY_TIMEOUT" rpm -qf --qf '%{NAME} %{VERSION}-%{RELEASE}' -- "$path" 2>/dev/null) || return 0
+        result=$(bounded_command timeout "$PACKAGE_QUERY_TIMEOUT" "$PACKAGE_OUTPUT_BYTE_LIMIT" rpm -qf --qf '%{NAME} %{VERSION}-%{RELEASE}' -- "$path" 2>/dev/null) || return 0
     else
         return 0
     fi
@@ -3263,7 +3584,7 @@ nginx2root_scan() {
 java4shell_main() {
     parse_args "$@"
 
-    WORK=$(mktemp -d "${TMPDIR:-/tmp}/java4shell.XXXXXX") || die "无法创建临时目录"
+    WORK=$(mktemp -d "${SCAN_WORK:-${TMPDIR:-/tmp}}/java4shell.XXXXXX") || die "无法创建临时目录"
     FIND_FILE="$WORK/findings.tsv"
     WARN_FILE="$WORK/warnings.txt"
     APP_FILE="$WORK/apps.tsv"
@@ -3393,6 +3714,11 @@ java4shell_main() {
     if [ "${LIMITED_PROCS:-0}" -gt 0 ]; then
         warn "有 $LIMITED_PROCS 个进程的映射无法读取，进程发现可能不完整。"
     fi
+    JVM_MAPS_LIMITED=false
+    if [[ -e $WORK/java-maps-limit ]]; then
+        JVM_MAPS_LIMITED=true
+        warn "JVM 进程映射达到读取上限，运行时覆盖不完整。"
+    fi
 
     if [ "$(total_count)" -eq 0 ] && [ "$(apps_count)" -eq 0 ]; then
         warn "在本次检查范围内没有找到可评估的 Java 资产。"
@@ -3436,6 +3762,7 @@ java4shell_main() {
                            [ "$(total_count)" -eq 0 ] || [ "$LIMITED_PROCS" -gt 0 ] ||
                            [ "$ROOT_DEPTH_BOUNDARIES" -gt 0 ] || [ "$ROOT_SCAN_ERRORS" -gt 0 ] ||
                            [ "$APPS_SCAN_ERRORS" -gt 0 ] || [ "$PROCESS_LIMIT_REACHED" = true ] ||
+                           [ "$JVM_MAPS_LIMITED" = true ] ||
                            [ "$PROCESS_VISIBILITY_LIMITED" = true ] ||
                            [ "$ROOT_ENTRY_LIMIT_REACHED" = true ] || [ "$APPS_ENTRY_LIMIT_REACHED" = true ]; }; then
         rc=3
@@ -3454,6 +3781,95 @@ main() {
     esac
 }
 
+run_scan() {
+    local scan_dir scan_pid scan_group rc format=txt out= arg mode=${1:---all}
+    local value_for=
+    [[ $SCAN_TIMEOUT =~ ^[1-9][0-9]*$ ]] || die "SCAN_TIMEOUT 需要正整数秒数"
+    for arg in "$@"; do
+        case $value_for in
+            --format) format=$arg; value_for=; continue ;;
+            --out) out=$arg; value_for=; continue ;;
+            ?*) value_for=; continue ;;
+        esac
+        case $arg in
+            --json|--format=json) format=json ;;
+            --csv) format=csv ;;
+            --format|--out|--jdk|--pid|--java-path|--cpuinfo|--apps|--apps-depth|--fail-on|--root|--root-depth|--nginx-path|--nginx-config|--apache-path|--apache-config)
+                value_for=$arg ;;
+            --) break ;;
+        esac
+    done
+    scan_dir=$(mktemp -d "${TMPDIR:-/tmp}/x2shell.XXXXXX") || die "无法创建巡检临时目录"
+    trap 'rm -rf -- "$scan_dir"' EXIT
+    mkfifo -- "$scan_dir/control" || die "无法创建巡检控制管道"
+
+    # Only the live group leader signals its own group; a recycled PGID is never used.
+    set -m || die "无法隔离巡检进程组"
+    (
+        set +m
+        exec 3< "$scan_dir/control"
+        IFS= read -r message <&3 && [[ $message == start ]] || exit 2
+        (
+            code=0
+            (
+                SCAN_WORK=$scan_dir
+                if [[ $format == json && -z $out ]]; then exec > "$scan_dir/report"; fi
+                main "$@"
+            ) || code=$?
+            printf 'done %s\n' "$code" > "$scan_dir/control"
+        ) 3<&- &
+        worker=$!
+        message=
+        IFS= read -r -t "$SCAN_TIMEOUT" message <&3 || :
+        case $message in
+            'done '*) wait "$worker" || :; printf '%s\n' "${message#done }" > "$scan_dir/status" ;;
+            *)
+                if [[ $message != cancel ]]; then printf 'timeout\n' > "$scan_dir/status"; fi
+                trap '' TERM
+                kill -TERM 0
+                sleep 1
+                ;;
+        esac
+        kill -KILL 0
+    ) </dev/null &
+    scan_pid=$!
+    set +m
+    exec 3> "$scan_dir/control"
+    read -r scan_group < <(command -p ps -o pgid= -p "$scan_pid" 2>/dev/null) || scan_group=
+    if [[ $scan_group != "$scan_pid" ]]; then
+        printf 'abort\n' >&3
+        wait "$scan_pid" 2>/dev/null || :
+        die "无法确认巡检进程组隔离"
+    fi
+    stop_scan() {
+        trap '' INT TERM HUP PIPE
+        { printf 'cancel\n' >&3; } 2>/dev/null || :
+        wait "$scan_pid" 2>/dev/null || :
+        exit "$1"
+    }
+    trap 'stop_scan 130' INT
+    trap 'stop_scan 143' TERM
+    trap 'stop_scan 129' HUP
+    printf 'start\n' >&3
+    wait "$scan_pid" 2>/dev/null || :
+    exec 3>&-
+    IFS= read -r rc < "$scan_dir/status" || die "巡检进程未返回状态"
+    if [[ $rc == timeout ]]; then
+        printf '巡检超过 %s 秒，已终止，报告不完整。\n' "$SCAN_TIMEOUT" >&2
+        if [[ $format == json && -z $out ]]; then
+            if [[ $mode == --all ]]; then
+                printf '{"scope":"local_read_only_inventory","java4shell":null,"nginx2root":null,"apache":null,"exit_codes":{"java4shell":3,"nginx2root":3,"apache2root":3},'
+            else
+                printf '{"findings":[],'
+            fi
+            printf '"status":"timeout","coverage":{"scan_timed_out":true,"scan_timeout_seconds":%s,"evidence_incomplete":true}}\n' "$SCAN_TIMEOUT"
+        fi
+        exit 3
+    fi
+    if [[ $format == json && -z $out ]]; then cat -- "$scan_dir/report" || exit 2; fi
+    exit "$rc"
+}
+
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
-    main "$@"
+    run_scan "$@"
 fi

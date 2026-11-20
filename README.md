@@ -309,7 +309,7 @@ PHP 命令所得配置始终标为 `cli_only`，不能证明 Web/FPM、容器或
 x2shell-check collect --java-command > host-report.json
 ```
 
-`--java-command` 默认关闭且独立于 PHP 与中间件选项。开启后只执行发现到的 Java 程序的 `-version` 和 `-XX:+PrintFlagsFinal -version`，并检查当前命名空间可见的 CPU flags、JVM 进程和 Java4Shell 相关启动参数。调用 Java 时清除采集器自身的 `JAVA_TOOL_OPTIONS`、`JDK_JAVA_OPTIONS` 与 `_JAVA_OPTIONS`，避免把采集环境选项误当成运行服务配置；不读取目标进程环境或保存其他命令行参数。诊断附加需单独开启 `--java-attach`。
+`--java-command` 默认关闭且独立于 PHP 与中间件选项。开启后读取当前命名空间可见的 CPU flags、JVM 进程映射和 JDK 元数据。只在显式使用 `--java-path` 时执行指定 Java 启动器的 `-version`。显式查询时清除采集器自身的 `JAVA_TOOL_OPTIONS`、`JDK_JAVA_OPTIONS` 与 `_JAVA_OPTIONS`。诊断附加需单独开启 `--java-attach`。
 
 候选必须分层核对：HotSpot/GraalVM、公开受影响版本范围、x86-64、当前节点可见的 `avx512f`/`avx512bw`/`avx512vbmi`/`bmi2`，以及服务实际使用的 Base64 intrinsic/JIT 条件。采集器新启动进程观察到的默认参数不代表运行服务；命令行没有相关参数也不代表环境变量或参数文件未设置。当前节点硬件不适用只说明当前放置，迁移后必须重新采集。
 
@@ -384,7 +384,7 @@ Bash 和 Rust 都检查标准路径中的磁盘配置线索，包括 HTTP/2、HT
 
 Rust 的 `--middleware` 同时包含 Nginx2Root 和 Apache 等中间件盘点。网页扫描从现有响应的 `Server` 头读取版本，并记录该次连接实际使用的协议。对于 CVE-2026-123007，版本命中披露范围且观察到 HTTP/2 时，`nginx2root.http2_screening` 提示优先核验。版本或协议证据不足、命中挑战页或发现代理/CDN 响应头时，结果会说明原因。协议只反映扫描器到响应端的这次连接。实际处理 HTTP/2 的实例、模块配置和发行包回补需要通过主机证据核实。
 
-Rust `--java-command` 保留 CLI 默认值采集，并增加当前节点的 CPUID、`/proc/cpuinfo` 交叉核对、JVM 映射身份及磁盘构建证据。`--java-attach` 显式读取同用户 JVM 的生效参数和自报构建，必要时会启动 HotSpot 诊断监听器。运行构建与磁盘构建有冲突时保留未知。
+Rust `--java-command` 交叉核对当前节点的 CPUID 和 `/proc/cpuinfo`，并核验 JVM 映射身份及磁盘构建证据。`--java-attach` 显式读取同用户 JVM 的生效参数和自报构建，可能启动 HotSpot 诊断监听器或造成短暂停顿。运行构建与磁盘构建有冲突时保留未知。
 
 本项目的 Nginx2Root 检查用于防御性巡检。网页扫描依据常规 HTTP 响应中的版本与协议线索，主机巡检读取运行映像、软件包和配置证据。项目不包含或运行漏洞利用 PoC，也不发送漏洞触发载荷。文档中的 `offline-poc` 使用合成报告验证裁决规则。CVE-2026-123007 的影响范围、修复版本和升级依据见 [NGINX 官方安全公告](https://nginx.org/en/security_advisories.html)。
 
@@ -398,6 +398,8 @@ x2shell-check collect --all --fail-on-risk > host-report.json
 ```
 
 两条命令都先输出 Rust 主机报告。启用 `--fail-on-risk` 后，版本门禁命中返回 1，仅有证据不足返回 3。可同时查看 `audit.risk_gate_hit`、`audit.evidence_incomplete` 和各专项 `audit.exit_codes`。配置未归属或未读全有独立字段。
+
+Bash 和 Rust CLI 的整次巡检默认均为 120 秒。Bash 可在脚本顶部修改 `SCAN_TIMEOUT`，Rust 可传 `--scan-timeout 秒数`。超时会终止采集进程组，返回 3，JSON 模式输出 `coverage.scan_timed_out: true` 的不完整报告。Java 进程映射每次最多读取 8 MiB，专项总计最多读取约 64 MiB，包括身份复核。显式 Java 版本查询的输出上限为 64 KiB，超限时该运行时标记为未知。
 
 Rust 主机采集支持重复指定 `--nginx-config` 和 `--apache-config`，并支持 `--apache-path`。Java 运行时盘点可用 `--java-jdk`、`--java-root`、`--java-root-depth`、`--java-pid`、`--java-processes-only` 或 `--java-no-processes` 控制范围。
 
@@ -486,11 +488,11 @@ x2shell-check collect --options collector.options.example.json --web-probe=false
 检测范围与证据边界：
 
 - 识别可见的 Apache/httpd、Nginx、Tengine、LiteSpeed、Lighttpd、FrankenPHP 和 PHP-FPM 进程，以及 PATH/常见路径中的已安装程序。Nginx 名称运行的 Tengine 可结合安装路径和版本识别；已安装不等于正在运行。
-- Apache 检查当前进程 maps 中的 libphp/mod_php 映射，并尝试 `-M` 中的 PHP、proxy_fcgi、fcgid 声明。`-M` 读取的是默认磁盘配置，不一定等于当前 PID 启动时的配置。Nginx/Tengine 检查 PHP 动态库映射及 `-V` 构建线索，不把 FastCGI 与 mod_php 混为一谈。没有 PHP 映射不能否定 PHP-FPM 使用。
+- 中间件盘点复用 Apache、NGINX/Tengine 的静态二进制版本证据。`--php-modules` 从进程 maps 检查 PHP 动态库，不启动中间件命令或加载模块。没有 PHP 映射时，PHP-FPM 使用情况仍需复核。
 - 通过 `/proc/PID/fd` 中 socket inode 与该 PID 网络命名空间的 tcp/tcp6 LISTEN 表关联 **TCP** 监听端口，不做端口范围扫描。仅在进程身份未变化、网络命名空间与采集器相同、地址确认属于本机时才尝试 Web GET。容器内端口需在对应容器/命名空间采集；Unix socket、UDP、隐藏/无权限进程不在 TCP 探测覆盖内。
 - Web 开关默认关闭；开启后默认分别尝试 HTTP/HTTPS，每次只 GET 指定路径，不跟随跳转、不使用环境代理、不传递自查台凭据、不尝试 FastCGI 端口、不扫描额外端口，TLS 校验保持开启。默认最多 16 次尝试，可设 1–64；每次请求最长 4 秒，只保留最多 16 KiB 正文用于指纹识别，不保存 Cookie 值。普通 GET 仍需选择只读业务入口。
 - 通配监听地址转为本机回环连接；明确绑定的地址需出现在本机地址信息中。共享监听、SO_REUSEPORT 或反向代理可能使响应来自其他 worker/后端，端口归属不等于响应实例证明。证书/虚拟主机可能需要正确 web_host；TLS、权限、命名空间、进程退出等失败会保留未知/跳过原因，不认定为安全或未使用 PHP。
-- 默认最多 128 个进程、16 个不同程序版本检查、每进程 8192 个 FD；达到上限或权限不足时可能不完整。不会自动提升权限、修改配置或重启中间件，不读取进程环境和完整命令行、不导出 Nginx/Apache 完整配置。
+- 最多深查 128 个中间件进程，每个进程最多枚举 8,192 个 FD，整次中间件巡检共 32,768 个 FD。TCP 表按网络命名空间复用，最多读取 16 组 TCP/TCP6 表。预算用尽或权限不足时，端口证据标记为不完整。
 
 导入后，开发者当前结果和管理员历史中会显示中间件、PID、PHP 模块线索、关联端口和本机 Web 观测。JSON/CSV 保留同一份主机证据，仍标为“开发者提交，未经独立核验”，不会自动提升远程漏洞结论。
 

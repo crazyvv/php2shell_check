@@ -125,6 +125,14 @@ rc=0
 [[ $rc == 0 ]]
 grep -Fq '"id": "pid:123", "kind": "process", "status": "not_affected"' "$fixture/darwin-selected-pid.json"
 
+newline_jdk=$fixture/$'jdk\nname\n'
+mkdir -p "$newline_jdk/lib/server"
+cp "$fixture/jdk/release" "$newline_jdk/release"
+: > "$newline_jdk/lib/server/libjvm.so"
+bash "$scanner" --quiet --no-processes --jdk "$newline_jdk" --root "$newline_jdk" --json > "$fixture/newline-jdk.json"
+[[ $(grep -c '"kind": "installation"' "$fixture/newline-jdk.json") -eq 1 ]]
+grep -Fq '"version": "21.0.13.1+4"' "$fixture/newline-jdk.json"
+
 mkdir -p "$fixture/apps/jenkins-archive" "$fixture/apps/kafka-backup"
 for format in json txt csv; do
     bash "$scanner" --quiet --no-processes --jdk "$fixture/jdk" --apps "$fixture/apps" \
@@ -219,6 +227,50 @@ if have timeout || have gtimeout; then
         --java-path "$fixture/launcher/bin/java" --json > "$fixture/report.json"
     grep -Fq '"version": "21.0.13.1+4-LTS"' "$fixture/report.json"
     grep -Fq '"kind": "java-binary", "status": "not_affected"' "$fixture/report.json"
+
+    cat > "$fixture/noisy-java" <<'JAVA'
+#!/bin/sh
+printf '%s\n' 'java version "21.0.13.1"' >&2
+head -c 65537 /dev/zero >&2
+JAVA
+    chmod +x "$fixture/noisy-java"
+    rc=0
+    bash "$scanner" --quiet --no-processes --jdk "$fixture/jdk" \
+        --java-path "$fixture/noisy-java" --json > "$fixture/noisy-java.json" || rc=$?
+    [[ $rc == 3 ]]
+    grep -Fq '"kind": "java-binary", "status": "unknown"' "$fixture/noisy-java.json"
+    grep -Fq '输出超过 65536 字节' "$fixture/noisy-java.json"
+fi
+
+(
+    mkdir -p "$fixture/budget-work" "$fixture/budget-proc"
+    WORK=$fixture/budget-work
+    local_mapping='1000-2000 r-xp 00000000 00:2e 123 /opt/jdk/lib/server/libjvm.so'
+    printf '%s\n' "$local_mapping" > "$fixture/budget-proc/maps"
+    JVM_MAPS_TOTAL_BYTE_LIMIT=$((${#local_mapping} + 2))
+    [[ $(libjvm_meta "$fixture/budget-proc") == *'/opt/jdk/lib/server/libjvm.so'* ]]
+    rc=0
+    result=$(libjvm_meta "$fixture/budget-proc") || rc=$?
+    [[ $rc != 0 && -z $result && -e $WORK/java-maps-limit ]]
+)
+
+rc=0
+(
+    SCAN_TIMEOUT=1
+    main() {
+        printf '{"partial":'
+        trap '' TERM
+        sleep 10 &
+        printf '%s\n' "$!" > "$fixture/watchdog-child"
+        wait
+    }
+    run_scan --all --json
+) > "$fixture/watchdog.json" 2> "$fixture/watchdog.err" || rc=$?
+[[ $rc == 3 && -s $fixture/watchdog-child ]]
+grep -Fq '"status":"timeout","coverage":{"scan_timed_out":true' "$fixture/watchdog.json"
+! grep -Fq '"partial"' "$fixture/watchdog.json"
+if child_state=$(ps -o state= -p "$(cat "$fixture/watchdog-child")"); then
+    [[ $child_state == Z* ]]
 fi
 
 mkfifo "$fixture/cpu-fifo"
@@ -378,9 +430,67 @@ NGINX
     [[ $flags == *'"resolver":true,"dynamic_proxy_pass":true'* ]]
     [[ $flags == *'"mail_proxy":true,"auth_http":true'* ]]
     [[ $flags == *'"include_observed":true,"proxy_http_version_2":true,"grpc_upstream":false'* ]]
-    printf '%s\n'  'Protocols http/1.1' '<VirtualHost *:443>' 'Protocols h2 http/1.1' '</VirtualHost>' 'H2Direct on' 'H2Upgrade on' 'IncludeOptional conf.d/*.conf' > "$fixture/apache.conf"
+    printf '%s\n'  'Protocols http/1.1' '<VirtualHost *:443>' 'Protocols h2 http/1.1' '</VirtualHost>' 'H2Direct on' 'H2Upgrade on' "IncludeOptional $fixture/no-conf.d/*.conf" > "$fixture/apache.conf"
     flags=$(apache_config_hints "$fixture/apache.conf")
     [[ $flags == *'"h2":true'*'"h2_direct_on":true,"h2_upgrade_on":true,"include_observed":true,"h2_in_virtualhost":true,"h2_outside_virtualhost":false'* ]]
+    mkdir -p "$fixture/apache-includes"
+    printf 'Protocols h2 http/1.1\n' > "$fixture/apache-includes/inside.conf"
+    printf '<VirtualHost *:443>\nInclude "%s"\n</VirtualHost>\n' "$fixture/apache-includes/*.conf" > "$fixture/apache-entry.conf"
+    flags=$(apache_config_hints "$fixture/apache-entry.conf")
+    [[ $flags == *'"files_examined":2,"skipped":0'*'"h2":true'*'"h2_in_virtualhost":true'* ]]
+    printf 'ServerRoot "%s"\nInclude apache-includes/inside.conf\n' "$fixture" > "$fixture/apache-server-root.conf"
+    flags=$(apache_config_hints "$fixture/apache-server-root.conf")
+    [[ $flags == *'"files_examined":2,"skipped":0'*'"h2":true'* ]]
+    printf 'Include conf.d/relative.conf\n' > "$fixture/apache-relative.conf"
+    flags=$(apache_config_hints "$fixture/apache-relative.conf")
+    [[ $flags == *'"skipped":1'*'"include_observed":true'* ]]
+
+    (
+        WEB_CONFIG_DIRECTORY_LIMIT=2
+        mkdir -p "$fixture/wide-includes"
+        touch "$fixture/wide-includes/"{a,b,c}.cache
+        printf 'include "%s";\n' "$fixture/wide-includes/*.conf" > "$fixture/nginx-wide.conf"
+        flags=$(nginx2root_config "$fixture/nginx-wide.conf")
+        [[ $flags == *'"files_examined":1,"skipped":1'*'"reason":"include_directory_incomplete"'* ]]
+        printf 'IncludeOptional "%s"\n' "$fixture/wide-includes/*.conf" > "$fixture/apache-wide.conf"
+        flags=$(apache_config_hints "$fixture/apache-wide.conf")
+        [[ $flags == *'"files_examined":1,"skipped":1'* ]]
+    )
+
+    (
+        mkdir -p "$fixture/apache-proc/12345" "$fixture/custom-module"
+        printf '\177ELF Apache/2.4.71' > "$fixture/fixed-httpd"
+        printf '\177ELF mod_http2/2.0.42' > "$fixture/custom-module/mod_http2.so"
+        printf 'apache2\n' > "$fixture/apache-proc/12345/comm"
+        ln -s "$fixture/fixed-httpd" "$fixture/apache-proc/12345/exe"
+        ln -s / "$fixture/apache-proc/12345/root"
+        read -r major minor inode <<< "$(file_id "$fixture/custom-module/mod_http2.so")"
+        printf '7f000000-7f008000 r-xp 0 %x:%x %s %s\n' "$major" "$minor" "$inode"             "$fixture/custom-module/mod_http2.so" > "$fixture/apache-proc/12345/maps"
+        web_process_paths() { printf '%s\n' "$fixture/apache-proc/12345"; }
+        linux_process_visibility_limited() { return 1; }
+        java_process_start() { printf 123; }
+        web_package_hint() { :; }
+        rc=0
+        apache_inventory --apache-config "$fixture/apache-entry.conf" --json > "$fixture/apache-runtime-module.json" || rc=$?
+        [[ $rc == 1 ]]
+        grep -Fq '"version_status":"meets_upstream_reference","mod_http2_mapped":true' "$fixture/apache-runtime-module.json"
+        grep -Fq '"version":"2.0.42","version_status":"potential","disk_identity_status":"matched"' "$fixture/apache-runtime-module.json"
+
+        printf '7f000000-7f008000 r-xp 0 %x:%x %s %s (deleted)\n' "$major" "$minor" "$inode"             "$fixture/custom-module/mod_http2.so" > "$fixture/apache-proc/12345/maps"
+        rc=0
+        apache_inventory --apache-config "$fixture/apache-entry.conf" --json > "$fixture/apache-deleted-module.json" || rc=$?
+        [[ $rc == 3 ]]
+        grep -Fq '"version":"","version_status":"unknown","disk_identity_status":"unverified"' "$fixture/apache-deleted-module.json"
+
+        printf '7f000000-7f008000 r-xp 0 %x:%x %s %s\n' "$major" "$minor" "$inode" \
+            "$fixture/custom-module/mod_http2.so" > "$fixture/apache-proc/12345/maps"
+        APACHE_MAPPED_MODULE_LIMIT=0
+        rc=0
+        apache_inventory --apache-config "$fixture/apache-entry.conf" --json > "$fixture/apache-module-budget.json" || rc=$?
+        [[ $rc == 3 ]]
+        grep -Fq '"module_probe_limit_reached":true,"evidence_incomplete":true' "$fixture/apache-module-budget.json"
+    )
+
     [[ $(web_disk_identity /proc/self "$fixture/apache.conf" "$(file_id "$fixture/apache.conf")") == matched ]]
     [[ $(web_disk_identity /proc/self "$fixture/apache.conf" '0 1 2') == mismatch ]]
     [[ $(web_disk_identity /proc/self '/tmp/sample (deleted)' '0 1 2') == deleted ]]
