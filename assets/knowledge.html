@@ -54,10 +54,43 @@
     </table></div>
     <h3>升级到修复版本</h3>
     <p>NGINX OSS 受影响实例应升级到稳定分支 <strong>1.30.7</strong>、主线分支 <strong>1.31.9</strong>，或相应分支的后续安全版本。NGINX Plus 应升级到覆盖五项 CVE 的 <strong>37.0.8.1 LTS</strong>、<strong>37.3.0.1 CR</strong>，或 F5 确认包含修复的后续版本。发行版及其他衍生版本按厂商公告确认修复包。现场应按正在运行的 NGINX 映像和软件包完整修订号核对回补，并把磁盘配置关联到实际加载的站点或监听。SCTP 属于独立的内核核验项，可见性或禁载线索无法确认内核已修复。</p>
-    <h3>发行版回补与第三方热修</h3>
-    <p>发行版可以在保留 NGINX 上游版本号的情况下回补修复。优先升级到发行版公告指定的安全软件包。Debian 13 的 <code>1.26.3-3+deb13u11</code> 由 DSA-6642-1 公告确认覆盖本页五项 NGINX CVE。<a href="https://www.debian.org/security/2026/dsa-6642">Debian DSA-6642-1</a></p>
-    <p>Hosted Power 提供独立的 Debian 和 Enterprise Linux 回补包。例如 Debian 12 的 <code>1.22.1-9+deb12u10.1~hp3</code> 虽仍显示 NGINX 1.22.1，发布记录列出了本页的 HTTP/2、解析器和邮件代理修复。选择第三方包前核对发行版、架构、包签名和适用 CVE。<a href="https://github.com/HOSTED-POWER/nginx2root-patches">Hosted Power 回补记录</a></p>
-    <p>主机报告的回补版本记录按完整包版本列出公告覆盖的 CVE。升级后复核运行中进程的映像、软件包归属和旧 worker 退出情况。包版本记录与运行二进制验证分别报告。</p>
+    <details id="nginx-backports" class="knowledge-disclosure">
+      <summary>展开 Debian 与 Enterprise Linux 回补清单</summary>
+      <p>发行版可以保留 NGINX 上游版本号并回补修复。优先选用发行版公告指定的安全包。Debian 13 的 <code>1.26.3-3+deb13u11</code> 已由 Debian 官方公告确认修复上表五项及同批另外四项 CVE。Hosted Power 提供按发行版和软件包系列构建的第三方热修。<a href="https://www.debian.org/security/2026/dsa-6642">Debian DSA-6642-1</a> · <a href="https://github.com/HOSTED-POWER/nginx2root-patches">Hosted Power 回补记录</a></p>
+      <h3>Debian amd64 第三方热修</h3>
+      <p>表中覆盖范围限于本页五项 NGINX2Root CVE。Debian 8 的 NGINX 早于 HTTP/2 支持，Debian 9–12 热修记录覆盖四项，Debian 13 覆盖五项。<a href="https://github.com/HOSTED-POWER/nginx2root-patches/releases/tag/v1.3.2">Hosted Power v1.3.2</a></p>
+      <div class="knowledge-table"><table>
+        <thead><tr><th scope="col">Debian</th><th scope="col">Hosted Power 完整包版本</th><th scope="col">本专项覆盖</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">8 Jessie</th><td><code>1.6.2-5+deb8u10.1~hp3</code></td><td>解析器、邮件代理</td></tr>
+          <tr><th scope="row">9 Stretch</th><td><code>1.10.3-1+deb9u10.1~hp3</code></td><td>两项 HTTP/2、解析器、邮件代理</td></tr>
+          <tr><th scope="row">10 Buster</th><td><code>1.14.2-2+deb10u9.1~hp3</code></td><td>两项 HTTP/2、解析器、邮件代理</td></tr>
+          <tr><th scope="row">11 Bullseye</th><td><code>1.18.0-6.1+deb11u9.1~hp3</code></td><td>两项 HTTP/2、解析器、邮件代理</td></tr>
+          <tr><th scope="row">12 Bookworm</th><td><code>1.22.1-9+deb12u10.1~hp3</code></td><td>两项 HTTP/2、解析器、邮件代理</td></tr>
+          <tr><th scope="row">13 Trixie</th><td><code>1.26.3-3+deb13u10.1~hp3</code></td><td>全部五项。官方 <code>1.26.3-3+deb13u11</code> 可通过常规升级取代此热修包</td></tr>
+        </tbody>
+      </table></div>
+      <h3>Enterprise Linux x86-64 第三方热修</h3>
+      <div class="knowledge-table"><table>
+        <thead><tr><th scope="col">系列</th><th scope="col">Hosted Power 发布覆盖</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">CentOS 7 / 8</th><td>CentOS 7 的归档 EPEL 1.20，以及 CentOS Linux 8 的 AppStream 1.14、1.16、1.18、1.20。</td></tr>
+          <tr><th scope="row">EL 8</th><td>RHEL 8、Rocky Linux 8 的 AppStream 1.24 分别提供原生包。</td></tr>
+          <tr><th scope="row">EL 9</th><td>涵盖 RHEL、Rocky Linux、Oracle Linux 的 Base 1.20 与 AppStream 1.22、1.24、1.26，以及 AlmaLinux 9 已退役的 1.22 流。受支持的 AlmaLinux 流优先使用官方修复包。</td></tr>
+          <tr><th scope="row">EL 10</th><td>RHEL、Rocky Linux、Oracle Linux 的原生 NGINX Base 包。</td></tr>
+        </tbody>
+      </table></div>
+      <p>RPM 部署前按公告核对发行版、架构、包名、完整 Epoch–Version–Release、模块流和动态模块 ABI。CentOS 归档包仅适用于其原包系。已结束常规支持的系统还需安排迁移或核对整机延长支持。<a href="https://github.com/HOSTED-POWER/nginx2root-patches/releases">Hosted Power 各包系发布</a> · <a href="https://almalinux.org/blog/2026-11-18-nginx2root/">AlmaLinux 官方更新指引</a></p>
+    </details>
+    <details id="nginx-upgrade-verification" class="knowledge-disclosure">
+      <summary>展开包来源、升级后验证与扫描覆盖</summary>
+      <ol>
+        <li><strong>确认软件包归属。</strong> 以运行进程对应的映像为起点，核对包名、完整版本、架构及来源。APT 和 RPM 按各自的版本规则排序。Hosted Power 将热修版本排在原包与相应后续发行版更新之间，便于常规升级接管。</li>
+        <li><strong>按包系核对发布记录。</strong> 用已安装包的 changelog 查找目标 CVE，结合发行版公告、第三方发布记录和包签名复核。安装前用发布方提供的校验值核对下载附件，按包系同步更新相关动态模块。</li>
+        <li><strong>核对生效映像。</strong> 配置检查通过后执行该发行版要求的服务重启或二进制升级流程，确认实际运行的 master 和 worker 已使用更新后的映像，再复查协议监听及业务。</li>
+      </ol>
+      <p>x2shell-check 主机报告会识别 Debian 13 的 DSA-6642-1 公告版本和上表所列 Debian amd64 热修包。每条回补版本记录列出覆盖的 CVE，运行二进制仍单独核验。Enterprise Linux 回补、其他包版本和同批额外 CVE 可按公告人工复核。DSA-6642-1 的另外四项为 CVE-2026-118899、CVE-2026-120967、CVE-2026-123640、CVE-2026-125283。<a href="https://www.debian.org/security/2026/dsa-6642">Debian 公告完整 CVE 清单</a> · <a href="https://github.com/HOSTED-POWER/nginx2root-patches#safe-upgrade-path">Hosted Power 版本顺序与升级说明</a></p>
+    </details>
     <h3>临时缓解</h3>
     <ul>
       <li><strong>HTTP/2（CVE-2026-123007、CVE-2026-123633）</strong>在受影响的 NGINX 监听上停用 HTTP/2。按版本使用 <code>http2 off;</code> 或移除 <code>listen</code> 的 <code>http2</code> 参数。调整前核对 gRPC 等依赖。</li>
@@ -65,9 +98,11 @@
       <li><strong>解析器和邮件代理（CVE-2026-123634、CVE-2026-113425）</strong>暂时停用受影响的动态代理与镜像路径，或隔离相关入口。邮件代理可暂停对外监听，或将其访问限制为受信网络。保留这些功能时优先安排升级。</li>
     </ul>
     <p>配置检查通过后再应用变更，并核对每个监听和上游实例。停用一种协议只覆盖对应路径。升级二进制后，执行适当的服务重启或二进制升级流程，确认旧 worker 已退出。</p>
-    <h3>衍生版本与 Ingress</h3>
-    <p>NGINX Plus 按 CERT-EU 披露的发行范围检查。F5 发布说明列出 37.0.7.1 LTS 和 37.2.0.1 CR 对 CVE-2026-123633 的修复，后续 37.0.8.1 LTS 和 37.3.0.1 CR 补齐另外四项。<a href="https://docs.nginx.com/nginx/releases/">F5 Plus 发布说明</a>。OpenResty 1.31.8.1 基于 NGINX 1.31.8，Tengine 3.2.0-rc5 的源码标注内核为 1.31.5。两者命中上游范围时需要核对厂商回补与实际组件。<a href="https://openresty.org/en/ann-1031008001.html">OpenResty 公告</a> · <a href="https://github.com/alibaba/tengine/blob/3.2.0-rc5/src/core/nginx.h">Tengine 标签源码</a></p>
-    <p>F5 NGINX Ingress Controller 5.7.1 使用 NGINX 1.31.8 或 Plus R37.2.0.1。5.8.0 的内核更新到 1.31.9 或 R37.3.0.1。集群巡检应按运行镜像中的实际版本复核。社区 ingress-nginx 已停止维护，仍在运行的实例应核对镜像内核并安排迁移。<a href="https://docs.nginx.com/nginx-ingress-controller/releases/">F5 版本矩阵</a> · <a href="https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/">Kubernetes 退役公告</a></p>
+    <details id="nginx-derivatives" class="knowledge-disclosure">
+      <summary>展开衍生版本与 Ingress</summary>
+      <p>NGINX Plus 按 CERT-EU 披露的发行范围检查。F5 发布说明列出 37.0.7.1 LTS 和 37.2.0.1 CR 对 CVE-2026-123633 的修复，后续 37.0.8.1 LTS 和 37.3.0.1 CR 补齐另外四项。<a href="https://docs.nginx.com/nginx/releases/">F5 Plus 发布说明</a>。OpenResty 1.31.8.1 基于 NGINX 1.31.8，Tengine 3.2.0-rc5 的源码标注内核为 1.31.5。两者命中上游范围时需要核对厂商回补与实际组件。<a href="https://openresty.org/en/ann-1031008001.html">OpenResty 公告</a> · <a href="https://github.com/alibaba/tengine/blob/3.2.0-rc5/src/core/nginx.h">Tengine 标签源码</a></p>
+      <p>F5 NGINX Ingress Controller 5.7.1 使用 NGINX 1.31.8 或 Plus R37.2.0.1。5.8.0 的内核更新到 1.31.9 或 R37.3.0.1。集群巡检应按运行镜像中的实际版本复核。社区 ingress-nginx 已停止维护，仍在运行的实例应核对镜像内核并安排迁移。<a href="https://docs.nginx.com/nginx-ingress-controller/releases/">F5 版本矩阵</a> · <a href="https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/">Kubernetes 退役公告</a></p>
+    </details>
     <p class="fine"><a href="https://nginx.org/en/security_advisories.html">NGINX 官方安全公告</a> · <a href="https://cert.europa.eu/publications/security-advisories/2026-022/">CERT-EU 公告</a></p>
   </section>
 
@@ -101,7 +136,7 @@
     <h3>临时缓解</h3>
     <p>业务允许时，在实际处理请求的 Web SAPI 中关闭 <code>session.upload_progress.enabled</code>。对仍需保留的上传入口，可按业务需要限制请求体大小，或限制入口访问。这些措施只缩小部分请求路径的暴露范围，两个 CVE 的修复仍需按 PHP 或发行版公告部署。</p>
     <p>应用变更后核对实际 Web 或 FPM worker 的配置和版本。确认应用仍能正常上传，并检查各后端实例是否都已加载新配置和补丁。</p>
-    <details id="php-analysis" class="php-analysis">
+    <details id="php-analysis" class="knowledge-disclosure">
       <summary>展开 PHP 专项深入分析</summary>
       <div class="knowledge knowledge-detail-grid">
 

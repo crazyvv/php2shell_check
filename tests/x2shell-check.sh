@@ -88,6 +88,32 @@ grep -Fq '"build_assessment": "unfixed"' "$fixture/ee.json"
 grep -Fq 'Oracle GraalVM Enterprise Edition 受影响构建（21.3.20.0.3）' "$fixture/ee.json"
 grep -Fq '"version": "17.0.18+8"' "$fixture/ee.json"
 
+mkdir -p "$fixture/entry-cap/jenkins" "$fixture/entry-cap/keycloak"
+: > "$fixture/entry-cap/file"
+rc=0
+(
+    DIRECTORY_ENTRY_LIMIT=1
+    main --java4shell --quiet --no-processes --jdk "$fixture/jdk" \
+        --root "$fixture/entry-cap" --apps "$fixture/entry-cap" --json
+) > "$fixture/capped.json" || rc=$?
+[[ $rc == 3 ]]
+grep -Fq '"root_entry_limit_reached": true' "$fixture/capped.json"
+grep -Fq '"apps_entry_limit_reached": true' "$fixture/capped.json"
+
+rc=0
+(
+    PROCESS_SCAN_LIMIT=0
+    main --java4shell --quiet --jdk "$fixture/jdk" --pid "$$" --json
+) > "$fixture/pid-capped.json" || rc=$?
+if [[ $OS == Linux || $OS == Darwin ]]; then
+    [[ $rc == 3 ]]
+    grep -Fq '"process_limit_reached": true' "$fixture/pid-capped.json"
+fi
+
+: > "$fixture/find-coverage"
+bounded_find 1 "$fixture/find-coverage" "$fixture/find-entries" "$fixture/entry-cap" -maxdepth 0
+[[ ! -s $fixture/find-coverage ]]
+
 rc=0
 bash "$scanner" --quiet --no-processes --jdk "$fixture/jdk" --root "$fixture/root" \
     --root-depth 1 --json > "$fixture/report.json" || rc=$?

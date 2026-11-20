@@ -31,7 +31,7 @@
   </section>
 
   <nav class="scan-links tools-nav" aria-label="巡检说明">
-    <a href="#coverage">检查覆盖</a><a href="#batch">批量执行</a><a href="#results">结果判读</a><a href="#options">专项参数</a>
+    <a href="#coverage">检查覆盖</a><a href="#batch">批量执行</a><a href="#results">结果判读</a><a href="#production-safety">生产运行</a><a href="#options">专项参数</a>
   </nav>
 
   <section id="coverage" class="card">
@@ -70,6 +70,25 @@ printf 'exit_code=%s\n' "$status"</code></pre>
       <p class="fine">同时出现多个状态时，批量模式优先返回 2，其次 1，再其次 3。请结合各专项退出码阅读报告。</p>
     </section>
   </div>
+
+  <section id="production-safety" class="card">
+    <h2>生产运行与资源上限</h2>
+    <p>常规批量巡检使用 <code>bash x2shell-check.sh --all --json</code>，并由批量平台限制并发及单主机任务时长。Linux 每个专项最多检查 2,048 个 PID，NGINX 和 Apache 各最多深入检查 24 个匹配进程。macOS 的 Java 进程清点最多处理 2,048 条进程记录。</p>
+    <p>Java 的显式 <code>--root</code> 总计最多遍历 10,000 个条目，<code>--apps</code> 另有 10,000 个条目额度。两者都限制在起始文件系统内，并遵守各自的搜索深度。达到条目上限且后面还有数据时，报告会标记覆盖不足。没有命中风险门禁时返回 <code>3</code>，已有命中仍返回 <code>1</code>。条目上限约束读取量，单次文件系统访问仍取决于目标主机的 I/O 响应。</p>
+    <ul>
+      <li><code>--jcmd</code> 会主动附加到 JVM，可能启动诊断监听器或造成短暂停顿。延迟敏感业务保持默认设置。</li>
+      <li><code>--java-path</code> 会以当前账号执行指定的 Java 启动器。仅在需要版本复核时指定可信文件。当前脚本在没有系统 <code>timeout</code> 工具时无法限制该启动器的执行时长。</li>
+      <li><code>--cpuinfo</code> 只传可信、有限大小的普通文本文件。命名管道或设备文件可能使离线读取阻塞。</li>
+    </ul>
+    <details class="scan-options"><summary>展开自定义扫描上限</summary>
+      <p>打开 <code>x2shell-check.sh</code>，在开头的「资源上限」区修改对应变量的数值。按正整数填写，保留等号两边的写法。修改后直接用原命令执行，建议先在单台主机验证覆盖和运行时间，再分发同一份脚本。</p>
+      <dl>
+        <dt>进程和目录</dt><dd><code>PROCESS_SCAN_LIMIT=2048</code>、<code>WEB_PROCESS_MATCH_LIMIT=24</code> 和 <code>DIRECTORY_ENTRY_LIMIT=10000</code>。<code>ROOT_DEPTH=8</code> 和 <code>APPS_DEPTH=3</code> 是默认深度，可分别由 <code>--root-depth</code> 和 <code>--apps-depth</code> 覆盖。</dd>
+        <dt>Web 文件读取</dt><dd><code>WEB_CONFIG_FILE_LIMIT=64</code>、<code>WEB_CONFIG_BYTE_LIMIT=65536</code>、<code>NGINX_INCLUDE_DEPTH_LIMIT=8</code>、<code>WEB_BINARY_BYTE_LIMIT=16777216</code> 和 <code>APACHE_MAPS_BYTE_LIMIT=1048576</code>。带 <code>BYTE</code> 的值以字节计。</dd>
+        <dt>单次命令超时</dt><dd><code>PACKAGE_QUERY_TIMEOUT=2</code>、<code>JCMD_TIMEOUT=3</code> 和 <code>JAVA_VERSION_TIMEOUT=30</code>，单位为秒。主机需要有 <code>timeout</code> 工具才能应用这些设置。</dd>
+      </dl>
+    </details>
+  </section>
 
   <section id="options" class="card">
     <h2>专项参数</h2>

@@ -37,11 +37,27 @@ CVE="CVE-2026-114938"
 NICKNAME="Java4Shell"
 RULES_AS_OF="2026-11-18"
 PROG=${0##*/}
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.2.1"
 
 OS=$(uname -s 2>/dev/null || echo unknown)
 ARCH_RAW=$(uname -m 2>/dev/null || echo unknown)
 ARCH_NORM=$(printf '%s' "$ARCH_RAW" | tr '[:upper:]' '[:lower:]')
+
+# 资源上限（按需直接修改右侧的正整数，字节上限单位为字节）
+# 上限适用于单次巡检。将数值调高会增加主机开销。
+PROCESS_SCAN_LIMIT=2048         # 每个专项最多检查的进程记录数
+WEB_PROCESS_MATCH_LIMIT=24      # NGINX 和 Apache 各自深入检查的匹配进程数
+DIRECTORY_ENTRY_LIMIT=10000     # Java --root 合计与 --apps 各自的目录条目上限
+WEB_CONFIG_FILE_LIMIT=64        # 单次配置解析最多检查的文件数
+WEB_CONFIG_BYTE_LIMIT=65536      # 单个 Web 配置文件的读取上限
+NGINX_INCLUDE_DEPTH_LIMIT=8     # NGINX include 最大递归深度
+WEB_BINARY_BYTE_LIMIT=16777216   # 单个 Web 二进制的版本线索读取上限
+APACHE_MAPS_BYTE_LIMIT=1048576   # Apache 模块映射的读取上限
+PACKAGE_QUERY_TIMEOUT=2        # 单次软件包查询超时（秒）
+JCMD_TIMEOUT=3                 # 单次 JVM 诊断超时（秒）
+JAVA_VERSION_TIMEOUT=30        # 显式 Java 启动器版本查询超时（秒）
+ROOT_DEPTH=8                   # --root 默认搜索深度，可由 --root-depth 覆盖
+APPS_DEPTH=3                   # --apps 默认搜索深度，可由 --apps-depth 覆盖
 
 # ---------------------------------------------------------------------------
 # 默认参数
@@ -55,11 +71,13 @@ PROC_ONLY=0
 QUIET=0
 CPUINFO=""
 APPS_DIR=""
-APPS_DEPTH=3
 FAIL_ON="affected,potential"
 ASSUME_FEFF=0
 JCMD=0
-ROOT_DEPTH=8
+PROCESS_LIMIT_REACHED=false
+ROOT_ENTRY_LIMIT_REACHED=false
+APPS_ENTRY_LIMIT_REACHED=false
+APPS_SCAN_ERRORS=0
 JDK_ARGS=()
 PID_ARGS=()
 JAVA_BINS=()
@@ -117,6 +135,8 @@ Java4Shell / Nginx2Root / Apache2Root 主机暴露面检测（$PROG v$SCRIPT_VER
   --cpuinfo PATH        用指定文件替代 /proc/cpuinfo（离线/镜像核查用）
   --apps DIR            额外清点该目录下已知受影响的 Java 应用（默认深度 3）
   --apps-depth N        配合 --apps，指定递归深度（默认 3）
+                        每专项最多检查 $PROCESS_SCAN_LIMIT 条进程记录；
+                        --root 合计与 --apps 各最多遍历 $DIRECTORY_ENTRY_LIMIT 个条目。
   --demo                跑内置固定样本（不采集本机任何数据，可重复复现）
   --json                等价于 --format json
   --csv                 等价于 --format csv
@@ -390,7 +410,7 @@ installation_rpm_metadata() {
         "$root"/jre/lib/*/*/libjvm.so "$root/bin/java" "$root/jre/bin/java"; do
         [ -f "$file" ] || continue
         file=$(real_path "$(resolve_symlinks "$file")")
-        row=$(LC_ALL=C timeout 2 rpm -qf --qf '%{NAME}\t%{VERSION}\t%{VENDOR}\n' -- "$file" 2>/dev/null) || continue
+        row=$(LC_ALL=C timeout "$PACKAGE_QUERY_TIMEOUT" rpm -qf --qf '%{NAME}\t%{VERSION}\t%{VENDOR}\n' -- "$file" 2>/dev/null) || continue
         # 多包归属或非预期包名不作为确定版本证据。
         [[ $row != *$'\n'* ]] || continue
         IFS=$'\t' read -r name version vendor <<< "$row"
@@ -415,9 +435,34 @@ java_name() {
 # 从 .../lib/server/libjvm.so 反推运行时根目录（不含 /proc 前缀）
 root_of_lib() { jvm_root_from_lib "" "$1"; }
 
+# Stream a bounded number of entries. Counting all entries also bounds wide
+# trees containing no matching files. Stop find as soon as the pipe closes.
+bounded_find() {
+    local limit=$1 coverage=$2 output=$3 entry count=0
+    local -a statuses
+    shift 3
+    if find "$@" -print0 2>/dev/null | (
+        while IFS= read -r -d '' entry; do
+            if (( count >= limit )); then
+                printf 'entry_limit\n' >> "$coverage"
+                break
+            fi
+            printf '%s\0' "$entry" || exit 1
+            count=$((count + 1))
+        done
+    ) > "$output"; then
+        statuses=("${PIPESTATUS[@]}")
+    else
+        statuses=("${PIPESTATUS[@]}")
+    fi
+    if (( statuses[1] != 0 || (statuses[0] != 0 && statuses[0] != 141) )); then
+        printf 'error\n' >> "$coverage"
+    fi
+}
+
 # --root：在给定目录里找嵌入式运行时的 libjvm.so，反推 Home
 scan_root_dirs() {
-    local r entry home relative separators
+    local r entry home relative separators remaining=$DIRECTORY_ENTRY_LIMIT
     [ ${#ROOT_ARGS[@]} -gt 0 ] || return 0
     for r in "${ROOT_ARGS[@]}"; do
         if ! have find || [ ! -d "$r" ]; then
@@ -426,13 +471,10 @@ scan_root_dirs() {
             continue
         fi
         r=$(real_path "$r")
-        if ! find "$r" -xdev -maxdepth "$ROOT_DEPTH" \
-                \( -type d -o -name libjvm.so \( -type f -o -type l \) \) -print0 \
-                > "$WORK/root-entries" 2>/dev/null; then
-            printf 'error\n' >> "$ROOT_COVERAGE_FILE"
-            warn "搜索安装目录时发生错误，结果可能不完整: $r"
-        fi
+        bounded_find "$remaining" "$ROOT_COVERAGE_FILE" "$WORK/root-entries" \
+            "$r" -xdev -maxdepth "$ROOT_DEPTH"
         while IFS= read -r -d '' entry; do
+            remaining=$((remaining - 1))
             if [ -d "$entry" ] && [ ! -L "$entry" ]; then
                 relative=${entry#"${r%/}/"}
                 separators=${relative//[^\/]/}
@@ -442,10 +484,12 @@ scan_root_dirs() {
                 fi
                 continue
             fi
+            [[ ${entry##*/} == libjvm.so && ( -f "$entry" || -L "$entry" ) ]] || continue
             home=$(root_of_lib "$entry")
             [ -n "$home" ] && [ -d "$home" ] || continue
             printf '%s\n' "$(real_path "$home")"
         done < "$WORK/root-entries"
+        if grep -qx entry_limit "$ROOT_COVERAGE_FILE"; then break; fi
     done
 }
 
@@ -1037,7 +1081,7 @@ mapping_identity() {
 jcmd_version() {
     local pid=$1 jc=$2 out
     have timeout || return 1
-    out=$(timeout -k 1s 3s "$jc" "$pid" VM.version 2>/dev/null) || return 1
+    out=$(timeout -k 1s "$JCMD_TIMEOUT" "$jc" "$pid" VM.version 2>/dev/null) || return 1
     printf '%s\n' "$out" | awk '
         / VM version / {
             for (i = 1; i < NF; ++i) {
@@ -1087,7 +1131,7 @@ handles_sigquit() {
 jcmd_flags() {
     local pid=$1 jc=$2 out="" b64="" avx=""
     have timeout || return 1
-    out=$(timeout -k 1s 3s "$jc" "$pid" VM.flags -all 2>/dev/null) || return 1
+    out=$(timeout -k 1s "$JCMD_TIMEOUT" "$jc" "$pid" VM.flags -all 2>/dev/null) || return 1
     [ -n "$out" ] || return 1
     b64=$(printf '%s\n' "$out" | awk '$2 == "UseBASE64Intrinsics" && ($3 == "=" || $3 == ":=") { print $4; exit }')
     avx=$(printf '%s\n' "$out" | awk '$2 == "UseAVX" && ($3 == "=" || $3 == ":=") { print $4; exit }')
@@ -1174,18 +1218,12 @@ scan_processes() {
     local runtime_version disk_version version_conflict weak_identity
     local identity_confidence disk_hint_version disk_hint_vendor disk_hint_product disk_hint_build
 
-    local pidlist
-    if [ ${#PID_ARGS[@]} -gt 0 ]; then
-        explicit=1
-        pidlist=$(printf '%s\n' ${PID_ARGS[@]+"${PID_ARGS[@]}"})
-    elif [ "$OS" = "Linux" ]; then
-        pidlist=$(for d in /proc/[0-9]*; do printf '%s\n' "${d#/proc/}"; done | LC_ALL=C sort -n)
-    else
-        return
-    fi
-
+    local scanned=0
+    if [ ${#PID_ARGS[@]} -gt 0 ]; then explicit=1; fi
     while IFS= read -r pid; do
         [ -n "$pid" ] || continue
+        if (( scanned >= PROCESS_SCAN_LIMIT )); then PROCESS_LIMIT_REACHED=true; break; fi
+        scanned=$((scanned + 1))
         proc="/proc/$pid"
         NOTES=""
 
@@ -1473,16 +1511,25 @@ scan_processes() {
             "$cpu" "$version" "$root_disp" "$vendor" "$product" "$vm" "$arch" \
             "$flags" "$feff" "$container" "$NOTES" \
             "$identity_confidence" "$disk_hint_version" "$disk_hint_vendor" "$disk_hint_product" "$disk_hint_build"
-    done <<< "$pidlist"
+    done < <(
+        if [ "$explicit" -eq 1 ]; then
+            printf '%s\n' ${PID_ARGS[@]+"${PID_ARGS[@]}"}
+        else
+            for proc in /proc/[0-9]*; do printf '%s\n' "${proc#/proc/}"; done
+        fi
+    )
 }
 
 # 非 Linux 平台：仅能做启动器级别的线索（Go 版在 macOS 上同样不校验运行库）
 scan_processes_other() {
     local pid exe root notes version vendor product vm arch cpu build bevid status reason bevid_and_build
+    local scanned=0
     product=""
     command -v ps >/dev/null 2>&1 || return
     while read -r pid exe; do
         [ -n "$pid" ] || continue
+        if (( scanned >= PROCESS_SCAN_LIMIT )); then PROCESS_LIMIT_REACHED=true; break; fi
+        scanned=$((scanned + 1))
         [ -n "$exe" ] || continue
         java_name "$exe" || continue
         NOTES=""
@@ -1521,7 +1568,7 @@ scan_java_binary() {
 
     out=""
     if have timeout; then
-        out=$(timeout 30 "$bin" -version 2>&1 || true)
+        out=$(timeout "$JAVA_VERSION_TIMEOUT" "$bin" -version 2>&1 || true)
     else
         out=$("$bin" -version 2>&1 || true)
     fi
@@ -1579,8 +1626,11 @@ scan_apps() {
     [ -d "$root" ] || die "--apps 路径不是目录: $root"
     root=$(real_path "$root")
 
-    while IFS= read -r d; do
-        [ -n "$d" ] || continue
+    bounded_find "$DIRECTORY_ENTRY_LIMIT" "$WORK/apps-coverage" "$WORK/apps-entries" \
+        "$root" -xdev -maxdepth "$depth" \
+        \( -path "$root" -o ! -name '.*' -o -prune \)
+    while IFS= read -r -d '' d; do
+        [ -d "$d" ] && [ ! -L "$d" ] && [[ $d != */.* ]] || continue
         [ "$d" = "$root" ] && continue
         name=${d##*/}
         case $name in .*) continue ;; esac
@@ -1602,7 +1652,7 @@ scan_apps() {
         esac
         [ -n "$label" ] || continue
         printf '%s\037%s\037%s\n' "$label" "$exposure" "$d" >> "$APP_FILE"
-    done < <(find "$root" -maxdepth "$depth" -type d -not -path '*/.*' 2>/dev/null | LC_ALL=C sort)
+    done < "$WORK/apps-entries"
 }
 
 # ---------------------------------------------------------------------------
@@ -1863,7 +1913,9 @@ report_json() {
     printf '  "cpu": {"arch": %s, "state": %s, "required_features": %s, "counts": %s, "source": %s},\n' \
         "$(jstr "$ARCH_RAW")" "$(jstr "$CPU_STATE")" "$(jstr "$REQ_FEATURES")" "$(jstr "$CPU_COUNTS")" "$(jstr "$CPU_SOURCE")"
 
-    printf '  "coverage": {"root_max_depth": %s, "root_depth_boundaries": %s, "root_scan_errors": %s, "unreadable_process_maps": %s},\n'         "$((10#$ROOT_DEPTH))" "$ROOT_DEPTH_BOUNDARIES" "$ROOT_SCAN_ERRORS" "$LIMITED_PROCS"
+    printf '  "coverage": {"root_max_depth": %s, "root_depth_boundaries": %s, "root_scan_errors": %s, "unreadable_process_maps": %s, "process_limit_reached": %s, "root_entry_limit_reached": %s, "apps_entry_limit_reached": %s, "apps_scan_errors": %s},\n' \
+        "$((10#$ROOT_DEPTH))" "$ROOT_DEPTH_BOUNDARIES" "$ROOT_SCAN_ERRORS" "$LIMITED_PROCS" \
+        "$PROCESS_LIMIT_REACHED" "$ROOT_ENTRY_LIMIT_REACHED" "$APPS_ENTRY_LIMIT_REACHED" "$APPS_SCAN_ERRORS"
 
     printf '  "warnings": ['
     first=1
@@ -2122,7 +2174,7 @@ nginx2root_binary_metadata() {
     local file=$1 marks versions plus flavor=nginx module comma= product= compiled_config=
     local hints=''
     [[ -f "$file" && $(head -c 4 -- "$file" 2>/dev/null) == $'\x7fELF' ]] || return 0
-    marks=$(head -c 16777216 -- "$file" 2>/dev/null |
+    marks=$(head -c "$WEB_BINARY_BYTE_LIMIT" -- "$file" 2>/dev/null |
         LC_ALL=C grep -aiEo 'nginx/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b|nginx-plus(-r[0-9]+([.][0-9]+){0,3}(-p[0-9]+)?)?|(Tengine|openresty)(/[0-9]+([.][0-9]+){1,3}(-rc[0-9]+)?)?|--conf-path=/[a-zA-Z0-9/._-]+|--with-http_v[23]_module|--with-mail(=dynamic)?|ngx_http_v[23]_module|ngx_http_mirror_module|ngx_mail_proxy_module' |
         LC_ALL=C sort -u)
     compiled_config=$(sed -n 's/^--conf-path=//p' <<< "$marks")
@@ -2401,12 +2453,12 @@ nginx_config_stream() {
     fi
     id=$(file_id "$fs_path") || { nginx_config_skip stat_failed "$path"; return; }
     [[ $seen_files != *" $id "* ]] || return 0
-    if [[ $count -ge 64 ]]; then nginx_config_skip file_limit "$path"; return 1; fi
+    if [[ $count -ge $WEB_CONFIG_FILE_LIMIT ]]; then nginx_config_skip file_limit "$path"; return 1; fi
     seen_files+="$id "
     count=$((count + 1))
     size=$(stat -Lc '%s' -- "$fs_path" 2>/dev/null) || { nginx_config_skip stat_failed "$path"; return; }
-    if [[ $size -gt 65536 ]]; then nginx_config_skip file_too_large "$path"; return; fi
-    if ! content=$(head -c 65536 -- "$fs_path" 2>/dev/null); then
+    if [[ $size -gt $WEB_CONFIG_BYTE_LIMIT ]]; then nginx_config_skip file_too_large "$path"; return; fi
+    if ! content=$(head -c "$WEB_CONFIG_BYTE_LIMIT" -- "$fs_path" 2>/dev/null); then
         nginx_config_skip read_failed "$path"
         return
     fi
@@ -2422,7 +2474,7 @@ nginx_config_stream() {
     done < <(nginx_config_directives <<< "$content")
     for target in ${includes[@]+"${includes[@]}"}; do
         if [[ $target != /* ]]; then target=$base/$target; fi
-        if (( depth >= 8 )); then
+        if (( depth >= NGINX_INCLUDE_DEPTH_LIMIT )); then
             nginx_config_skip include_depth_limit "$target"
             continue
         fi
@@ -2546,9 +2598,9 @@ apache_config_hints() {
         for file in "${configs[@]}"; do
             [ -f "$file" ] || continue
             count=$((count + 1))
-            [ "$count" -le 64 ] || { printf '@skipped\n'; break; }
+            [ "$count" -le "$WEB_CONFIG_FILE_LIMIT" ] || { printf '@skipped\n'; break; }
             size=$(stat -Lc '%s' -- "$file" 2>/dev/null) || size=
-            if ! [[ $size =~ ^[0-9]+$ ]] || [ "$size" -gt 65536 ] || ! head -c 65536 -- "$file" 2>/dev/null; then
+            if ! [[ $size =~ ^[0-9]+$ ]] || [ "$size" -gt "$WEB_CONFIG_BYTE_LIMIT" ] || ! head -c "$WEB_CONFIG_BYTE_LIMIT" -- "$file" 2>/dev/null; then
                 printf '\n@skipped\n'; continue
             fi
             printf '\n@file\n'
@@ -2580,7 +2632,7 @@ apache_config_hints() {
 }
 
 apache_mapped_http2() {
-    local file=$1 data limit=1048576
+    local file=$1 data limit=$APACHE_MAPS_BYTE_LIMIT
     [ -r "$file" ] || { printf null; return; }
     if ! data=$(head -c "$((limit + 1))" -- "$file" 2>/dev/null); then printf null; return; fi
     if grep -Eq '/mod_http2\.so( \(deleted\))?$' <<< "$data"; then printf true
@@ -2604,7 +2656,7 @@ linux_inventory_unavailable() {
 apache_module_rpm_version() {
     local path=$1 info name version
     have rpm && have timeout || return 0
-    info=$(timeout 2 rpm -qf --qf '%{NAME}\t%{VERSION}\n' -- "$path" 2>/dev/null) || return 0
+    info=$(timeout "$PACKAGE_QUERY_TIMEOUT" rpm -qf --qf '%{NAME}\t%{VERSION}\n' -- "$path" 2>/dev/null) || return 0
     [[ $info != *$'\n'* ]] || return 0
     IFS=$'\t' read -r name version <<< "$info"
     [[ $name == mod_http2 && $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
@@ -2613,6 +2665,7 @@ apache_module_rpm_version() {
 
 apache_inventory() {
     local format=txt proc name pid path id start row= seen=' ' rows=0 disk=0 comma= version reference mapped config
+    local inspected=0
     local gate=0 modules=0 unknown=0 explicit= proc_limit=false unresolved=0 image_state match package_hint http2_evidence disk_http2=condition_not_observed module_version_source
     local -a configs=()
     while (($#)); do
@@ -2640,10 +2693,12 @@ apache_inventory() {
         disk_http2=disk_hints_present
     fi
     for proc in /proc/[0-9]*; do
+        if (( inspected >= PROCESS_SCAN_LIMIT )); then proc_limit=true; break; fi
+        inspected=$((inspected + 1))
         [ -r "$proc/comm" ] || continue
         IFS= read -r name < "$proc/comm" 2>/dev/null || continue
         case $name in apache2|httpd) ;; *) continue ;; esac
-        ((rows < 24)) || { proc_limit=true; break; }
+        ((rows < WEB_PROCESS_MATCH_LIMIT)) || { proc_limit=true; break; }
         pid=${proc##*/}
         start=$(java_process_start "$pid")
         path=$(readlink "$proc/exe" 2>/dev/null || :)
@@ -2739,7 +2794,7 @@ apache_version() {
     [ -f "$file" ] || return 0
     [[ $(head -c 4 -- "$file" 2>/dev/null) == $'\x7fELF' ]] || return 0
     if [ "$scope" = module ]; then pattern='mod_http2(/| \(v)'; fi
-    marks=$(head -c 16777216 -- "$file" 2>/dev/null |
+    marks=$(head -c "$WEB_BINARY_BYTE_LIMIT" -- "$file" 2>/dev/null |
         LC_ALL=C grep -aEo "$pattern"'[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b' | LC_ALL=C sort -u)
     local version_pattern='([0-9]+\.[0-9]+\.[0-9]+)$'
     if [[ $marks != *$'\n'* && $marks =~ $version_pattern ]]; then
@@ -2832,10 +2887,10 @@ web_package_hint() {
     have timeout || return 0
     [[ $path == /* ]] || return 0
     if have dpkg-query; then
-        owner=$(timeout 2 dpkg-query -S -- "$path" 2>/dev/null | awk -F ': ' -v target="$path" '$2 == target { print $1 }')
+        owner=$(timeout "$PACKAGE_QUERY_TIMEOUT" dpkg-query -S -- "$path" 2>/dev/null | awk -F ': ' -v target="$path" '$2 == target { print $1 }')
         [[ $owner =~ ^[[:alnum:].+:-]+$ ]] || return 0
         manager=dpkg
-        result=$(timeout 2 dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\t${Architecture}\t${db:Status-Status}' -- "$owner" 2>/dev/null) || return 0
+        result=$(timeout "$PACKAGE_QUERY_TIMEOUT" dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\t${Architecture}\t${db:Status-Status}' -- "$owner" 2>/dev/null) || return 0
         [[ $result != *$'\n'* ]] || return 0
         IFS=$'\t' read -r name version source source_version arch status <<< "$result"
         [[ $status == installed ]] || return 0
@@ -2847,7 +2902,7 @@ web_package_hint() {
         fi
     elif have rpm; then
         manager=rpm
-        result=$(timeout 2 rpm -qf --qf '%{NAME} %{VERSION}-%{RELEASE}' -- "$path" 2>/dev/null) || return 0
+        result=$(timeout "$PACKAGE_QUERY_TIMEOUT" rpm -qf --qf '%{NAME} %{VERSION}-%{RELEASE}' -- "$path" 2>/dev/null) || return 0
     else
         return 0
     fi
@@ -2857,6 +2912,7 @@ web_package_hint() {
 
 nginx2root_scan() {
     local format=txt explicit="" installed path proc pid id current raw matched
+    local inspected=0
     local seen=' ' rows=0 comma= gate=0 unknown=0 total=0 config_report sctp_report package_hint
     local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root metadata flavor plus module_hints product_version compiled_config config_entry row_config config_source incomplete=false gate_hit=false
     local index package_count=0 condition_not_observed=0 potential_missing=0 unknown_missing=0 unattributed=0 incomplete_config=0 config_incomplete=false unmapped= unmapped_seen=" "
@@ -2956,10 +3012,12 @@ nginx2root_scan() {
     self_ns=$(readlink /proc/self/ns/mnt 2>/dev/null || :)
     self_root=$(file_id /proc/self/root || :)
     for proc in /proc/[0-9]*; do
+        if (( inspected >= PROCESS_SCAN_LIMIT )); then proc_limit=true; break; fi
+        inspected=$((inspected + 1))
         [ -r "$proc/comm" ] || continue
         IFS= read -r current < "$proc/comm" 2>/dev/null || continue
         case $current in nginx|openresty|tengine) ;; *) continue ;; esac
-        ((rows < 24)) || { proc_limit=true; break; }
+        ((rows < WEB_PROCESS_MATCH_LIMIT)) || { proc_limit=true; break; }
         pid=${proc##*/}
         start=$(java_process_start "$pid")
         path=$(readlink "$proc/exe" 2>/dev/null || :)
@@ -3053,7 +3111,7 @@ java4shell_main() {
     APP_FILE="$WORK/apps.tsv"
     ACTIVE_FILE="$WORK/active-ids"
     ROOT_COVERAGE_FILE="$WORK/root-coverage"
-    : > "$ROOT_COVERAGE_FILE"
+    : > "$ROOT_COVERAGE_FILE"; : > "$WORK/apps-coverage"
     : > "$FIND_FILE"; : > "$WARN_FILE"; : > "$APP_FILE"; : > "$ACTIVE_FILE"
     trap 'cleanup' EXIT
     trap 'exit 130' INT
@@ -3149,6 +3207,20 @@ java4shell_main() {
 
     ROOT_DEPTH_BOUNDARIES=$(grep -cx boundary "$ROOT_COVERAGE_FILE")
     ROOT_SCAN_ERRORS=$(grep -cx error "$ROOT_COVERAGE_FILE")
+    APPS_SCAN_ERRORS=$(grep -cx error "$WORK/apps-coverage")
+    if grep -qx entry_limit "$ROOT_COVERAGE_FILE"; then
+        ROOT_ENTRY_LIMIT_REACHED=true
+        warn "JDK 目录搜索达到 $DIRECTORY_ENTRY_LIMIT 个条目的上限。"
+    fi
+    if grep -qx entry_limit "$WORK/apps-coverage"; then
+        APPS_ENTRY_LIMIT_REACHED=true
+        warn "应用目录搜索达到 $DIRECTORY_ENTRY_LIMIT 个条目的上限。"
+    fi
+    if [ "$APPS_SCAN_ERRORS" -gt 0 ]; then warn "应用目录搜索失败，覆盖不完整。"; fi
+    if [ "$ROOT_SCAN_ERRORS" -gt 0 ]; then warn "JDK 目录搜索失败，覆盖不完整。"; fi
+    if [ "$PROCESS_LIMIT_REACHED" = true ]; then
+        warn "进程检查达到 $PROCESS_SCAN_LIMIT 个条目的上限。"
+    fi
     if [ "$ROOT_DEPTH_BOUNDARIES" -gt 0 ]; then
         warn "有 $ROOT_DEPTH_BOUNDARIES 个目录达到 --root-depth $ROOT_DEPTH，更深的目录未检查。"
     fi
@@ -3159,6 +3231,12 @@ java4shell_main() {
 
     if [ "$(total_count)" -eq 0 ] && [ "$(apps_count)" -eq 0 ]; then
         warn "在本次检查范围内没有找到可评估的 Java 资产。"
+    fi
+
+    if [[ $FORMAT == csv ]] &&
+       [[ $PROCESS_LIMIT_REACHED == true || $ROOT_ENTRY_LIMIT_REACHED == true || $APPS_ENTRY_LIMIT_REACHED == true ]]; then
+        printf '覆盖不完整：进程上限=%s，JDK 目录条目上限=%s，应用目录条目上限=%s。\n' \
+            "$PROCESS_LIMIT_REACHED" "$ROOT_ENTRY_LIMIT_REACHED" "$APPS_ENTRY_LIMIT_REACHED" >&2
     fi
 
     # --- 输出 ---
@@ -3190,7 +3268,9 @@ java4shell_main() {
     IFS=$oldifs
     if [ "$rc" -eq 0 ] && { [ "$(status_count unknown)" -gt 0 ] ||
                            [ "$(total_count)" -eq 0 ] || [ "$LIMITED_PROCS" -gt 0 ] ||
-                           [ "$ROOT_DEPTH_BOUNDARIES" -gt 0 ] || [ "$ROOT_SCAN_ERRORS" -gt 0 ]; }; then
+                           [ "$ROOT_DEPTH_BOUNDARIES" -gt 0 ] || [ "$ROOT_SCAN_ERRORS" -gt 0 ] ||
+                           [ "$APPS_SCAN_ERRORS" -gt 0 ] || [ "$PROCESS_LIMIT_REACHED" = true ] ||
+                           [ "$ROOT_ENTRY_LIMIT_REACHED" = true ] || [ "$APPS_ENTRY_LIMIT_REACHED" = true ]; }; then
         rc=3
     fi
     exit "$rc"
