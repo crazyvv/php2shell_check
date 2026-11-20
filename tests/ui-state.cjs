@@ -129,6 +129,13 @@ test('NGINX screening displays connection evidence and handles older reports',()
   assert.match(render(),/本次响应协议 HTTP\/2.*需优先核验/);
   context.nginxFixture.http2_screening={cve:'CVE-2026-123007',status:'insufficient_evidence',reason:'intermediary_response'};
   assert.match(render(),/证据不足，响应可能来自代理、CDN 或防护层/);
+  context.nginxFixture.installations=[{
+    package_evidence:{
+      version:'1.26.3-3+deb13u11',
+      backport:{status:'package_version_reference',provider:'debian',covered_cves:['CVE-2026-123007']}
+    }
+  }];
+  assert.match(render(),/Debian 官方 回补版本记录 · CVE-2026-123007 · 运行二进制待核验/);
 });
 
 test('administrator rule drafts validate, save, preserve conflicts and clear on logout',async()=>{

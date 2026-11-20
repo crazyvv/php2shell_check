@@ -956,6 +956,63 @@ pub(crate) fn collect(
     }
 }
 
+fn package_backport(package: &Value) -> Option<Value> {
+    if package["manager"] != "dpkg"
+        || package["distribution"] != "debian"
+        || package["source_package"] != "nginx"
+    {
+        return None;
+    }
+    let name = package["name"].as_str()?.split(':').next()?;
+    if !matches!(
+        name,
+        "nginx" | "nginx-core" | "nginx-full" | "nginx-light" | "nginx-extras"
+    ) {
+        return None;
+    }
+    let version = package["version"].as_str()?;
+    if package["source_version"] != version {
+        return None;
+    }
+    let mut cves = vec!["CVE-2026-113425", "CVE-2026-123634"];
+    let (provider, reference, last_debian_release) =
+        match (package["distribution_version"].as_str()?, version) {
+            ("13", "1.26.3-3+deb13u11") => (
+                "debian",
+                "https://www.debian.org/security/2026/dsa-6642",
+                true,
+            ),
+            ("8", "1.6.2-5+deb8u10.1~hp3")
+            | ("9", "1.10.3-1+deb9u10.1~hp3")
+            | ("10", "1.14.2-2+deb10u9.1~hp3")
+            | ("11", "1.18.0-6.1+deb11u9.1~hp3")
+            | ("12", "1.22.1-9+deb12u10.1~hp3")
+            | ("13", "1.26.3-3+deb13u10.1~hp3")
+                if package["architecture"] == "amd64" =>
+            {
+                (
+                    "hosted_power",
+                    "https://github.com/HOSTED-POWER/nginx2root-patches/releases/tag/v1.3.2",
+                    package["distribution_version"] == "13",
+                )
+            }
+            _ => return None,
+        };
+    if package["distribution_version"] != "8" {
+        cves.extend(["CVE-2026-123007", "CVE-2026-123633"]);
+    }
+    if last_debian_release {
+        cves.push("CVE-2026-121810");
+    }
+    Some(json!({
+        "status":"package_version_reference",
+        "provider":provider,
+        "reference":reference,
+        "covered_cves":cves,
+        "binary_verified":false
+    }))
+}
+
 pub(crate) async fn add_package_evidence(report: &mut Value) {
     use std::collections::BTreeMap;
     let mut cache = BTreeMap::<String, Value>::new();
@@ -986,6 +1043,9 @@ pub(crate) async fn add_package_evidence(report: &mut Value) {
             }
             row["package_evidence"] = cache[&path].clone();
             row["package_evidence"]["patch_status"] = json!("unverified");
+            if let Some(backport) = package_backport(&row["package_evidence"]) {
+                row["package_evidence"]["backport"] = backport;
+            }
         }
     }
 }
@@ -1041,8 +1101,16 @@ pub(crate) fn sanitize_host(raw: &Value) -> Value {
                 "manager":item["package_evidence"]["manager"].as_str().filter(|v| matches!(*v,"dpkg"|"rpm")),
                 "name":item["package_evidence"]["name"].as_str().map(|v|v.chars().take(100).collect::<String>()),
                 "version":item["package_evidence"]["version"].as_str().map(|v|v.chars().take(150).collect::<String>()),
+                "distribution":item["package_evidence"]["distribution"].as_str().filter(|v| *v == "debian"),
+                "distribution_version":item["package_evidence"]["distribution_version"].as_str().filter(|v| matches!(*v, "8"|"9"|"10"|"11"|"12"|"13")),
+                "source_package":item["package_evidence"]["source_package"].as_str().filter(|v| *v == "nginx"),
+                "source_version":item["package_evidence"]["source_version"].as_str().map(|v|v.chars().take(150).collect::<String>()),
+                "architecture":item["package_evidence"]["architecture"].as_str().map(|v|v.chars().take(30).collect::<String>()),
                 "patch_status":"unverified"
             });
+            if let Some(backport) = package_backport(&row["package_evidence"]) {
+                row["package_evidence"]["backport"] = backport;
+            }
             row
         }).collect()
     };
@@ -1057,6 +1125,34 @@ pub(crate) fn sanitize_host(raw: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backport_requires_an_exact_package_and_lists_only_covered_cves() {
+        let mut package = json!({
+            "manager":"dpkg","distribution":"debian","distribution_version":"12",
+            "name":"nginx-core:amd64","version":"1.22.1-9+deb12u10.1~hp3",
+            "source_package":"nginx","source_version":"1.22.1-9+deb12u10.1~hp3",
+            "architecture":"amd64"
+        });
+        let evidence = package_backport(&package).unwrap();
+        assert_eq!(evidence["provider"], "hosted_power");
+        assert_eq!(evidence["binary_verified"], false);
+        assert_eq!(evidence["covered_cves"].as_array().unwrap().len(), 4);
+        package["architecture"] = json!("arm64");
+        assert!(package_backport(&package).is_none());
+
+        package["distribution_version"] = json!("13");
+        package["name"] = json!("nginx");
+        package["version"] = json!("1.26.3-3+deb13u11");
+        assert!(package_backport(&package).is_none());
+        package["source_version"] = package["version"].clone();
+        let evidence = package_backport(&package).unwrap();
+        assert_eq!(evidence["provider"], "debian");
+        assert_eq!(evidence["covered_cves"].as_array().unwrap().len(), 5);
+        package["distribution"] = json!("ubuntu");
+        assert!(package_backport(&package).is_none());
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn config_directives_are_hints_and_ignore_commented_listeners() {

@@ -2803,17 +2803,48 @@ web_coverage_incomplete() {
     [[ $limit == true || $unresolved -gt 0 || $config =~ \"skipped\":[1-9] ]]
 }
 
+nginx_package_backport() {
+    local distribution=$1 release=$2 name=${3%%:*} version=$4 source=$5 source_version=$6 arch=$7
+    local provider reference cves
+    [[ $distribution == debian && $source == nginx && $source_version == "$version" ]] || return 0
+    case $name in nginx|nginx-core|nginx-full|nginx-light|nginx-extras) ;; *) return 0 ;; esac
+    case $release:$version in
+        13:1.26.3-3+deb13u11)
+            provider=debian
+            reference=https://www.debian.org/security/2026/dsa-6642 ;;
+        8:1.6.2-5+deb8u10.1~hp3|9:1.10.3-1+deb9u10.1~hp3|10:1.14.2-2+deb10u9.1~hp3|\
+        11:1.18.0-6.1+deb11u9.1~hp3|12:1.22.1-9+deb12u10.1~hp3|13:1.26.3-3+deb13u10.1~hp3)
+            [[ $arch == amd64 ]] || return 0
+            provider=hosted_power
+            reference=https://github.com/HOSTED-POWER/nginx2root-patches/releases/tag/v1.3.2 ;;
+        *) return 0 ;;
+    esac
+    cves='"CVE-2026-113425","CVE-2026-123634"'
+    if [[ $release != 8 ]]; then cves+=',"CVE-2026-123007","CVE-2026-123633"'; fi
+    if [[ $release == 13 ]]; then cves+=',"CVE-2026-121810"'; fi
+    printf ',"backport":{"status":"package_version_reference","provider":"%s","reference":"%s","covered_cves":[%s],"binary_verified":false}' \
+        "$provider" "$reference" "$cves"
+}
+
 web_package_hint() {
-    local path=$1 owner manager result
+    local path=$1 scope=${2:-} owner manager result name version source source_version arch status
+    local distribution= release= backport=
     have timeout || return 0
     [[ $path == /* ]] || return 0
     if have dpkg-query; then
         owner=$(timeout 2 dpkg-query -S -- "$path" 2>/dev/null | awk -F ': ' -v target="$path" '$2 == target { print $1 }')
         [[ $owner =~ ^[[:alnum:].+:-]+$ ]] || return 0
         manager=dpkg
-        result=$(timeout 2 dpkg-query -W -f='${binary:Package} ${Version} ${db:Status-Status}' -- "$owner" 2>/dev/null) || return 0
-        [[ $result == *" installed" ]] || return 0
-        result=${result% installed}
+        result=$(timeout 2 dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\t${Architecture}\t${db:Status-Status}' -- "$owner" 2>/dev/null) || return 0
+        [[ $result != *$'\n'* ]] || return 0
+        IFS=$'\t' read -r name version source source_version arch status <<< "$result"
+        [[ $status == installed ]] || return 0
+        result="$name $version"
+        if [[ $scope == nginx && -r /etc/os-release ]]; then
+            distribution=$(release_get /etc/os-release ID)
+            release=$(release_get /etc/os-release VERSION_ID)
+            backport=$(nginx_package_backport "$distribution" "$release" "$name" "$version" "$source" "$source_version" "$arch")
+        fi
     elif have rpm; then
         manager=rpm
         result=$(timeout 2 rpm -qf --qf '%{NAME} %{VERSION}-%{RELEASE}' -- "$path" 2>/dev/null) || return 0
@@ -2821,7 +2852,7 @@ web_package_hint() {
         return 0
     fi
     [ -n "$result" ] || return 0
-    printf '{"manager":%s,"installed_package":%s,"patch_status":"unverified"}' "$(jstr "$manager")" "$(jstr "$(san_field "$result")")"
+    printf '{"manager":%s,"installed_package":%s,"patch_status":"unverified"%s}' "$(jstr "$manager")" "$(jstr "$(san_field "$result")")" "$backport"
 }
 
 nginx2root_scan() {
@@ -2964,7 +2995,7 @@ nginx2root_scan() {
             done
             if [ "$index" -eq "$package_count" ]; then
                 package_ids[index]=$id
-                package_values[index]=$(web_package_hint "$path")
+                package_values[index]=$(web_package_hint "$path" nginx)
                 package_count=$((package_count + 1))
             fi
             package_hint=${package_values[index]:-null}
@@ -2981,7 +3012,7 @@ nginx2root_scan() {
         metadata=$(nginx2root_binary_metadata "$path" with_config)
         IFS='|' read -r raw flavor plus module_hints product_version compiled_config <<< "$metadata"
         seen+="$id "
-        package_hint=$(web_package_hint "$path")
+        package_hint=$(web_package_hint "$path" nginx)
         config_entry= row_config= config_source=
         if [ -n "${config_paths[0]:-}" ]; then
             row_config=$config_report

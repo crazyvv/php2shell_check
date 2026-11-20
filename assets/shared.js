@@ -111,7 +111,14 @@ function nginx2rootView(n) {
     const release = row.plus_release || row.product_version || row.version || '版本未知';
     const core = row.embedded_nginx_version && row.embedded_nginx_version !== release ? ' · 内嵌 NGINX '+row.embedded_nginx_version : '';
     box.append(node('p',`${row.pid ? 'PID '+row.pid+' · ' : ''}${product} ${release}${core}${row.path ? ' · '+row.path : ''}`,'fine'));
-    if(row.package_evidence?.version)box.append(node('p',`软件包 ${row.package_evidence.name || ''} ${row.package_evidence.version} · 回补待核验`,'fine'));
+    if(row.package_evidence?.version)box.append(node('p',`软件包 ${row.package_evidence.name || ''} ${row.package_evidence.version}`,'fine'));
+    const backport=row.package_evidence?.backport;
+    if(backport?.status==='package_version_reference' && Array.isArray(backport.covered_cves)){
+      const provider=backport.provider==='debian'?'Debian 官方':'Hosted Power';
+      box.append(node('p',`${provider} 回补版本记录 · ${backport.covered_cves.join('、')} · 运行二进制待核验`,'fine'));
+    }else if(row.package_evidence?.version){
+      box.append(node('p','回补待核验','fine'));
+    }
     if(row.configuration_entry)box.append(node('p',(row.configuration_entry_source!=='process_argument'?'安装布局配置入口 · ':'进程配置入口 · ')+row.configuration_entry,'fine'));
     for(const item of (row.configuration?.evidence || []).slice(0,8)){
       box.append(node('p',`${item.hint} · ${item.file}:${item.line}`,'fine'));

@@ -54,6 +54,10 @@
     </table></div>
     <h3>升级到修复版本</h3>
     <p>NGINX OSS 受影响实例应升级到稳定分支 <strong>1.30.7</strong>、主线分支 <strong>1.31.9</strong>，或相应分支的后续安全版本。NGINX Plus 应升级到覆盖五项 CVE 的 <strong>37.0.8.1 LTS</strong>、<strong>37.3.0.1 CR</strong>，或 F5 确认包含修复的后续版本。发行版及其他衍生版本按厂商公告确认修复包。现场应按正在运行的 NGINX 映像和软件包完整修订号核对回补，并把磁盘配置关联到实际加载的站点或监听。SCTP 属于独立的内核核验项，可见性或禁载线索无法确认内核已修复。</p>
+    <h3>发行版回补与第三方热修</h3>
+    <p>发行版可以在保留 NGINX 上游版本号的情况下回补修复。优先升级到发行版公告指定的安全软件包。Debian 13 的 <code>1.26.3-3+deb13u11</code> 由 DSA-6642-1 公告确认覆盖本页五项 NGINX CVE。<a href="https://www.debian.org/security/2026/dsa-6642">Debian DSA-6642-1</a></p>
+    <p>Hosted Power 提供独立的 Debian 和 Enterprise Linux 回补包。例如 Debian 12 的 <code>1.22.1-9+deb12u10.1~hp3</code> 虽仍显示 NGINX 1.22.1，发布记录列出了本页的 HTTP/2、解析器和邮件代理修复。选择第三方包前核对发行版、架构、包签名和适用 CVE。<a href="https://github.com/HOSTED-POWER/nginx2root-patches">Hosted Power 回补记录</a></p>
+    <p>主机报告的回补版本记录按完整包版本列出公告覆盖的 CVE。升级后复核运行中进程的映像、软件包归属和旧 worker 退出情况。包版本记录与运行二进制验证分别报告。</p>
     <h3>临时缓解</h3>
     <ul>
       <li><strong>HTTP/2（CVE-2026-123007、CVE-2026-123633）</strong>在受影响的 NGINX 监听上停用 HTTP/2。按版本使用 <code>http2 off;</code> 或移除 <code>listen</code> 的 <code>http2</code> 参数。调整前核对 gRPC 等依赖。</li>

@@ -44,6 +44,15 @@ done
 assert_build unknown 1.8.0_442-b06 'Unknown vendor' '' HotSpot
 assert_build outside_scope 8u441 OpenJDK OpenJDK HotSpot
 assert_build unknown 8u511 'Oracle Corporation' 'Oracle Java SE' HotSpot
+deb12_hotfix=1.22.1-9+deb12u10.1~hp3
+backport=$(nginx_package_backport debian 12 nginx-core:amd64 "$deb12_hotfix" nginx "$deb12_hotfix" amd64)
+[[ $backport == *'"provider":"hosted_power"'* && $backport == *'"binary_verified":false'* ]]
+[[ $backport == *'CVE-2026-123007'* && $backport != *'CVE-2026-121810'* ]]
+[[ -z $(nginx_package_backport debian 12 nginx "$deb12_hotfix" nginx "$deb12_hotfix" arm64) ]]
+[[ -z $(nginx_package_backport debian 12 nginx "$deb12_hotfix" nginx 1.22.1-9+deb12u10 amd64) ]]
+deb13_fixed=1.26.3-3+deb13u11
+backport=$(nginx_package_backport debian 13 nginx "$deb13_fixed" nginx "$deb13_fixed" arm64)
+[[ $backport == *'"provider":"debian"'* && $backport == *'CVE-2026-121810'* ]]
 [[ $(nginx2root_reference 1.32.0) == *'"status":"meets_upstream_reference"'* ]]
 [[ $(nginx2root_reference 2.0.0) == *'"status":"unknown"'* ]]
 assert_build unfixed 8u511b33-perf 'Oracle Corporation' 'Oracle Java SE' HotSpot

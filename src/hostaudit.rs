@@ -285,7 +285,10 @@ async fn native_compare(tools: &Tools, manager: &str, version: &str, fixed: &str
 }
 pub(crate) async fn nginx_package_metadata(path: &str) -> Value {
     let os = os_release(&read(Path::new("/etc/os-release")).unwrap_or_default());
-    package_for(&Tools::discover(), path, &os, &[]).await
+    let mut package = package_for(&Tools::discover(), path, &os, &[]).await;
+    package["distribution"] = json!(os.get("ID"));
+    package["distribution_version"] = json!(os.get("VERSION_ID"));
+    package
 }
 
 async fn package_for(
@@ -315,13 +318,13 @@ async fn package_for(
                 return pkg;
             }
             let name = *names.first().unwrap();
-            let found = run(exe,&["-W","-f=${binary:Package}\\t${Version}\\t${source:Package}\\t${source:Version}\\t${db:Status-Status}\\n",name]).await;
+            let found = run(exe,&["-W","-f=${binary:Package}\\t${Version}\\t${source:Package}\\t${source:Version}\\t${db:Status-Status}\\t${Architecture}\\n",name]).await;
             let text = found["output"].as_str().unwrap_or("");
             let f: Vec<_> = text.trim_end().split('\t').collect();
-            if found["exit_code"] != 0 || f.len() != 5 || f[4] != "installed" {
+            if found["exit_code"] != 0 || f.len() != 6 || f[4] != "installed" {
                 return pkg;
             }
-            pkg = json!({"status":"observed","path":path,"manager":"dpkg","name":f[0],"version":f[1],"source_package":f[2],"source_version":f[3],"origin_status":"unknown"});
+            pkg = json!({"status":"observed","path":path,"manager":"dpkg","name":f[0],"version":f[1],"source_package":f[2],"source_version":f[3],"architecture":f[5],"origin_status":"unknown"});
             if let Some(apt) = &tools.policy {
                 let policy = run(apt, &["policy", name]).await;
                 if policy["exit_code"] == 0
@@ -606,7 +609,7 @@ mod tests {
             "query",
             r#"case "$1" in
 -S) printf 'php8.3-fpm: %s\n' "$2";;
--W) printf 'php8.3-fpm\t8.3.6-0ubuntu0.24.04.13\tphp8.3\t8.3.6-0ubuntu0.24.04.13\tinstalled\n';;
+-W) printf 'php8.3-fpm\t8.3.6-0ubuntu0.24.04.13\tphp8.3\t8.3.6-0ubuntu0.24.04.13\tinstalled\tamd64\n';;
 esac"#,
         );
         let policy = script(
