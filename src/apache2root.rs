@@ -39,7 +39,7 @@ fn evidence(status: &str) -> Value {
         "sources":[ADVISORY,PROTOCOLS]})
 }
 
-pub(crate) fn remote(headers: &[(String, String)], blocked: bool) -> Value {
+pub(crate) fn remote(headers: &[(String, String)], blocked: bool, protocol: Option<&str>) -> Value {
     let servers: Vec<_> = headers
         .iter()
         .filter(|(key, _)| key.eq_ignore_ascii_case("server"))
@@ -75,7 +75,19 @@ pub(crate) fn remote(headers: &[(String, String)], blocked: bool) -> Value {
         "apache_hint"
     });
     out["version"] = json!(raw);
-    out["version_status"] = json!(version_status(raw, false));
+    let version_status = version_status(raw, false);
+    out["version_status"] = json!(version_status);
+    if !apache.is_empty() {
+        out["response_protocol"] = json!(protocol);
+        out["http2_negotiated"] = json!(protocol.map(|value| value == "h2"));
+        out["http2_screening"] = crate::scanner::http2_screening(
+            "CVE-2026-119618",
+            Some(version_status),
+            protocol,
+            headers,
+            blocked,
+        );
+    }
     out["http2_advertised"] = json!(advertised);
     out["source"] = json!("passive_response_headers");
     out
@@ -387,7 +399,7 @@ mod tests {
             ("Server".into(), "Apache/2.4.70".into()),
             ("Upgrade".into(), "h2c".into()),
         ];
-        assert_eq!(remote(&headers, false)["http2_advertised"], true);
-        assert!(remote(&headers, true)["version"].is_null());
+        assert_eq!(remote(&headers, false, None)["http2_advertised"], true);
+        assert!(remote(&headers, true, None)["version"].is_null());
     }
 }

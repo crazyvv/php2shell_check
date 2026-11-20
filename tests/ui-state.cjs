@@ -114,6 +114,23 @@ test('Java4Shell web and host evidence preserve missing-proof boundaries',async(
   assert(text.includes('发现候选'));assert(text.includes('不确认外部输入'));assert(text.includes('环境与参数文件未读取'));
 });
 
+test('NGINX screening displays connection evidence and handles older reports',()=>{
+  const {context}=setup();
+  const flat=e=>[e,...(e.children||[]).flatMap(flat)];
+  context.nginxFixture={
+    status:'nginx_hint',flavor:'nginx',version:'1.31.8',
+    cves:[{cve:'CVE-2026-123007',status:'potential'}]
+  };
+  const render=()=>flat(vm.runInContext('nginx2rootView(nginxFixture)',context)).map(n=>n.textContent).join(' ');
+  assert.match(render(),/NGINX 1\.31\.8/);
+  assert.doesNotMatch(render(),/本次响应协议/);
+  context.nginxFixture.response_protocol='h2';
+  context.nginxFixture.http2_screening={cve:'CVE-2026-123007',status:'potential',reason:'affected_version_and_http2'};
+  assert.match(render(),/本次响应协议 HTTP\/2.*需优先核验/);
+  context.nginxFixture.http2_screening={cve:'CVE-2026-123007',status:'insufficient_evidence',reason:'intermediary_response'};
+  assert.match(render(),/证据不足，响应可能来自代理、CDN 或防护层/);
+});
+
 test('administrator rule drafts validate, save, preserve conflicts and clear on logout',async()=>{
   const elements=new Map(),calls=[];let revision=0;
   const definition={schema:'php-selfcheck-fingerprints/v1',version:'test-1',mode:'replace',rules:[{id:'example',name:'Example',category:'framework',any:[{source:'header',header:'x-app',pattern:'yes'}]}]};
