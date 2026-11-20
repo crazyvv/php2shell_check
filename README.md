@@ -384,6 +384,8 @@ Rust 的 `--middleware` 同时包含 Nginx2Root 和 Apache 等中间件盘点。
 
 Rust `--java-command` 保留 CLI 默认值采集，并增加当前节点的 CPUID、`/proc/cpuinfo` 交叉核对、JVM 映射身份及磁盘构建证据。`--java-attach` 显式读取同用户 JVM 的生效参数和自报构建，必要时会启动 HotSpot 诊断监听器。运行构建与磁盘构建有冲突时保留未知。
 
+本项目的 Nginx2Root 检查用于防御性巡检。网页扫描依据常规 HTTP 响应中的版本与协议线索，主机巡检读取运行映像、软件包和配置证据。项目不包含或运行漏洞利用 PoC，也不发送漏洞触发载荷。文档中的 `offline-poc` 使用合成报告验证裁决规则。CVE-2026-123007 的影响范围、修复版本和升级依据见 [NGINX 官方安全公告](https://nginx.org/en/security_advisories.html)。
+
 Nginx2Root 检查项参考了研究披露、官方公告和两个只读检查器。版本边界以 NGINX 官方公告为准。[Xint 研究](https://xint.io/blog/nginx2root-remote-code-execution) · [The DevOps Daily 检查器](https://github.com/The-DevOps-Daily/nginx2root-check) · [TimTheBeastNL 检查器](https://github.com/TimTheBeastNL/nginx2root)
 
 ### Rust 三专项批量采集
