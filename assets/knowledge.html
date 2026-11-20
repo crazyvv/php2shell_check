@@ -110,6 +110,7 @@
     <h2>Java / JVM</h2>
     <h3 id="cve-2026-114938">CVE-2026-114938 · HotSpot Base64 解码越界写</h3>
     <p>HotSpot 在 x86-64 上用于加速 Base64 解码的 AVX-512 intrinsic 存在边界检查缺陷，可造成堆缓冲区越界写。Oracle 记录的 CVSS 3.1 评分为 8.1。网络暴露还取决于应用是否把外部数据交给相关解码路径。Jenkins、Keycloak 等网页指纹只能提示可能使用 Java。</p>
+    <p><strong>以运行时为准。</strong> Java4Shell 影响实际执行应用的 HotSpot JVM。构建应用时使用的 JDK 版本无法说明生产实例的风险。应用自带的 JRE、容器镜像里的 JVM，以及升级后仍在运行的旧进程都应分别核验。</p>
     <h3>主机判据</h3>
     <ul>
       <li><strong>运行构建</strong>将业务进程实际映射的 JVM 库与对应运行时关联，再核对完整构建号、发行商和 VM 类型。PATH 的 Java 版本可能属于另一套安装。OpenJ9 不使用这条 HotSpot intrinsic。</li>

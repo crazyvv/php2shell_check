@@ -105,6 +105,10 @@ bash x2shell-check.sh --nginx2root --nginx-path /opt/nginx/sbin/nginx --nginx-co
 bash x2shell-check.sh --apache2root --apache-path /opt/httpd/bin/httpd --apache-config /opt/httpd/conf/httpd.conf</code></pre>
       <p class="fine">将示例路径换成目标主机上的实际路径。达到递归深度上限时，Java 报告会记录覆盖缺口。</p>
     </details>
+    <details class="scan-options"><summary>按目录名盘点 Java 应用</summary>
+      <pre class="command-line"><code>bash x2shell-check.sh --java4shell --apps /opt/apps --json</code></pre>
+      <p class="fine"><code>--apps</code> 依据目录名提供待核验线索。JSON 中的 <code>evidence: "directory_name"</code> 表示该记录没有核验应用身份、是否运行或漏洞暴露状态。运行风险以服务实际使用的 JVM 为准。</p>
+    </details>
     <details class="scan-options"><summary>读取运行中 JVM 的生效参数</summary>
       <pre class="command-line"><code>bash x2shell-check.sh --all --jcmd</code></pre>
       <p class="fine">诊断附加需要已有 <code>jcmd</code>，仅尝试同用户 JVM，可能启动诊断监听器或短暂停顿 JVM。</p>

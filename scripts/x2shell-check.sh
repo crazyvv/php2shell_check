@@ -101,10 +101,6 @@ ROOT_SCAN_ERRORS=0
 # 必需的 CPU 特性（x86-64）
 REQ_FEATURES="avx512f avx512bw avx512vbmi bmi2"
 
-# 应用清点：Calif 演示过的产品
-PREAUTH_APPS="keycloak jira confluence artifactory jenkins pingfederate"
-AUTH_APPS="kafka solr elasticsearch gerrit spinnaker"
-
 # ---------------------------------------------------------------------------
 # 帮助
 # ---------------------------------------------------------------------------
@@ -135,7 +131,7 @@ Java4Shell / Nginx2Root / Apache2Root 主机暴露面检测（$PROG v$SCRIPT_VER
   --no-processes        跳过进程检查，只盘点安装目录
   --java-path PATH      执行指定 Java 启动器的版本检查（需 timeout 或 gtimeout）
   --cpuinfo PATH        读取指定的普通文件（上限 $CPUINFO_BYTE_LIMIT 字节）
-  --apps DIR            额外清点该目录下已知受影响的 Java 应用（默认深度 3）
+  --apps DIR            按目录名盘点可能的 Java 应用（默认深度 3）
   --apps-depth N        配合 --apps，指定递归深度（默认 3）
                         每专项最多检查 $PROCESS_SCAN_LIMIT 条进程记录；
                         --root 合计与 --apps 各最多遍历 $DIRECTORY_ENTRY_LIMIT 个条目。
@@ -1631,10 +1627,10 @@ scan_java_binary() {
 }
 
 # ---------------------------------------------------------------------------
-# 采集：已知受影响应用目录
+# 采集：按目录名盘点可能的应用
 # ---------------------------------------------------------------------------
 scan_apps() {
-    local root=$1 depth=$2 d name token label exposure
+    local root=$1 depth=$2 d name token label
     [ -d "$root" ] || die "--apps 路径不是目录: $root"
     root=$(real_path "$root")
 
@@ -1648,22 +1644,21 @@ scan_apps() {
         case $name in .*) continue ;; esac
         token=$(printf '%s' "$name" | sed 's/[-_]//g' | tr '[:upper:]' '[:lower:]')
         label=""
-        exposure=""
         case $token in
-            *keycloak*)     label="Keycloak";     exposure="默认配置下无需认证即可触发 RCE" ;;
-            *jira*)         label="Atlassian Jira"; exposure="默认配置下无需认证即可触发 RCE" ;;
-            *confluence*)   label="Atlassian Confluence"; exposure="默认配置下无需认证即可触发 RCE" ;;
-            *artifactory*)  label="JFrog Artifactory"; exposure="默认配置下无需认证即可触发 RCE" ;;
-            *jenkins*)      label="Jenkins";      exposure="默认配置下无需认证即可触发 RCE" ;;
-            *pingfederate*) label="PingFederate"; exposure="默认配置下无需认证即可触发 RCE" ;;
-            *kafka*)        label="Apache Kafka Broker"; exposure="认证后可触发 RCE" ;;
-            *solr*)         label="Apache Solr";  exposure="认证后可触发 RCE" ;;
-            *elasticsearch*) label="Elasticsearch"; exposure="认证后可触发 RCE" ;;
-            *gerrit*)       label="Gerrit";       exposure="认证后可触发 RCE" ;;
-            *spinnaker*)    label="Spinnaker";    exposure="认证后可触发 RCE" ;;
+            *keycloak*)     label="Keycloak" ;;
+            *jira*)         label="Atlassian Jira" ;;
+            *confluence*)   label="Atlassian Confluence" ;;
+            *artifactory*)  label="JFrog Artifactory" ;;
+            *jenkins*)      label="Jenkins" ;;
+            *pingfederate*) label="PingFederate" ;;
+            *kafka*)        label="Apache Kafka Broker" ;;
+            *solr*)         label="Apache Solr" ;;
+            *elasticsearch*) label="Elasticsearch" ;;
+            *gerrit*)       label="Gerrit" ;;
+            *spinnaker*)    label="Spinnaker" ;;
         esac
         [ -n "$label" ] || continue
-        printf '%s\037%s\037%s\n' "$label" "$exposure" "$d" >> "$APP_FILE"
+        printf '%s\037%s\037%s\n' "$label" '目录名匹配，应用身份和漏洞暴露待核验' "$(san_field "$d")" >> "$APP_FILE"
     done < "$WORK/apps-entries"
 }
 
@@ -1822,7 +1817,7 @@ report_txt() {
         local napps
         napps=$(apps_count)
         if [ "$napps" -gt 0 ]; then
-            printf '  已发现 %s 个已知受影响应用的安装目录（--details 查看）\n' "$napps"
+            printf '  已发现 %s 条待核验的应用目录线索（--details 查看）\n' "$napps"
         fi
         local nwarn
         nwarn=$(wc -l < "$WARN_FILE" 2>/dev/null | tr -d ' ')
@@ -1850,15 +1845,15 @@ report_txt() {
 
     local napps nwarn
     napps=$(apps_count)
-    printf '\n=== 已知受影响应用清点\n'
+    printf '\n=== 应用目录线索\n'
     if [ "${napps:-0}" -eq 0 ]; then
-        printf '  未发现已知受影响应用的安装目录%s。\n' "${APPS_DIR:+（扫描 $APPS_DIR）}"
-        printf '  注意：目录存在本身不等于可利用，仍需核查该应用实际使用的 JVM。\n'
+        printf '  未发现匹配的应用目录名%s。\n' "${APPS_DIR:+（扫描 $APPS_DIR）}"
+        printf '  请按实际服务和运行 JVM 复核目录线索。\n'
     else
         while IFS=$'\037' read -r id kind path; do
             printf '  - %s（%s）— %s\n' "$id" "$kind" "$path"
         done < "$APP_FILE"
-        printf '  注意：目录存在本身不等于可利用，仍需核查该应用实际使用的 JVM。\n'
+        printf '  请按实际服务和运行 JVM 复核目录线索。\n'
     fi
 
     nwarn=$(wc -l < "$WARN_FILE" 2>/dev/null | tr -d ' ')
@@ -1975,7 +1970,7 @@ report_json() {
         [ -n "$id" ] || continue
         [ "$first" -eq 1 ] || printf ',\n'
         first=0
-        printf '    {"name": %s, "exposure": %s, "path": %s}' "$(jstr "$id")" "$(jstr "$kind")" "$(jstr "$path")"
+        printf '    {"name": %s, "exposure": %s, "path": %s, "evidence": "directory_name"}' "$(jstr "$id")" "$(jstr "$kind")" "$(jstr "$path")"
     done < "$APP_FILE"
     printf '\n  ]\n'
     printf '}\n'
@@ -3264,7 +3259,7 @@ java4shell_main() {
 
     # --- 应用清点 ---
     if [ -n "$APPS_DIR" ]; then
-        note_progress "清点已知受影响应用: $APPS_DIR"
+        note_progress "盘点应用目录线索: $APPS_DIR"
         scan_apps "$APPS_DIR" "$APPS_DEPTH"
     fi
 

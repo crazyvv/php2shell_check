@@ -100,6 +100,20 @@ rc=0
 grep -Fq '"root_entry_limit_reached": true' "$fixture/capped.json"
 grep -Fq '"apps_entry_limit_reached": true' "$fixture/capped.json"
 
+mkdir -p "$fixture/apps/jenkins-archive" "$fixture/apps/kafka-backup"
+for format in json txt csv; do
+    bash "$scanner" --quiet --no-processes --jdk "$fixture/jdk" --apps "$fixture/apps" \
+        --details --format "$format" > "$fixture/apps.$format"
+    grep -Fq '目录名匹配，应用身份和漏洞暴露待核验' "$fixture/apps.$format"
+    if grep -Fq '可触发 RCE' "$fixture/apps.$format"; then exit 1; fi
+done
+grep -Fq '"name": "Jenkins"' "$fixture/apps.json"
+grep -Fq '"path": "'"$fixture/apps/jenkins-archive"'", "evidence": "directory_name"' "$fixture/apps.json"
+grep -Fq '应用目录线索' "$fixture/apps.txt"
+grep -Fq ',"app","inventory",' "$fixture/apps.csv"
+bash "$scanner" --quiet --no-processes --jdk "$fixture/jdk" --apps "$fixture/apps" > "$fixture/apps-brief.txt"
+grep -Fq '已发现 2 条待核验的应用目录线索' "$fixture/apps-brief.txt"
+
 rc=0
 (
     PROCESS_SCAN_LIMIT=0

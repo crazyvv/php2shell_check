@@ -361,6 +361,8 @@ bash scripts/x2shell-check.sh --all --json
 
 默认读取本机文件和启动线索。JVM 生效参数需要显式加 `--all --jcmd`，必要时 HotSpot 会打开诊断监听器。原有 Java 专项参数仍可用，例如 `--java4shell --json`，已存在的 `--json` 也继续输出 Java 专项格式。Apache 部分列出本机可见的进程和二进制版本。批量模式退出 `1` 表示 Java、NGINX 或 Apache 命中风险门禁，`3` 表示证据不完整，`2` 表示用法或采集错误。
 
+Java4Shell 以服务实际运行的 JVM 为准。通过 `--apps` 匹配的目录名只提供待核验的应用线索，报告中的 `evidence: "directory_name"` 表示这条证据的来源。
+
 ### Nginx2Root 主机与 HTTP 响应核验
 
 ```bash
