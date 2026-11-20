@@ -165,10 +165,42 @@ printf '%s\n' 'java version "21.0.13.1"' \
     'Java HotSpot(TM) 64-Bit Server VM (build 21.0.13.1+4-LTS, mixed mode)' >&2
 JAVA
 chmod +x "$fixture/launcher/bin/java"
-bash "$scanner" --quiet --no-processes --jdk "$fixture/jdk" \
-    --java-path "$fixture/launcher/bin/java" --json > "$fixture/report.json"
-grep -Fq '"version": "21.0.13.1+4-LTS"' "$fixture/report.json"
-grep -Fq '"kind": "java-binary", "status": "not_affected"' "$fixture/report.json"
+if have timeout || have gtimeout; then
+    bash "$scanner" --quiet --no-processes --jdk "$fixture/jdk" \
+        --java-path "$fixture/launcher/bin/java" --json > "$fixture/report.json"
+    grep -Fq '"version": "21.0.13.1+4-LTS"' "$fixture/report.json"
+    grep -Fq '"kind": "java-binary", "status": "not_affected"' "$fixture/report.json"
+fi
+
+mkfifo "$fixture/cpu-fifo"
+rc=0
+bash "$scanner" --quiet --no-processes --cpuinfo "$fixture/cpu-fifo" \
+    > "$fixture/cpu-fifo.out" 2> "$fixture/cpu-fifo.err" || rc=$?
+[[ $rc == 2 ]]
+grep -Fq '需要可读的普通文件' "$fixture/cpu-fifo.err"
+
+printf 'processor: 0\nflags: avx512f\n' > "$fixture/cpuinfo"
+rc=0
+(
+    CPUINFO_BYTE_LIMIT=4
+    main --quiet --no-processes --cpuinfo "$fixture/cpuinfo"
+) > "$fixture/cpu-limit.out" 2> "$fixture/cpu-limit.err" || rc=$?
+[[ $rc == 2 ]]
+grep -Fq '超过 4 字节' "$fixture/cpu-limit.err"
+
+cat > "$fixture/never-launch" <<'JAVA'
+#!/bin/sh
+printf 'executed\n' > "$X2_LAUNCH_MARKER"
+JAVA
+chmod +x "$fixture/never-launch"
+rc=0
+(
+    export X2_LAUNCH_MARKER="$fixture/launch-marker"
+    type() { return 1; }
+    scan_java_binary "$fixture/never-launch"
+) > "$fixture/launch.out" 2> "$fixture/launch.err" || rc=$?
+[[ $rc == 2 && ! -e $fixture/launch-marker ]]
+grep -Fq '需要 timeout 或 gtimeout' "$fixture/launch.err"
 
 (
     file_id() { printf '%s' "$mapped_identity"; }

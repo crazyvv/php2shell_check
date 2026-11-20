@@ -55,6 +55,7 @@ WEB_BINARY_BYTE_LIMIT=16777216   # 单个 Web 二进制的版本线索读取上�
 APACHE_MAPS_BYTE_LIMIT=1048576   # Apache 模块映射的读取上限
 PACKAGE_QUERY_TIMEOUT=2        # 单次软件包查询超时（秒）
 JCMD_TIMEOUT=3                 # 单次 JVM 诊断超时（秒）
+CPUINFO_BYTE_LIMIT=1048576      # 离线 CPU 信息文件读取上限
 JAVA_VERSION_TIMEOUT=30        # 显式 Java 启动器版本查询超时（秒）
 ROOT_DEPTH=8                   # --root 默认搜索深度，可由 --root-depth 覆盖
 APPS_DEPTH=3                   # --apps 默认搜索深度，可由 --apps-depth 覆盖
@@ -131,8 +132,8 @@ Java4Shell / Nginx2Root / Apache2Root 主机暴露面检测（$PROG v$SCRIPT_VER
   --pid PID             只检查指定进程（可重复）
   --processes-only      只检查进程，跳过安装目录发现
   --no-processes        跳过进程检查，只盘点安装目录
-  --java-path PATH      额外对该 java 可执行文件跑一次 "java -version" 版本门禁
-  --cpuinfo PATH        用指定文件替代 /proc/cpuinfo（离线/镜像核查用）
+  --java-path PATH      执行指定 Java 启动器的版本检查（需 timeout 或 gtimeout）
+  --cpuinfo PATH        读取指定的普通文件（上限 $CPUINFO_BYTE_LIMIT 字节）
   --apps DIR            额外清点该目录下已知受影响的 Java 应用（默认深度 3）
   --apps-depth N        配合 --apps，指定递归深度（默认 3）
                         每专项最多检查 $PROCESS_SCAN_LIMIT 条进程记录；
@@ -307,10 +308,15 @@ cpu_probe_darwin() {
 }
 
 cpu_probe() {
-    local raw
+    local raw sample size
     if [ -n "$CPUINFO" ]; then
-        [ -r "$CPUINFO" ] || die "--cpuinfo 无法读取: $CPUINFO"
-        raw=$(cpu_from_text < "$CPUINFO")
+        [ -f "$CPUINFO" ] && [ -r "$CPUINFO" ] || die "--cpuinfo 需要可读的普通文件: $CPUINFO"
+        sample="$WORK/cpuinfo"
+        head -c "$((CPUINFO_BYTE_LIMIT + 1))" -- "$CPUINFO" > "$sample" ||
+            die "--cpuinfo 无法读取: $CPUINFO"
+        size=$(wc -c < "$sample") || die "--cpuinfo 无法核对文件大小: $CPUINFO"
+        [ "$size" -le "$CPUINFO_BYTE_LIMIT" ] || die "--cpuinfo 超过 $CPUINFO_BYTE_LIMIT 字节: $CPUINFO"
+        raw=$(cpu_from_text < "$sample") || die "--cpuinfo 无法解析: $CPUINFO"
         CPU_SOURCE=$CPUINFO
     elif [ -r /proc/cpuinfo ] && grep -q . /proc/cpuinfo 2>/dev/null; then
         raw=$(cpu_from_text < /proc/cpuinfo)
@@ -1566,11 +1572,16 @@ scan_java_binary() {
     [ -f "$bin" ] || die "java 可执行文件不存在: $bin"
     [ -x "$bin" ] || die "java 不可执行: $bin"
 
-    out=""
-    if have timeout; then
-        out=$(timeout "$JAVA_VERSION_TIMEOUT" "$bin" -version 2>&1 || true)
-    else
-        out=$("$bin" -version 2>&1 || true)
+    local timeout_bin rc=0
+    timeout_bin=$(type -P timeout || type -P gtimeout) ||
+        die "--java-path 需要 timeout 或 gtimeout；未执行 Java 启动器"
+    [[ $bin == /* ]] || bin="$PWD/$bin"
+    out=$("$timeout_bin" -k 1s "$JAVA_VERSION_TIMEOUT" "$bin" -version 2>&1) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        emit_finding "java:$bin" "java-binary" "unknown" \
+            "Java 版本查询失败或超时（退出码 $rc）。" "unknown" "" \
+            "$(cpu_assess "$ARCH_RAW" "$CPU_STATE")" "" "$bin" "" "" "" "$ARCH_RAW" "" "false" "" ""
+        return
     fi
 
     version=$(printf '%s\n' "$out" | sed -n 's/.*version "\([^"]*\)".*/\1/p' | head -n 1)
