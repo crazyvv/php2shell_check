@@ -197,7 +197,7 @@ warn() {
 
 # 把可能破坏 TSV 的字符压平
 san_field() {
-    printf '%s' "${1:-}" | tr '\t\n' '  ' | tr -d '\037'
+    printf '%s' "${1:-}" | LC_ALL=C tr '\t\n' '  ' | LC_ALL=C tr -d '\037'
 }
 
 # 解析符号链接（相对目标也能处理）
@@ -1526,15 +1526,36 @@ scan_processes() {
 # 非 Linux 平台：仅能做启动器级别的线索（Go 版在 macOS 上同样不校验运行库）
 scan_processes_other() {
     local pid exe root notes version vendor product vm arch cpu build bevid status reason bevid_and_build
-    local scanned=0
-    product=""
-    command -v ps >/dev/null 2>&1 || return
+    local scanned=0 explicit=0 selected selected_pid process_list
+    if [ ${#PID_ARGS[@]} -gt 0 ]; then
+        explicit=1
+        process_list=$(printf '%s\n' ${PID_ARGS[@]+"${PID_ARGS[@]}"})
+    else
+        if ! process_list=$(
+            ps -axww -o pid=,comm= 2>/dev/null | head -n "$((PROCESS_SCAN_LIMIT + 1))"
+            statuses=("${PIPESTATUS[@]}")
+            [[ ${statuses[1]} == 0 && ( ${statuses[0]} == 0 || ${statuses[0]} == 141 ) ]]
+        ); then
+            PROCESS_VISIBILITY_LIMITED=true
+            warn "无法列出进程，运行中 JVM 的覆盖不完整。"
+        fi
+    fi
     while read -r pid exe; do
         [ -n "$pid" ] || continue
         if (( scanned >= PROCESS_SCAN_LIMIT )); then PROCESS_LIMIT_REACHED=true; break; fi
         scanned=$((scanned + 1))
-        [ -n "$exe" ] || continue
-        java_name "$exe" || continue
+        if [ "$explicit" -eq 1 ]; then
+            selected=$(ps -ww -p "$pid" -o pid=,comm= 2>/dev/null) || selected=
+            read -r selected_pid exe <<< "$selected"
+            if [[ $selected_pid != "$pid" || -z $exe ]] || ! java_name "$exe"; then
+                emit_finding "pid:$pid" "process" "unknown" "无法将指定 PID 核实为 Java 进程。" \
+                    "unknown" "无可核实的 Java 启动器" "$(cpu_assess "$ARCH_RAW" "$CPU_STATE")" \
+                    "" "" "" "" "" "$ARCH_RAW" "" "false" "" ""
+                continue
+            fi
+        elif [ -z "$exe" ] || ! java_name "$exe"; then
+            continue
+        fi
         NOTES=""
         root=$(java_root_of "$exe")
         version=""; vendor=""; vm=""; arch=""
@@ -1550,7 +1571,8 @@ scan_processes_other() {
         fi
         [ -n "$arch" ] || arch=$ARCH_RAW
         cpu=$(cpu_assess "$arch" "$CPU_STATE")
-        bevid_and_build=$(build_assess "$version" "$vendor" "$product" "$vm")
+        product=$(jdk_product "$root" "$vendor")
+        bevid_and_build=$(assess_jdk_build "$root" "$version" "$vendor" "$product" "$vm")
         build=$(printf '%s' "$bevid_and_build" | cut -f1)
         bevid=$(printf '%s' "$bevid_and_build" | cut -f2-)
         [ -n "$build" ] || build="unknown"
@@ -1558,7 +1580,7 @@ scan_processes_other() {
         reason=$(make_reason "$status" "$build" "$bevid" "$cpu" 0 "$(norm_arch "$arch")")
         emit_finding "pid:$pid" "process" "$status" "$reason" "$build" "$bevid" \
             "$cpu" "$version" "$root" "$vendor" "$product" "$vm" "$arch" "" "false" "" "$NOTES"
-    done < <(ps -axww -o pid=,comm= 2>/dev/null)
+    done <<< "$process_list"
 }
 
 # ---------------------------------------------------------------------------
@@ -1642,7 +1664,7 @@ scan_apps() {
         [ "$d" = "$root" ] && continue
         name=${d##*/}
         case $name in .*) continue ;; esac
-        token=$(printf '%s' "$name" | sed 's/[-_]//g' | tr '[:upper:]' '[:lower:]')
+        token=$(printf '%s' "$name" | LC_ALL=C tr -d '_-' | LC_ALL=C tr '[:upper:]' '[:lower:]')
         label=""
         case $token in
             *keycloak*)     label="Keycloak" ;;
@@ -1865,16 +1887,42 @@ report_txt() {
 
 json_escape() {
     printf '%sX' "${1:-}" | LC_ALL=C awk '
-        BEGIN { for (i=1; i<32; i++) controls[sprintf("%c",i)]=sprintf("\\u%04x",i) }
+        BEGIN {
+            for (i=1; i<32; i++) controls[sprintf("%c",i)]=sprintf("\\u%04x",i)
+            for (i=128; i<256; i++) bytes[sprintf("%c",i)]=i
+        }
         NR > 1 { escape(previous); printf "\\n" }
         { previous=$0 }
         END { escape(substr(previous,1,length(previous)-1)) }
-        function escape(value, i, c) {
+        # Check the UTF-8 sequence before copying it into the JSON string.
+        function utf8_width(value, start, lead, width, second, offset, next_byte) {
+            if (lead >= 194 && lead <= 223) width=2
+            else if (lead >= 224 && lead <= 239) width=3
+            else if (lead >= 240 && lead <= 244) width=4
+            else return 0
+            for (offset=1; offset<width; offset++) {
+                next_byte=bytes[substr(value,start+offset,1)]+0
+                if (next_byte < 128 || next_byte > 191) return 0
+                if (offset == 1) second=next_byte
+            }
+            # Reject overlong encodings, surrogates, and values above U+10FFFF.
+            if ((lead == 224 && second < 160) || (lead == 237 && second > 159) ||
+                (lead == 240 && second < 144) || (lead == 244 && second > 143)) return 0
+            return width
+        }
+        function escape(value, i, c, width) {
           for (i=1; i<=length(value); i++) {
               c=substr(value,i,1)
               if (c=="\\") printf "\\\\"
               else if (c=="\"") printf "\\\""
               else if (c in controls) printf "%s",controls[c]
+              else if (bytes[c] >= 128) {
+                  width=utf8_width(value,i,bytes[c])
+                  if (width) {
+                      printf "%s",substr(value,i,width)
+                      i+=width-1
+                  } else printf "\\ufffd"
+              }
               else printf "%s",c
           }
         }'
@@ -2060,6 +2108,9 @@ parse_args() {
 
     if [ "$PROC_ONLY" -eq 1 ] && [ "$NO_PROC" -eq 1 ]; then
         die "--processes-only 与 --no-processes 不能同时使用"
+    fi
+    if [ "$NO_PROC" -eq 1 ] && [ ${#PID_ARGS[@]} -gt 0 ]; then
+        die "--pid 与 --no-processes 不能同时使用"
     fi
     if [ "$PROC_ONLY" -eq 1 ] && [ ${#JDK_ARGS[@]} -gt 0 ]; then
         die "--processes-only 与 --jdk 不能同时使用"
@@ -2255,6 +2306,27 @@ nginx_process_config_entry() {
             }
             if(path!="") print path
         }'
+}
+
+nginx_worker_config_parent() {
+    local proc=$1 image_id=$2 root_id=$3 mount_ns=$4 parent_pid parent title
+    IFS= read -r -d '' -n 64 title 2>/dev/null < "$proc/cmdline" || return 1
+    case $title in
+        *': worker process'*|*': cache manager process'*|*': cache loader process'*) ;;
+        *) return 1 ;;
+    esac
+    parent_pid=$(awk '$1 == "PPid:" { print $2; exit }' "$proc/status" 2>/dev/null)
+    [[ $parent_pid =~ ^[1-9][0-9]*$ ]] || return 1
+    parent=${proc%/*}/$parent_pid
+    IFS= read -r -d '' -n 64 title 2>/dev/null < "$parent/cmdline" || return 1
+    case $title in
+        *': master process '*) ;;
+        *) return 1 ;;
+    esac
+    [[ $(file_id "$parent/exe") == "$image_id" &&
+       $(file_id "$parent/root") == "$root_id" &&
+       $(readlink "$parent/ns/mnt" 2>/dev/null) == "$mount_ns" ]] || return 1
+    printf '%s' "$parent"
 }
 
 nginx_layout_config() {
@@ -2964,7 +3036,9 @@ nginx2root_scan() {
     local seen=' ' rows=0 comma= gate=0 unknown=0 total=0 config_report sctp_report package_hint
     local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root metadata flavor plus module_hints product_version compiled_config config_entry row_config config_source incomplete=false gate_hit=false
     local index package_count=0 condition_not_observed=0 potential_missing=0 unknown_missing=0 unattributed=0 incomplete_config=0 config_incomplete=false unmapped= unmapped_seen=" "
+    local config_parent parent_start config_count=0
     local -a package_ids=() package_values=()
+    local -a config_entries=() config_values=()
     local -a config_paths=()
     while (($#)); do
         case $1 in
@@ -2994,6 +3068,19 @@ nginx2root_scan() {
     else
         printf 'NGINX 上游版本参考 · 仅覆盖本专项五项 CVE\n磁盘配置线索: %s\n内核 SCTP 线索: %s\n' "$config_report" "$sctp_report"
     fi
+
+    nginx_cached_config() {
+        local entry=$1 config_index
+        for ((config_index=0; config_index<config_count; config_index++)); do
+            [ "${config_entries[config_index]}" != "$entry" ] || break
+        done
+        if ((config_index == config_count)); then
+            config_entries[config_index]=$entry
+            config_values[config_index]=$(nginx2root_config "$entry")
+            config_count=$((config_count + 1))
+        fi
+        row_config=${config_values[config_index]}
+    }
 
     nginx2root_row() {
         local kind=$1 pid=$2 path=$3 raw=$4 matched=$5 package_hint=${6:-null} image_state=$7
@@ -3092,10 +3179,27 @@ nginx2root_scan() {
         if [[ $matched == true && -n $self_ns && $process_ns == "$self_ns" &&
               -n $self_root && $(file_id "$proc/root") == "$self_root" && $(file_id "$path") == "$id" ]]; then
             if [ -z "${config_paths[0]:-}" ]; then
+                config_parent= parent_start=
                 config_entry=$(nginx_process_config_entry "$proc")
-                if [[ -n $config_entry && $(java_process_start "$pid") == "$start" ]]; then
-                    config_source=process_argument
-                    row_config=$(nginx2root_config "$config_entry")
+                config_source=process_argument
+                if [[ -z $config_entry ]] &&
+                        config_parent=$(nginx_worker_config_parent "$proc" "$id" "$self_root" "$self_ns"); then
+                    parent_start=$(java_process_start "${config_parent##*/}")
+                    if [[ -n $parent_start ]]; then
+                        config_entry=$(nginx_process_config_entry "$config_parent")
+                        config_source=parent_process_argument
+                    fi
+                fi
+                if [[ -n $config_entry ]]; then
+                    nginx_cached_config "$config_entry"
+                    if [[ $(java_process_start "$pid") != "$start" || $(file_id "$proc/exe") != "$id" ||
+                          $(file_id "$proc/root") != "$self_root" ||
+                          $(readlink "$proc/ns/mnt" 2>/dev/null) != "$self_ns" ]] ||
+                            { [[ -n $config_parent ]] &&
+                              [[ $(java_process_start "${config_parent##*/}") != "$parent_start" ||
+                                 $(nginx_worker_config_parent "$proc" "$id" "$self_root" "$self_ns") != "$config_parent" ]]; }; then
+                        row_config=
+                    fi
                     if web_coverage_incomplete false 0 "$row_config"; then unknown=1; fi
                 fi
             fi
@@ -3130,7 +3234,7 @@ nginx2root_scan() {
         elif config_entry=$(nginx_layout_config "$path" "$flavor") && [ -n "$config_entry" ]; then
             config_source=installation_layout
             if [[ $path == /usr/sbin/nginx && $config_entry == /etc/nginx/nginx.conf ]]; then config_source=system_layout; fi
-            row_config=$(nginx2root_config "$config_entry")
+            nginx_cached_config "$config_entry"
             if web_coverage_incomplete false 0 "$row_config"; then unknown=1; fi
         fi
         nginx2root_row installation "" "$path" "$raw" null "${package_hint:-null}" not_applicable

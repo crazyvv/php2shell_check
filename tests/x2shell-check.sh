@@ -100,6 +100,31 @@ rc=0
 grep -Fq '"root_entry_limit_reached": true' "$fixture/capped.json"
 grep -Fq '"apps_entry_limit_reached": true' "$fixture/capped.json"
 
+mkdir -p "$fixture/jdk/bin"
+rc=0
+(
+    OS=Darwin
+    ps() {
+        [[ $2 == -p ]] || return 2
+        printf '123 %s\n' "$fixture/jdk/bin/java"
+    }
+    main --java4shell --quiet --pid 99999999 --jdk "$fixture/jdk" --json
+) > "$fixture/darwin-missing-pid.json" || rc=$?
+[[ $rc == 3 ]]
+grep -Fq '"id": "pid:99999999", "kind": "process", "status": "unknown"' "$fixture/darwin-missing-pid.json"
+if grep -Fq '"id": "pid:123"' "$fixture/darwin-missing-pid.json"; then exit 1; fi
+rc=0
+(
+    OS=Darwin
+    ps() {
+        [[ $2 == -p && $3 == 123 ]] || return 2
+        printf '123 %s\n' "$fixture/jdk/bin/java"
+    }
+    main --java4shell --quiet --pid 123 --jdk "$fixture/jdk" --json
+) > "$fixture/darwin-selected-pid.json" || rc=$?
+[[ $rc == 0 ]]
+grep -Fq '"id": "pid:123", "kind": "process", "status": "not_affected"' "$fixture/darwin-selected-pid.json"
+
 mkdir -p "$fixture/apps/jenkins-archive" "$fixture/apps/kafka-backup"
 for format in json txt csv; do
     bash "$scanner" --quiet --no-processes --jdk "$fixture/jdk" --apps "$fixture/apps" \
@@ -113,6 +138,16 @@ grep -Fq '应用目录线索' "$fixture/apps.txt"
 grep -Fq ',"app","inventory",' "$fixture/apps.csv"
 bash "$scanner" --quiet --no-processes --jdk "$fixture/jdk" --apps "$fixture/apps" > "$fixture/apps-brief.txt"
 grep -Fq '已发现 2 条待核验的应用目录线索' "$fixture/apps-brief.txt"
+
+mkdir -p "$fixture/apps/"$'jenkins-\xff'
+bash "$scanner" --quiet --no-processes --jdk "$fixture/jdk" --apps "$fixture/apps" --json > "$fixture/apps-invalid-utf8.json"
+grep -Fq '/jenkins-\ufffd", "evidence": "directory_name"' "$fixture/apps-invalid-utf8.json"
+
+rc=0
+bash "$scanner" --java4shell --no-processes --pid "$$" --jdk "$fixture/jdk" --json \
+    > "$fixture/pid-conflict.out" 2> "$fixture/pid-conflict.err" || rc=$?
+[[ $rc == 2 && ! -s $fixture/pid-conflict.out ]]
+grep -Fq -- '--pid 与 --no-processes 不能同时使用' "$fixture/pid-conflict.err"
 
 rc=0
 (
@@ -469,6 +504,48 @@ RPM
         ) 2> "$fixture/rpm-timeout.err"
     fi
 
+    (
+        mkdir -p "$fixture/shared-config-procs"
+        printf '\177ELF nginx/1.31.8' > "$fixture/shared-nginx-image"
+        : > "$fixture/shared-nginx.conf"
+        for proc_id in 101 102 103 104; do
+            proc="$fixture/shared-config-procs/$proc_id"
+            mkdir -p "$proc/ns"
+            printf 'nginx\n' > "$proc/comm"
+            ln -s "$fixture/shared-nginx-image" "$proc/exe"
+            ln -s / "$proc/root"
+            ln -s "$(readlink /proc/self/ns/mnt)" "$proc/ns/mnt"
+            case $proc_id in
+                101) printf 'nginx: master process nginx -c %s\0' "$fixture/shared-nginx.conf" > "$proc/cmdline" ;;
+                102|103)
+                    printf 'nginx: worker process\0' > "$proc/cmdline"
+                    printf 'PPid:\t101\n' > "$proc/status" ;;
+                104) printf 'nginx\0-c\0%s\0' "$fixture/shared-nginx.conf" > "$proc/cmdline" ;;
+            esac
+        done
+        web_process_paths() { printf '%s\n' "$fixture"/shared-config-procs/*; }
+        linux_process_visibility_limited() { return 1; }
+        java_process_start() { printf '123'; }
+        web_package_hint() { :; }
+        nginx2root_config() {
+            printf '%s\n' "${1:-defaults}" >> "$fixture/nginx-config-reads"
+            printf '{"files_examined":1,"skipped":0,"http2_on":true}'
+        }
+        rc=0
+        nginx2root_scan --json > "$fixture/nginx-shared-config.json" || rc=$?
+        [[ $rc == 1 ]]
+        [[ $(grep -Fxc "$fixture/shared-nginx.conf" "$fixture/nginx-config-reads") == 1 ]]
+        [[ $(grep -Fo '"configuration_entry_source":"parent_process_argument"' "$fixture/nginx-shared-config.json" | wc -l) -eq 2 ]]
+
+        printf 'PPid:\t999\n' > "$fixture/shared-config-procs/103/status"
+        : > "$fixture/nginx-config-reads"
+        rc=0
+        nginx2root_scan --json > "$fixture/nginx-unmatched-parent.json" || rc=$?
+        [[ $rc == 1 ]]
+        [[ $(grep -Fxc "$fixture/shared-nginx.conf" "$fixture/nginx-config-reads") == 1 ]]
+        [[ $(grep -Fo '"configuration_entry_source":"parent_process_argument"' "$fixture/nginx-unmatched-parent.json" | wc -l) -eq 1 ]]
+    )
+
     # Exercise the mount parser and the verdict when the process view is limited.
     mkdir -p "$fixture/proc-view/self" "$fixture/proc-view/1" "$fixture/proc-view/123"
     : > "$fixture/proc-view/self/stat"
@@ -543,6 +620,10 @@ RPM
 fi
 
 [[ $(jstr $'path\twith\nnewline\n') == '"path\u0009with\nnewline\n"' ]]
+[[ $(jstr '目录📁') == '"目录📁"' ]]
+[[ $(jstr $'\x80\xc0\xaf') == '"\ufffd\ufffd\ufffd"' ]]
+[[ $(jstr $'\xed\xa0\x80\xf4\x90\x80\x80') == '"\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd"' ]]
+[[ $(jstr $'\xe2\x82') == '"\ufffd\ufffd"' ]]
 mkdir -p "$fixture/standalone/jre/bin" "$fixture/nested/jre/bin"
 touch "$fixture/nested/release"
 [[ $(java_root_of "$fixture/standalone/jre/bin/java") == "$fixture/standalone/jre" ]]
