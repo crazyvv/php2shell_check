@@ -352,6 +352,39 @@ pub fn version_risk(v: &str) -> (&'static str, &'static str) {
     }
     ("无法判断", "规则未覆盖此版本，不推断安全状态")
 }
+pub(crate) fn http2_screening(
+    cve: &str,
+    version_status: Option<&str>,
+    protocol: Option<&str>,
+    headers: &[(String, String)],
+    blocked: bool,
+) -> Value {
+    let intermediary_hint = headers.iter().any(|(name, value)| {
+        !value.trim().is_empty()
+            && ["via", "cf-ray", "x-amz-cf-id"]
+                .iter()
+                .any(|header| name.eq_ignore_ascii_case(header))
+    });
+    let (status, reason) = if blocked || intermediary_hint {
+        ("insufficient_evidence", "intermediary_response")
+    } else {
+        match version_status {
+            Some("potential") if protocol == Some("h2") => {
+                ("potential", "affected_version_and_http2")
+            }
+            Some("potential") if protocol.is_some() => {
+                ("insufficient_evidence", "http2_not_observed")
+            }
+            Some("potential") => ("insufficient_evidence", "protocol_unknown"),
+            Some(
+                "meets_vendor_reference" | "meets_upstream_reference" | "outside_upstream_range",
+            ) => ("version_reference", "version_reference"),
+            _ => ("insufficient_evidence", "version_unknown"),
+        }
+    };
+    json!({"cve": cve, "status": status, "reason": reason})
+}
+
 pub fn inspect(headers: &[(String, String)], body: &[u8]) -> Value {
     inspect_with_library(headers, body, None, &crate::fingerprints::builtin())
 }
@@ -360,6 +393,15 @@ pub fn inspect_with_library(
     body: &[u8],
     url: Option<&Url>,
     library: &crate::fingerprints::Library,
+) -> Value {
+    inspect_response(headers, body, url, library, None)
+}
+fn inspect_response(
+    headers: &[(String, String)],
+    body: &[u8],
+    url: Option<&Url>,
+    library: &crate::fingerprints::Library,
+    protocol: Option<&str>,
 ) -> Value {
     let fingerprints = library.detect(url, headers, body);
     let mut evidence = vec![];
@@ -411,8 +453,10 @@ pub fn inspect_with_library(
     let mut assessment = crate::assessment::remote(headers, body, &versions);
     assessment["surfaces"] = crate::surfaces::inspect(url, body);
     let java4shell = crate::java4shell::remote(&fingerprints);
-    let nginx2root = crate::nginx2root::remote(headers, fingerprints["blocked_hint"] == true);
-    let apache2root = crate::apache2root::remote(headers, fingerprints["blocked_hint"] == true);
+    let nginx2root =
+        crate::nginx2root::remote(headers, fingerprints["blocked_hint"] == true, protocol);
+    let apache2root =
+        crate::apache2root::remote(headers, fingerprints["blocked_hint"] == true, protocol);
     if verdict == "未发现 PHP 特征" && java4shell["status"] == "java_product_hint" {
         verdict = "发现 Java 服务线索，需核验 Java4Shell";
         reason = "网页特征不能确认 JVM build、CPU 或启动参数；请提交主机核验材料";
@@ -651,11 +695,7 @@ where
         let mut u = normalize(target)?;
         for hop in 0..4 {
             let (r, ip) = fetch(u.clone()).await?;
-            let mut findings = inspect_with_library(&r.headers, &r.body, Some(&u), &library);
-            if findings["apache2root"]["status"] == "apache_hint" {
-                findings["apache2root"]["response_protocol"] = json!(r.protocol);
-                findings["apache2root"]["http2_negotiated"] = json!(r.protocol.map(|v| v == "h2"));
-            }
+            let findings = inspect_response(&r.headers, &r.body, Some(&u), &library, r.protocol);
             result["hops"].as_array_mut().unwrap().push(
                 json!({"url":u.as_str(),"ip":ip.to_string(),"status":r.status,"findings":findings}),
             );
@@ -713,6 +753,88 @@ where
 mod tests {
     use super::*;
     #[tokio::test]
+    async fn passive_nginx_screening_combines_version_and_connection_evidence() {
+        for (server, protocol, via, expected_status, expected_reason) in [
+            (
+                "nginx/1.31.8",
+                Some("h2"),
+                None,
+                "potential",
+                "affected_version_and_http2",
+            ),
+            (
+                "nginx/1.31.8",
+                Some("http/1.1"),
+                None,
+                "insufficient_evidence",
+                "http2_not_observed",
+            ),
+            (
+                "nginx/1.31.8",
+                None,
+                None,
+                "insufficient_evidence",
+                "protocol_unknown",
+            ),
+            (
+                "nginx",
+                Some("h2"),
+                None,
+                "insufficient_evidence",
+                "version_unknown",
+            ),
+            (
+                "nginx/1.31.8",
+                Some("h2"),
+                Some("2.0 edge"),
+                "insufficient_evidence",
+                "intermediary_response",
+            ),
+            (
+                "nginx/1.31.9",
+                Some("h2"),
+                None,
+                "version_reference",
+                "version_reference",
+            ),
+        ] {
+            let mut calls = 0;
+            let result = scan_using("https://example.test", |_| {
+                calls += 1;
+                async move {
+                    let mut headers = vec![("server".into(), server.into())];
+                    if let Some(value) = via {
+                        headers.push(("Via".into(), value.into()));
+                    }
+                    Ok((
+                        Reply {
+                            status: 200,
+                            protocol,
+                            headers,
+                            body: vec![],
+                            truncated: false,
+                        },
+                        "192.0.2.1".parse().unwrap(),
+                    ))
+                }
+            })
+            .await;
+            assert_eq!(calls, 1);
+            let nginx = &result["nginx2root"];
+            assert_eq!(nginx["response_protocol"], json!(protocol));
+            assert_eq!(
+                nginx["http2_negotiated"],
+                json!(protocol.map(|v| v == "h2"))
+            );
+            assert_eq!(nginx["http2_screening"]["status"], expected_status);
+            assert_eq!(nginx["http2_screening"]["reason"], expected_reason);
+            assert_eq!(nginx["patch_verified"], false);
+            assert_eq!(nginx["exploitability_confirmed"], false);
+            assert_eq!(*nginx, result["hops"][0]["findings"]["nginx2root"]);
+        }
+    }
+
+    #[tokio::test]
     async fn passive_apache_report_preserves_negotiated_protocol() {
         let result = scan_using_library(
             "https://example.test",
@@ -735,6 +857,10 @@ mod tests {
         assert_eq!(result["apache2root"]["version_status"], "potential");
         assert_eq!(result["apache2root"]["http2_negotiated"], true);
         assert_eq!(result["apache2root"]["patch_verified"], false);
+        assert_eq!(
+            result["apache2root"]["http2_screening"]["status"],
+            "potential"
+        );
     }
 
     #[tokio::test]

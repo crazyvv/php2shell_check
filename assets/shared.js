@@ -84,11 +84,25 @@ function java4shellView(j) {
   const required=Array.isArray(j.required_evidence)?j.required_evidence:[];if(required.length)box.append(node('p','缺失证据：'+required.join('；'),'fine'));
   wrap.append(box);return wrap;
 }
+function http2ScreeningView(report){
+  const screening=report.http2_screening;
+  const protocol={'h2':'HTTP/2','http/1.1':'HTTP/1.1','http/1.0':'HTTP/1.0'}[report.response_protocol] || '未知';
+  const reasons={
+    affected_version_and_http2:'版本命中披露范围，且本次连接使用 HTTP/2，需优先核验',
+    http2_not_observed:'证据不足，本次连接未使用 HTTP/2',
+    protocol_unknown:'证据不足，缺少连接协议',
+    intermediary_response:'证据不足，响应可能来自代理、CDN 或防护层',
+    version_unknown:'证据不足，响应未提供可判定的版本',
+    version_reference:'版本比对见下方，实际补丁状态待核验'
+  };
+  return node('p',`本次响应协议 ${protocol} · ${screening.cve} · ${reasons[screening.reason] || '证据不足'}`,'fine');
+}
 function nginx2rootView(n) {
   const wrap=node('div');
   if(!n?.status || ['disabled','not_observed'].includes(n.status))return wrap;
   const box=node('div',undefined,'runtime-comparison java4shell-evidence');
   box.append(node('strong','Nginx2Root · '+(n.status==='nginx_hint'?'HTTP 响应线索':'主机提交证据')));
+  if(n.http2_screening)box.append(http2ScreeningView(n));
   const status={potential:'命中披露版本范围',meets_vendor_reference:'达到厂商修复版本参考',meets_upstream_reference:'达到上游版本基线',outside_upstream_range:'不在上游披露范围',unknown:'未知'};
   const rows=[...(n.running_processes || []),...(n.installations || [])];
   if(n.status==='nginx_hint')rows.push(n);
@@ -124,6 +138,7 @@ function apache2rootView(report){
   box.append(node('strong','Apache2Root · CVE-2026-119618'));
   const labels={potential:'上游受影响范围',outside_upstream_range:'不在上游披露范围',meets_upstream_reference:'达到上游修复基线',unknown:'版本证据不足'};
   if(report.status==='apache_hint'){
+    if(report.http2_screening)box.append(http2ScreeningView(report));
     box.append(node('p',`响应版本 ${report.version || '未知'} · ${labels[report.version_status] || '未知'} · 本次协议 ${report.response_protocol || '未知'}`,'fine'));
     if(report.http2_advertised)box.append(node('p','响应声明支持 h2 或 h2c。','fine'));
   }
@@ -246,9 +261,11 @@ function overviewResult(r) {
   const phpVerdict=r.verdict?.includes('Java4Shell')?'未观测到 PHP 线索':r.verdict;
   const modules=[
     ['Apache HTTP Server','apache2root',apache?.status==='apache_hint',
-      apache?.version_status==='potential'?'版本命中受影响范围':'观察到 Apache 线索',()=>apache2rootView(apache)],
+      apache?.http2_screening?.status==='potential'?'HTTP/2 与版本线索命中，需优先核验':
+        apache?.version_status==='potential'?'版本命中受影响范围':'观察到 Apache 线索',()=>apache2rootView(apache)],
     ['NGINX','nginx2root',nginx?.status==='nginx_hint',
-      nginx?.cves?.some(cve=>cve.status==='potential')?'版本命中受影响范围':'观察到 NGINX 线索',()=>nginx2rootView(nginx)],
+      nginx?.http2_screening?.status==='potential'?'HTTP/2 与版本线索命中，需优先核验':
+        nginx?.cves?.some(cve=>cve.status==='potential')?'版本命中受影响范围':'观察到 NGINX 线索',()=>nginx2rootView(nginx)],
     ['Java / JVM','java4shell',java?.status==='java_product_hint',
       '观察到 Java 产品线索',()=>java4shellView(java)],
     ['PHP','php2shell',Boolean(phpVerdict && !phpVerdict.startsWith('未')),phpVerdict,()=>{

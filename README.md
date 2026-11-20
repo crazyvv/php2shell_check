@@ -380,7 +380,7 @@ Nginx2Root 核验逐项给出五个 NGINX CVE 的上游版本参考。主机模�
 
 Bash 和 Rust 都检查标准路径中的磁盘配置线索，包括 HTTP/2、HTTP/3/QUIC、上游代理、resolver、mirror/SSI 和邮件代理。磁盘指令可能尚未加载，多个文件的指令也可能属于不同站点。Bash 可用可重复的 `--nginx-config FILE` 检查非标准路径。SCTP 禁载配置只报告为线索。可用时 Bash 读取 dpkg/RPM 软件包元数据，Rust 在 `--package-audit` 下读取。软件包回补仍按对应发行版公告核对。
 
-Rust 的 `--middleware` 同时包含 Nginx2Root 和 Apache 等中间件盘点。网页扫描只使用现有 HTTP 响应的 `Server` 头，结果可能来自代理。上游版本参考不能确认发行版回补、NGINX Plus 或第三方构建的补丁状态，也不能确认相关模块配置或请求路径可达。
+Rust 的 `--middleware` 同时包含 Nginx2Root 和 Apache 等中间件盘点。网页扫描从现有响应的 `Server` 头读取版本，并记录该次连接实际使用的协议。对于 CVE-2026-123007，版本命中披露范围且观察到 HTTP/2 时，`nginx2root.http2_screening` 提示优先核验。版本或协议证据不足、命中挑战页或发现代理/CDN 响应头时，结果会说明原因。协议只反映扫描器到响应端的这次连接。实际处理 HTTP/2 的实例、模块配置和发行包回补需要通过主机证据核实。
 
 Rust `--java-command` 保留 CLI 默认值采集，并增加当前节点的 CPUID、`/proc/cpuinfo` 交叉核对、JVM 映射身份及磁盘构建证据。`--java-attach` 显式读取同用户 JVM 的生效参数和自报构建，必要时会启动 HotSpot 诊断监听器。运行构建与磁盘构建有冲突时保留未知。
 
@@ -426,7 +426,7 @@ x2shell-check collect --apache2root > apache-report.json
 
 Apache 官方披露的 httpd 影响范围为 `2.4.55–2.4.70`，`2.4.71` 发布修复。独立发布的 `mod_h2 2.0.8–2.0.42` 也在影响范围内，单独核对模块的版本和发行包回补。主机报告包括可见进程、主程序版本、`mod_http2.so` 映射、可识别的模块版本及标准磁盘配置中的 `Protocols` 和 `LoadModule` 线索。
 
-Rust 网页检查从常规响应保存 Apache 版本、`h2/h2c` 声明和该次连接的实际协议。HTTP/1.1 响应只说明该次连接的协议，无法覆盖其他虚拟主机、监听地址或代理后的实例。版本命中和协议线索用于安排核验。 [Apache 官方安全公告](https://httpd.apache.org/security/vulnerabilities_24#CVE-2026-119618) · [mod_http2 文档](https://httpd.apache.org/docs/2.4/mod/mod_http2.html)
+Rust 网页检查从常规响应保存 Apache 版本、`h2/h2c` 声明和该次连接的实际协议。HTTP/1.1 响应只说明该次连接的协议，无法覆盖其他虚拟主机、监听地址或代理后的实例。`apache2root.http2_screening` 会在版本命中且本次使用 HTTP/2 时提示优先核验，证据不足时列出原因。独立安装的 mod_h2 版本与发行包回补仍需主机核验。 [Apache 官方安全公告](https://httpd.apache.org/security/vulnerabilities_24#CVE-2026-119618) · [mod_http2 文档](https://httpd.apache.org/docs/2.4/mod/mod_http2.html)
 
 ### 可选运行实例与厂商补丁参考核验
 

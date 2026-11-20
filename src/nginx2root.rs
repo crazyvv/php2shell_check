@@ -238,7 +238,7 @@ fn banner_product(banner: &str) -> Option<Product> {
     })
 }
 
-pub(crate) fn remote(headers: &[(String, String)], blocked: bool) -> Value {
+pub(crate) fn remote(headers: &[(String, String)], blocked: bool, protocol: Option<&str>) -> Value {
     let servers: Vec<_> = headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("server"))
@@ -260,6 +260,21 @@ pub(crate) fn remote(headers: &[(String, String)], blocked: bool) -> Value {
     report["patch_verified"] = json!(false);
     report["exploitability_confirmed"] = json!(false);
     report["sources"] = json!(SOURCES);
+    if observed {
+        report["response_protocol"] = json!(protocol);
+        report["http2_negotiated"] = json!(protocol.map(|value| value == "h2"));
+        let version_status = report["cves"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|row| row["cve"] == "CVE-2026-123007"))
+            .and_then(|row| row["status"].as_str());
+        report["http2_screening"] = crate::scanner::http2_screening(
+            "CVE-2026-123007",
+            version_status,
+            protocol,
+            headers,
+            blocked,
+        );
+    }
     report
 }
 
@@ -1099,12 +1114,12 @@ mod tests {
     #[test]
     fn derivatives_keep_product_and_core_evidence_separate() {
         let headers = [("Server".into(), "openresty/1.31.8.1".into())];
-        let observed = remote(&headers, false);
+        let observed = remote(&headers, false, None);
         assert_eq!(observed["flavor"], "openresty");
         assert_eq!(observed["product_version"], "1.31.8.1");
         assert_eq!(observed["embedded_nginx_version"], "1.31.8");
         assert_eq!(observed["cves"][0]["status"], "potential");
-        assert!(remote(&headers, true)["product_version"].is_null());
+        assert!(remote(&headers, true, None)["product_version"].is_null());
 
         let report = sanitize_host(&json!({"running_processes":[
             {"flavor":"tengine","product_version":"3.2.0","embedded_nginx_version":"1.31.5"},
@@ -1171,7 +1186,15 @@ mod tests {
         );
         assert_eq!(reference(Some("2.0.0"))[0]["status"], "unknown");
         let headers = [("Server".into(), "nginx/1.31.8".into())];
-        assert_eq!(remote(&headers, false)["cves"][0]["status"], "potential");
-        assert!(remote(&headers, true)["version"].is_null());
+        assert_eq!(
+            remote(&headers, false, None)["cves"][0]["status"],
+            "potential"
+        );
+        let blocked = remote(&headers, true, Some("h2"));
+        assert!(blocked["version"].is_null());
+        assert_eq!(
+            blocked["http2_screening"]["reason"],
+            "intermediary_response"
+        );
     }
 }
