@@ -52,11 +52,13 @@ def main(tag, directory):
 
 扫描工作台按 Apache、NGINX、Java/JVM 和 PHP 展示各自证据。知识库按组件和 CVE 索引，`/tools` 提供 Bash 下载、批量用法及退出码说明。Linux 的 Rust `collect` 生成可导入网页的主机报告。
 
-NGINX 和 Apache 的 Bash 检查补充了运行映像身份、配置线索与覆盖度。版本范围和配置线索用于安排复核，厂商回补与实际生效配置需要独立确认。
+## 变更日志（自 v0.8.6）
 
-Rust 主机采集新增 `collect --all --fail-on-risk` 批量门禁、NGINX 和 Apache 自定义配置入口，以及 Java 指定启动器版本门禁、内置演示、离线 CPU 文件和 CSV/文本报告。运行版本门禁前请确认指定的 Java 启动器来源可信。
-
-本版在 Apache、NGINX、Java/JVM 和 PHP 的漏洞知识库中补充临时缓解措施、安全版本升级指引与升级后复核步骤。请按所用厂商或发行版的安全公告升级到已修复版本，并复核实际运行的组件。
+- **NGINX 逐 CVE 回补证据**。Rust 和 Bash 区分 Debian 官方 DSA-6642-1 与 Hosted Power 的 Debian 8–13 amd64 热修记录，按完整包版本列出覆盖的 CVE。Rust 可用 `collect --package-audit` 启用采集，网页报告会显示回补来源和待核验状态。
+- **NGINX 和 Apache 被动 HTTP/2 风险初筛**。网页扫描结合响应协议、版本线索和代理迹象，提示需要优先复核的条目。
+- **Bash 主机取证**。支持独立 JRE 路径和 RPM 归属补证，补充 Apache `mod_http2` 的 RPM 版本来源，并增强 NGINX 多行配置、`include`、Lua 块和编译时配置路径的识别。
+- **巡检兼容性**。服务停用时仍清点磁盘安装。NGINX 的版本门禁独立于配置线索和回补记录，Java 保留原有报告格式及进程映射覆盖告警。
+- **NGINX 知识库**。补充发行版官方修复、第三方热修、包签名核对和升级后运行映像复核指引。
 
 源码提供可选的体积优化构建，执行 `cargo build --profile release-small --locked -j 4` 即可。下方平台附件使用标准 Release 配置。
 """, encoding="utf-8")
