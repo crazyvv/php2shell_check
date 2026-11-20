@@ -52,11 +52,11 @@ def main(tag, directory):
 
 扫描工作台按 Apache、NGINX、Java/JVM 和 PHP 展示各自证据。知识库按组件和 CVE 索引，`/tools` 提供 Bash 下载、批量用法及退出码说明。Linux 的 Rust `collect` 生成可导入网页的主机报告。
 
-## 变更日志（自 v0.8.8）
+## 变更日志（自 v0.8.9）
 
-- **离线 CPU 信息读取**。Bash 的 `--cpuinfo` 仅接受可读的普通文件，拒绝命名管道、设备文件及超出大小上限的输入。默认上限为 1 MiB，可在脚本开头调整。
-- **Java 启动器超时保护**。`--java-path` 需要 `timeout` 或 `gtimeout`。缺少工具时会在执行启动器前报错退出，查询失败或超时时报告 `unknown`。
-- **巡检说明与回归**。同步生产巡检文档，新增对特殊文件、超限输入和缺少超时工具的回归检查。独立 Bash 脚本版本为 1.2.2。
+- **Bash 进程覆盖**。Java 自动扫描、NGINX 和 Apache 在检测到容器或受限的 `/proc` 时，会记录 `coverage.process_visibility_limited`。风险命中仍返回 `1`，仅有覆盖不足时返回 `3`。磁盘安装发现会保留。
+- **软件包查询超时**。RPM 和 dpkg 查询超时后有 1 秒退出宽限，之后会被强制终止。失败查询的部分输出不会作为软件包证据。
+- **巡检说明与回归**。更新覆盖不足的解读，验证受限进程视图、批量退出码和软件包查询超时。独立 Bash 脚本版本为 1.2.3。
 
 源码提供可选的体积优化构建，执行 `cargo build --profile release-small --locked -j 4` 即可。下方平台附件使用标准 Release 配置。
 """, encoding="utf-8")
