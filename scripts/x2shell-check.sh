@@ -362,14 +362,46 @@ release_get() {
         }' "$f" 2>/dev/null
 }
 
-# java 可执行文件 -> JDK Home（处理 .../jre/bin/java 的旧布局）
+# 旧版 JRE 仅在父目录确有可读 release 时归一化，避免丢失独立 JRE 的文件证据。
+normalize_java_root() {
+    local root=${1%/}
+    if [ "${root##*/}" = "jre" ] && [ ! -r "$root/release" ] &&
+       [ -r "${root%/*}/release" ]; then
+        root=${root%/*}
+    fi
+    printf '%s' "$root"
+}
+
+# java 可执行文件 -> JDK/JRE Home（兼容 .../jre/bin/java 的旧布局）。
 java_root_of() {
     local p=${1:-} root
     root=$(dirname "$(dirname "$p")")
-    if [ "${root##*/}" = "jre" ] && [ ! -f "$root/release" ]; then
-        root=$(dirname "$root")
-    fi
-    printf '%s' "$root"
+    normalize_java_root "$root"
+}
+
+# 缺少 release 版本时，读取本机实际运行库/启动器所属的 OpenJDK 8 RPM 包。
+# 不执行 java，不根据目录名称推测；仅供磁盘安装清点，不能证明进程运行版本。
+installation_rpm_metadata() {
+    local root=$1 file row name version vendor pattern
+    have rpm && have timeout || return 1
+    pattern='^1\.8\.0\.([0-9]+)\.b([0-9]+)$'
+    for file in "$root"/lib/libjvm.so "$root"/lib/*/libjvm.so \
+        "$root"/lib/*/*/libjvm.so "$root"/jre/lib/*/libjvm.so \
+        "$root"/jre/lib/*/*/libjvm.so "$root/bin/java" "$root/jre/bin/java"; do
+        [ -f "$file" ] || continue
+        file=$(real_path "$(resolve_symlinks "$file")")
+        row=$(LC_ALL=C timeout 2 rpm -qf --qf '%{NAME}\t%{VERSION}\t%{VENDOR}\n' -- "$file" 2>/dev/null) || continue
+        # 多包归属或非预期包名不作为确定版本证据。
+        [[ $row != *$'\n'* ]] || continue
+        IFS=$'\t' read -r name version vendor <<< "$row"
+        case $name in java-1.8.0-openjdk|java-1.8.0-openjdk-headless|java-1.8.0-openjdk-devel) ;; *) continue ;; esac
+        [[ $version =~ $pattern ]] || continue
+        version="1.8.0_${BASH_REMATCH[1]}-b${BASH_REMATCH[2]}"
+        # RPM 的包名明确标识 OpenJDK；保留真实厂商，不伪造发行商信息。
+        printf '%s\t%s\t%s\t%s' "$version" "$vendor" "$name" "$file"
+        return 0
+    done
+    return 1
 }
 
 java_name() {
@@ -578,6 +610,11 @@ build_assess() {
         local update legacy_update_pattern='^(1\.8\.0_|8u)([0-9]+)(-b[0-9]+|b[0-9]+)?$'
         if [[ $v =~ $legacy_update_pattern ]]; then
             update=${BASH_REMATCH[2]}
+            # 明确的 OpenJDK 产品证据支持 RPM 厂商为 CentOS/Rocky 等发行方的旧构建。
+            if [ "$pl" = openjdk ]; then
+                printf 'outside_scope\t已识别的标准 OpenJDK 8 发行构建不在本次披露范围内'
+                return
+            fi
             case $vl in
                 openjdk|debian|ubuntu|canonical|"eclipse adoptium"|temurin|"amazon.com inc."|"amazon.com inc"|\
                 "azul systems, inc."|azul|"red hat, inc."|"red hat")
@@ -888,7 +925,7 @@ assess_jdk_build() {
 
 scan_installations() {
     local root version vendor product vm arch notes build cpu status mit flags feff vmname vmtext openj9
-    local bevid reason bevid_and_build lib lib_id matched
+    local bevid reason bevid_and_build lib lib_id matched rpm_meta rpm_name rpm_file
 
     while IFS= read -r root; do
         [ -n "$root" ] || continue
@@ -900,7 +937,7 @@ scan_installations() {
         done
         [ "$matched" -eq 0 ] || continue
         NOTES=""
-        version=""; vendor=""; product=""; vm=""; arch=""
+        version=""; vendor=""; product=""; vm=""; arch=""; vmname=""
         build="unknown"; bevid=""
 
         if [ -r "$root/release" ]; then
@@ -916,6 +953,17 @@ scan_installations() {
         fi
 
         product=$(jdk_product "$root" "$vendor")
+        # 老版 CentOS/RHEL OpenJDK 8 可无 release，按实际文件的 RPM 归属补充磁盘版本。
+        if [ -z "$version" ]; then
+            rpm_meta=$(installation_rpm_metadata "$root") || rpm_meta=""
+            if [ -n "$rpm_meta" ]; then
+                IFS=$'\t' read -r version vendor rpm_name rpm_file <<< "$rpm_meta"
+                product="OpenJDK"
+                add_note "磁盘版本来源: RPM 文件归属；包=$rpm_name；厂商=$vendor；文件=$rpm_file"
+            else
+                add_note "无法从实际文件所属的 OpenJDK 8 RPM 包补充版本；未使用目录名称推测"
+            fi
+        fi
 
         if [ -z "$arch" ]; then
             arch=$ARCH_RAW
@@ -947,7 +995,11 @@ scan_installations() {
 
         emit_finding "install:$root" "installation" "$status" "$reason" "$build" "$bevid" \
             "$cpu" "$version" "$root" "$vendor" "$product" "$vm" "$arch" "$flags" "$feff" "" "$NOTES"
-    done < <(list_roots | LC_ALL=C sort -u)
+    # 先归一化再去重，避免 JAVA_HOME 指向 jre 时与父 JDK 重复清点。
+    done < <(list_roots | while IFS= read -r root; do
+        normalize_java_root "$root"
+        printf '\n'
+    done | LC_ALL=C sort -u)
 }
 
 # ---------------------------------------------------------------------------
@@ -1054,10 +1106,7 @@ jvm_root_from_lib() {
     [ "${libdir##*/}" = "lib" ] || { printf ''; return; }
     root="${libdir%/*}"
     if [ -n "$proc" ]; then root="$proc/root$root"; fi
-    if [ "${root##*/}" = "jre" ] && [ ! -f "$root/release" ]; then
-        root=${root%/*}
-    fi
-    printf '%s' "$root"
+    normalize_java_root "$root"
 }
 
 container_hint() {
@@ -1758,7 +1807,20 @@ report_txt() {
 }
 
 json_escape() {
-    printf '%s' "${1:-}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+    printf '%sX' "${1:-}" | LC_ALL=C awk '
+        BEGIN { for (i=1; i<32; i++) controls[sprintf("%c",i)]=sprintf("\\u%04x",i) }
+        NR > 1 { escape(previous); printf "\\n" }
+        { previous=$0 }
+        END { escape(substr(previous,1,length(previous)-1)) }
+        function escape(value, i, c) {
+          for (i=1; i<=length(value); i++) {
+              c=substr(value,i,1)
+              if (c=="\\") printf "\\\\"
+              else if (c=="\"") printf "\\\""
+              else if (c in controls) printf "%s",controls[c]
+              else printf "%s",c
+          }
+        }'
 }
 
 jstr() { printf '"%s"' "$(json_escape "${1:-}")"; }
@@ -2057,12 +2119,15 @@ RULES
 }
 
 nginx2root_binary_metadata() {
-    local file=$1 marks versions plus flavor=nginx module comma= product=
+    local file=$1 marks versions plus flavor=nginx module comma= product= compiled_config=
     local hints=''
     [[ -f "$file" && $(head -c 4 -- "$file" 2>/dev/null) == $'\x7fELF' ]] || return 0
     marks=$(head -c 16777216 -- "$file" 2>/dev/null |
-        LC_ALL=C grep -aiEo 'nginx/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b|nginx-plus(-r[0-9]+([.][0-9]+){0,3}(-p[0-9]+)?)?|(Tengine|openresty)(/[0-9]+([.][0-9]+){1,3}(-rc[0-9]+)?)?|--with-http_v[23]_module|--with-mail(=dynamic)?|ngx_http_v[23]_module|ngx_http_mirror_module|ngx_mail_proxy_module' |
-        LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sort -u)
+        LC_ALL=C grep -aiEo 'nginx/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,5}\b|nginx-plus(-r[0-9]+([.][0-9]+){0,3}(-p[0-9]+)?)?|(Tengine|openresty)(/[0-9]+([.][0-9]+){1,3}(-rc[0-9]+)?)?|--conf-path=/[a-zA-Z0-9/._-]+|--with-http_v[23]_module|--with-mail(=dynamic)?|ngx_http_v[23]_module|ngx_http_mirror_module|ngx_mail_proxy_module' |
+        LC_ALL=C sort -u)
+    compiled_config=$(sed -n 's/^--conf-path=//p' <<< "$marks")
+    [[ $compiled_config != *$'\n'* ]] || compiled_config=
+    marks=$(LC_ALL=C tr '[:upper:]' '[:lower:]' <<< "$marks")
     versions=$(sed -n 's|^nginx/||p' <<< "$marks")
     plus=$(sed -n 's|^nginx-plus-r||p' <<< "$marks")
     [[ $versions != *$'\n'* ]] || versions=
@@ -2087,6 +2152,7 @@ nginx2root_binary_metadata() {
         [[ $product != *$'\n'* ]] || product=
     fi
     printf '%s|%s|%s|[%s]|%s' "$versions" "$flavor" "$plus" "$hints" "$product"
+    if [[ ${2:-} == with_config ]]; then printf '|%s' "$compiled_config"; fi
 }
 
 # Parse only unambiguous absolute -c arguments from the visible process.
@@ -2145,117 +2211,290 @@ nginx_layout_config() {
     fi
 }
 
+nginx_config_directives() {
+    LC_ALL=C awk '
+        function token() {
+            if (!in_word) return
+            args[++argc] = word
+            word = ""
+            in_word = 0
+        }
+        function hint(key) {
+            printf "@hint %d %s\n", line, key
+        }
+        function problem(reason, location) {
+            printf "@problem %d %s\n", location, reason
+        }
+        # Lua has its own strings, comments, and table delimiters.
+        # Share the cursor so NGINX parsing resumes after the closing brace.
+        function lua_character(text, c,    opener, width, comment) {
+            if (lua_long_end != "") {
+                width = length(lua_long_end)
+                if (c == "]" && substr(text, i, width) == lua_long_end) {
+                    i += width - 1
+                    lua_long_end = ""
+                }
+            } else if (lua_quote != "") {
+                if (c == "\\") i++
+                else if (c == lua_quote) lua_quote = ""
+            } else if (c == "\"" || c == "\047") {
+                lua_quote = c
+            } else if (c == "[" || (c == "-" && substr(text, i, 2) == "--")) {
+                comment = c == "-" ? 2 : 0
+                if (match(substr(text, i + comment), /^\[=*\[/)) {
+                    width = RLENGTH
+                    opener = substr(text, i + comment, width)
+                    lua_long_end = "]" substr(opener, 2, width - 2) "]"
+                    i += comment + width - 1
+                } else if (comment) {
+                    return 1
+                }
+            } else if (c == "{") {
+                lua_depth++
+            } else if (c == "}") {
+                lua_depth--
+            }
+            return 0
+        }
+        function directive(end,    name, value, host, i) {
+            token()
+            name = argc ? args[1] : ""
+            value = argc > 1 ? args[2] : ""
+            if (end == "{") {
+                if (name ~ /^(init|init_worker|exit_worker|set|server_rewrite|rewrite|access|content|balancer|header_filter|body_filter|log|preread|ssl_client_hello|ssl_certificate|ssl_session_fetch|ssl_session_store)_by_lua_block$/) {
+                    lua_depth = 1
+                    lua_start = line
+                } else {
+                    depth++
+                    if (name == "mail") hint("mail")
+                    if (!argc && !bad_line) bad_line = NR
+                }
+            } else if (end == "}") {
+                if ((--depth < 0 || argc) && !bad_line) bad_line = NR
+            } else if (name == "include") {
+                hint("include_observed")
+                if (argc == 2 && value != "" && value !~ /[[:cntrl:]]/) print "@include " value
+                else problem("unsupported_include", line)
+            } else if (name == "listen") {
+                for (i = 3; i <= argc; i++) {
+                    if (args[i] == "http2") hint("http2_on")
+                    if (args[i] == "quic") {
+                        hint("http3_or_quic")
+                        hint("quic_listener")
+                    }
+                }
+            } else if (name == "http2" && value ~ /^(on|off)$/) hint("http2_" value)
+            else if (name == "http3" && value == "on") hint("http3_or_quic")
+            else if (name == "proxy_http_version" && value == "2") hint("proxy_http_version_2")
+            else if (name == "resolver" && value != "off") hint("resolver")
+            else if (name == "mirror" && value != "off") hint("mirror")
+            else if (name == "mirror_request_body" && value == "off") hint("mirror_request_body_off")
+            else if (name == "ssi" && value == "on") hint("ssi")
+            else if (name == "proxy" && value == "on") hint("mail_proxy")
+            else if (name == "auth_http") hint("auth_http")
+            else if (name ~ /^(proxy|grpc|fastcgi|uwsgi|scgi|memcached)_pass$/) {
+                hint("upstream")
+                if (name == "grpc_pass") hint("grpc_upstream")
+                if (name == "proxy_pass" && index(value, "$")) {
+                    hint("dynamic_proxy_pass")
+                    host = value
+                    if (sub(/^https?:\/\//, "", host)) sub(/[:\/?].*$/, "", host)
+                    if (index(host, "$")) hint("dynamic_proxy_host")
+                }
+            }
+            argc = line = 0
+        }
+        {
+            for (i = 1; i <= length($0); i++) {
+                c = substr($0, i, 1)
+                if (lua_depth) {
+                    if (lua_character($0, c)) break
+                    continue
+                }
+                if (escaped) {
+                    word = word c
+                    escaped = 0
+                } else if (c == "\\") {
+                    escaped = in_word = 1
+                    if (!line) line = NR
+                } else if (quote) {
+                    if (c == quote) quote = ""
+                    else word = word c
+                } else if (variable) {
+                    word = word c
+                    if (c == "}") variable = 0
+                } else if (c == "#" && !in_word) {
+                    break
+                } else if (c ~ /[[:space:]]/) {
+                    token()
+                } else if (c == "{" && word ~ /\$$/) {
+                    word = word c
+                    variable = 1
+                } else if (c == ";" || c == "{" || c == "}") {
+                    directive(c)
+                } else {
+                    if (!line) line = NR
+                    in_word = 1
+                    if (c == "\"" || c == "\047") quote = c
+                    else word = word c
+                }
+            }
+            if (quote) word = word "\n"
+            else if (!escaped && !variable) token()
+        }
+        END {
+            if (lua_depth)
+                problem("unsupported_syntax", lua_start)
+            else if (bad_line || depth || argc || in_word || quote || escaped || variable)
+                problem("unsupported_syntax", bad_line ? bad_line : (line ? line : NR))
+        }
+    '
+}
+
+nginx_config_root_path() {
+    local root=$1 rest=$2 directory=${3:-} resolved= part candidate target links=0
+    [[ $rest == /* ]] || return 1
+    while [[ -n $rest ]]; do
+        part=${rest%%/*}
+        if [[ $rest == */* ]]; then rest=${rest#*/}; else rest=; fi
+        case $part in
+            ''|.) continue ;;
+            ..) resolved=${resolved%/*}; continue ;;
+        esac
+        candidate=$root$resolved/$part
+        if [[ -L $candidate ]]; then
+            ((links < 40)) || return 1
+            links=$((links + 1))
+            target=$(readlink -- "$candidate" 2>/dev/null) || return 1
+            # 容器中的绝对软链接从容器根目录解析。
+            [[ $target != /* ]] || resolved=
+            rest=$target${rest:+/$rest}
+        else
+            if [[ ( -n $rest || $directory == directory ) && ! -d $candidate ]]; then
+                if [[ -x $root$resolved/ && ! -e $candidate ]]; then return 2; fi
+                return 1
+            fi
+            resolved+=/$part
+        fi
+    done
+    printf '%s' "$root${resolved:-/}"
+}
+
+nginx_config_skip() {
+    local reason=$1 path=$2 line=${3:-}
+    printf '@skipped {"reason":"%s","file":%s' "$reason" "$(jstr "$(san_field "$path")")"
+    [[ -z $line ]] || printf ',"line":%d' "$line"
+    printf '}\n'
+}
+
 nginx_config_stream() {
-    local path=$1 base=$2 depth=$3 id size content target dir suffix match has_match
-    if [ "$count" -ge 64 ]; then printf '@skipped\n'; return; fi
-    if [ ! -f "$path" ]; then
-        if [ "$depth" -gt 0 ] || [ "$explicit_roots" -eq 1 ]; then printf '@skipped\n'; fi
+    local path=$1 base=$2 depth=$3 id size content entry target dir pattern match fs_path fs_dir status problem_line reason
+    local -a includes=() matches=()
+    fs_path=$path
+    if [[ -n $config_root ]] && ! fs_path=$(nginx_config_root_path "$config_root" "$path"); then
+        nginx_config_skip path_unresolved "$path"
         return
     fi
-    id=$(file_id "$path") || { printf '@skipped\n'; return; }
+    if [ ! -f "$fs_path" ]; then
+        if [[ $depth -gt 0 || $explicit_roots -eq 1 ]]; then nginx_config_skip missing_or_not_regular "$path"; fi
+        return
+    fi
+    id=$(file_id "$fs_path") || { nginx_config_skip stat_failed "$path"; return; }
     [[ $seen_files != *" $id "* ]] || return 0
+    if [[ $count -ge 64 ]]; then nginx_config_skip file_limit "$path"; return 1; fi
     seen_files+="$id "
     count=$((count + 1))
-    size=$(stat -Lc '%s' -- "$path" 2>/dev/null) || size=
-    if [[ ! $size =~ ^[0-9]+$ ]] || [ "$size" -gt 65536 ] ||
-       ! content=$(head -c 65536 -- "$path" 2>/dev/null); then
-        printf '@skipped\n'
+    size=$(stat -Lc '%s' -- "$fs_path" 2>/dev/null) || { nginx_config_skip stat_failed "$path"; return; }
+    if [[ $size -gt 65536 ]]; then nginx_config_skip file_too_large "$path"; return; fi
+    if ! content=$(head -c 65536 -- "$fs_path" 2>/dev/null); then
+        nginx_config_skip read_failed "$path"
         return
     fi
     printf '@file %s\n' "$(jstr "$(san_field "$path")")"
-    printf '%s\n' "$content" | sed 's/^/@line /'
-    while IFS= read -r target; do
-        target=${target#\"}; target=${target%\"}
-        target=${target#\'}; target=${target%\'}
-        if (( depth >= 8 )) || [[ ! $target =~ ^[a-zA-Z0-9/._*-]+$ ]]; then
-            printf '@skipped\n'
+    while IFS= read -r entry; do
+        case $entry in
+            '@include '*) includes+=("${entry#@include }") ;;
+            '@problem '*)
+                read -r _ problem_line reason <<< "$entry"
+                nginx_config_skip "$reason" "$path" "$problem_line" ;;
+            *) printf '%s\n' "$entry" ;;
+        esac
+    done < <(nginx_config_directives <<< "$content")
+    for target in ${includes[@]+"${includes[@]}"}; do
+        if [[ $target != /* ]]; then target=$base/$target; fi
+        if (( depth >= 8 )); then
+            nginx_config_skip include_depth_limit "$target"
             continue
         fi
-        if [[ $target != /* ]]; then target=$base/$target; fi
-        if [[ $target == *'*'* ]]; then
+        if [[ $target == *[\*\?\[]* ]]; then
             dir=${target%/*}
-            suffix=${target##*/}
-            if [[ $dir == *'*'* || $suffix != '*'* || ${suffix:1} == *'*'* ]]; then
-                printf '@skipped\n'; continue
+            pattern=${target##*/}
+            if [[ $dir == *[\*\?\[]* ]]; then
+                nginx_config_skip unsupported_glob_directory "$target"
+                continue
             fi
-            suffix=${suffix:1}
-            has_match=0
-            for match in "$dir"/*"$suffix"; do
-                [ -f "$match" ] || continue
-                has_match=1
-                nginx_config_stream "$match" "$base" "$((depth + 1))"
-                (( count < 64 )) || { printf '@skipped\n'; break; }
+            fs_dir=${dir:-/}
+            [[ $fs_dir == /* ]] || fs_dir=$PWD/$fs_dir
+            status=0
+            fs_dir=$(nginx_config_root_path "$config_root" "$fs_dir" directory) || status=$?
+            # Nginx accepts a wildcard include with no matches, including an absent directory.
+            [[ $status -ne 2 ]] || continue
+            if [[ $status -ne 0 || ! -r $fs_dir || ! -x $fs_dir ]]; then
+                nginx_config_skip include_directory_unreadable "$target"
+                continue
+            fi
+            if [[ $pattern == .* ]]; then matches=("$fs_dir"/.*); else matches=("$fs_dir"/*); fi
+            for match in ${matches[@]+"${matches[@]}"}; do
+                [[ ${match##*/} != . && ${match##*/} != .. && ${match##*/} == $pattern ]] || continue
+                [[ -e $match || -L $match ]] || continue
+                nginx_config_stream "$dir/${match##*/}" "$base" "$((depth + 1))" || break
             done
-            if [ "$has_match" -eq 0 ] && [ ! -r "$dir" ]; then printf '@skipped\n'; fi
         else
-            nginx_config_stream "$target" "$base" "$((depth + 1))"
+            nginx_config_stream "$target" "$base" "$((depth + 1))" || break
         fi
-        (( count < 64 )) || break
-    done < <(awk '{
-        sub(/#.*/, "")
-        n=split($0,parts,/[{};]/)
-        for(i=1;i<n;i++) if(parts[i]~/^[[:space:]]*include[[:space:]]+/) {
-            sub(/^[[:space:]]*include[[:space:]]+/,"",parts[i])
-            sub(/[[:space:]]+$/,"",parts[i])
-            print parts[i]
-        }
-    }' <<< "$content")
+    done
 }
 
 nginx2root_config() {
-    local config count=0 explicit_roots=0
+    local config config_root= count=0 explicit_roots=0
     local -a configs=()
+    if [[ ${1:-} == --root ]]; then
+        config_root=$2
+        shift 2
+    fi
     if [ "$#" -gt 0 ]; then
         configs=("$@")
         explicit_roots=1
     else
-        configs=(/etc/nginx/nginx.conf /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/* /usr/local/nginx/conf/nginx.conf)
+        configs=(/etc/nginx/nginx.conf /etc/nginx/conf.d/*.conf
+                 /etc/nginx/sites-enabled/* /usr/local/nginx/conf/nginx.conf)
     fi
     (
         local seen_files=' '
         for config in "${configs[@]}"; do
-            nginx_config_stream "$config" "$(dirname -- "$config")" 0
-            (( count < 64 )) || break
+            nginx_config_stream "$config" "$(dirname -- "$config")" 0 || break
         done
     ) | awk '
-        /^@file / { files++; file=substr($0,7); line=0; next }
-        /^@skipped$/ { skipped++; next }
-        /^@line / {
-            $0=substr($0,7)
-            line++
-            gsub(/"[^"]*"|\047[^\047]*\047/, "", $0)
-            sub(/#.*/, "", $0)
-            if ($0 ~ /(^|[;{}[:space:]])http2[[:space:]]+on([[:space:]]|;)/ ||
-                $0 ~ /(^|[;{}[:space:]])listen[[:space:]]+[^;]*[[:space:]]http2([[:space:]]|;)/) {h2=1; record("http2_on")}
-            if ($0 ~ /(^|[;{}[:space:]])http2[[:space:]]+off([[:space:]]|;)/) {h2off=1; record("http2_off")}
-            if ($0 ~ /(^|[;{}[:space:]])http3[[:space:]]+on([[:space:]]|;)/ ||
-                $0 ~ /(^|[;{}[:space:]])listen[[:space:]]+[^;]*[[:space:]]quic([[:space:]]|;)/) {h3=1; record("http3_or_quic")}
-            if ($0 ~ /(^|[;{}[:space:]])include[[:space:]]+/) includes=1
-            if ($0 ~ /(^|[;{}[:space:]])proxy_http_version[[:space:]]+2([[:space:]]|;)/) {upstream_h2=1; record("proxy_http_version_2")}
-            if ($0 ~ /(^|[;{}[:space:]])grpc_pass[[:space:]]+/) {grpc=1; record("grpc_upstream")}
-            if ($0 ~ /(^|[;{}[:space:]])resolver[[:space:]]+/) {resolver=1; record("resolver")}
-            if ($0 ~ /(^|[;{}[:space:]])(proxy_pass|grpc_pass|fastcgi_pass|uwsgi_pass|scgi_pass)[[:space:]]+/) {upstream=1; record("upstream")}
-            if ($0 ~ /(^|[;{}[:space:]])proxy_pass[[:space:]]+[^;]*\$/) {dynamic=1; record("dynamic_proxy_pass")}
-            if ($0 ~ /(^|[;{}[:space:]])mirror[[:space:]]+/) {mirror=1; record("mirror")}
-            if ($0 ~ /(^|[;{}[:space:]])mirror_request_body[[:space:]]+off([[:space:]]|;)/) {mirror_off=1; record("mirror_request_body_off")}
-            if ($0 ~ /(^|[;{}[:space:]])ssi[[:space:]]+on([[:space:]]|;)/) {ssi=1; record("ssi")}
-            if ($0 ~ /(^|[;{}[:space:]])mail[[:space:]]*\{/) {mail=1; record("mail")}
-            if ($0 ~ /(^|[;{}[:space:]])proxy[[:space:]]+on([[:space:]]|;)/) {mail_proxy=1; record("mail_proxy")}
-            if ($0 ~ /(^|[;{}[:space:]])auth_http[[:space:]]+/) {auth=1; record("auth_http")}
+        /^@file / { files++; file=substr($0,7); next }
+        /^@skipped / {
+            if (++skipped <= 16) details=details (details=="" ? "" : ",") substr($0,10)
+            next
         }
-        function record(hint) {
-            if (hint in seen || file=="") return
-            seen[hint]=1
-            entries=entries (entries=="" ? "" : ",") sprintf("{\"hint\":\"%s\",\"file\":%s,\"line\":%d}", hint,file,line)
+        /^@hint / {
+            key=$3
+            if (key in seen) next
+            seen[key]=1
+            if (key=="include_observed") next
+            entries=entries (entries=="" ? "" : ",") sprintf("{\"hint\":\"%s\",\"file\":%s,\"line\":%d}", key,file,$2)
         }
-        function b(value) { return value ? "true" : "false" }
         END {
+            keys="http2_on http2_off http3_or_quic upstream resolver dynamic_proxy_pass mirror mirror_request_body_off ssi mail mail_proxy auth_http include_observed proxy_http_version_2 grpc_upstream quic_listener dynamic_proxy_host"
             printf "{\"scope\":\"disk_directive_hints\",\"files_examined\":%d,\"skipped\":%d,", files, skipped
-            printf "\"http2_on\":%s,\"http2_off\":%s,\"http3_or_quic\":%s,", b(h2), b(h2off), b(h3)
-            printf "\"upstream\":%s,\"resolver\":%s,\"dynamic_proxy_pass\":%s,", b(upstream), b(resolver), b(dynamic)
-            printf "\"mirror\":%s,\"mirror_request_body_off\":%s,\"ssi\":%s,", b(mirror), b(mirror_off), b(ssi)
-            printf "\"mail\":%s,\"mail_proxy\":%s,\"auth_http\":%s,", b(mail), b(mail_proxy), b(auth)
-            printf "\"include_observed\":%s,\"proxy_http_version_2\":%s,\"grpc_upstream\":%s,\"scope_resolution\":\"file_directive_only\",\"evidence\":[%s]}", b(includes), b(upstream_h2), b(grpc), entries
+            n=split(keys, flags, " ")
+            for (i=1; i<=n; i++) printf "\"%s\":%s,", flags[i], (flags[i] in seen ? "true" : "false")
+            printf "\"scope_resolution\":\"file_directive_only\",\"evidence\":[%s]", entries
+            if (skipped) printf ",\"skipped_details\":[%s]", details
+            printf "}"
         }'
 }
 
@@ -2362,9 +2601,19 @@ linux_inventory_unavailable() {
     return 3
 }
 
+apache_module_rpm_version() {
+    local path=$1 info name version
+    have rpm && have timeout || return 0
+    info=$(timeout 2 rpm -qf --qf '%{NAME}\t%{VERSION}\n' -- "$path" 2>/dev/null) || return 0
+    [[ $info != *$'\n'* ]] || return 0
+    IFS=$'\t' read -r name version <<< "$info"
+    [[ $name == mod_http2 && $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
+    printf '%s' "$version"
+}
+
 apache_inventory() {
     local format=txt proc name pid path id start row= seen=' ' rows=0 disk=0 comma= version reference mapped config
-    local gate=0 modules=0 unknown=0 explicit= proc_limit=false unresolved=0 image_state match package_hint http2_evidence disk_http2=condition_not_observed
+    local gate=0 modules=0 unknown=0 explicit= proc_limit=false unresolved=0 image_state match package_hint http2_evidence disk_http2=condition_not_observed module_version_source
     local -a configs=()
     while (($#)); do
         case $1 in
@@ -2450,12 +2699,19 @@ apache_inventory() {
         [[ $seen != *" $id "* ]] || continue
         seen+="$id "
         version=$(apache_version "$path" module)
+        module_version_source=unknown
+        if [[ -n $version ]]; then
+            module_version_source=binary
+        else
+            version=$(apache_module_rpm_version "$path")
+            [[ -z $version ]] || module_version_source=rpm_package
+        fi
         reference=$(apache_reference "$version" module)
         [[ $reference != potential ]] || gate=1
         [[ $reference != unknown ]] || unknown=1
         package_hint=$(web_package_hint "$path")
         if [ "$format" = json ]; then
-            row+="$comma{\"kind\":\"module_installation\",\"httpd_association\":\"unverified\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"package_evidence\":${package_hint:-null},\"http2_evidence\":\"$disk_http2\"}"
+            row+="$comma{\"kind\":\"module_installation\",\"httpd_association\":\"unverified\",\"version_source\":\"$module_version_source\",\"path\":$(jstr "$(san_field "$path")"),\"version\":$(jstr "$version"),\"version_status\":$(jstr "$reference"),\"package_evidence\":${package_hint:-null},\"http2_evidence\":\"$disk_http2\"}"
             comma=,
         else
             printf 'Apache 磁盘模块 · %q · %s · %s · 所属 httpd 待核验\n' "$path" "${version:-版本未知}" "$reference"
@@ -2571,7 +2827,7 @@ web_package_hint() {
 nginx2root_scan() {
     local format=txt explicit="" installed path proc pid id current raw matched
     local seen=' ' rows=0 comma= gate=0 unknown=0 total=0 config_report sctp_report package_hint
-    local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root metadata flavor plus module_hints product_version config_entry row_config config_source incomplete=false gate_hit=false
+    local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root metadata flavor plus module_hints product_version compiled_config config_entry row_config config_source incomplete=false gate_hit=false
     local index package_count=0 condition_not_observed=0 potential_missing=0 unknown_missing=0 unattributed=0 incomplete_config=0 config_incomplete=false unmapped= unmapped_seen=" "
     local -a package_ids=() package_values=()
     local -a config_paths=()
@@ -2651,11 +2907,13 @@ nginx2root_scan() {
             printf '%s{"kind":"%s","pid":%s,"path":%s,"version":%s,"disk_identity_matched":%s,"disk_identity_status":"%s","flavor":"%s","plus_release":%s,"plus_release_unresolved":%s,"product_version":%s,"embedded_nginx_version":%s,"patch_status":"unverified","cves":' \
                 "$comma" "$kind" "$(jstr "$pid")" "$(jstr "$(san_field "$path")")" "$(jstr "$raw")" "$matched" "$image_state" "$flavor" "$(jstr "$plus")" "$plus_unresolved" "$(jstr "$product_version")" "$(jstr "$raw")"
             printf '%s,"package_evidence":%s,"binary_module_hints":%s' "$references" "$package_hint" "${module_hints:-null}"
+            if [[ -n $compiled_config ]]; then printf ',"compiled_config_path":%s' "$(jstr "$compiled_config")"; fi
             if [ -n "$row_config" ]; then printf ',"configuration_entry":%s,"configuration_entry_source":%s,"configuration":%s' "$(jstr "$config_entry")" "$(jstr "$config_source")" "$row_config"; fi
             printf '}'
             comma=,
         else
             printf '%s %s %q · %s %s · NGINX 内核 %s · 磁盘身份 %s\n' "$kind" "$pid" "$path" "${flavor:-未知}" "${product_version:-}" "${raw:-未知}" "$image_state"
+            if [[ -n $compiled_config ]]; then printf '编译时配置路径线索 · %q\n' "$compiled_config"; fi
             if [[ $flavor == plus ]]; then printf 'NGINX Plus 发行标识 · %s\n' "${plus:-未解析}"; fi
             printf '%s\n' "$references"
             if [ -n "$row_config" ]; then printf '配置来源 · %s · %q · %s\n' "$config_source" "$config_entry" "$row_config"; fi
@@ -2675,13 +2933,13 @@ nginx2root_scan() {
         start=$(java_process_start "$pid")
         path=$(readlink "$proc/exe" 2>/dev/null || :)
         id=$(file_id "$proc/exe" || :)
-        metadata=$(nginx2root_binary_metadata "$proc/exe")
-        IFS='|' read -r raw flavor plus module_hints product_version <<< "$metadata"
+        metadata=$(nginx2root_binary_metadata "$proc/exe" with_config)
+        IFS='|' read -r raw flavor plus module_hints product_version compiled_config <<< "$metadata"
         image_state=$(web_disk_identity "$proc" "$path" "$id")
         process_ns=$(readlink "$proc/ns/mnt" 2>/dev/null || :)
         if [[ -z $id || -z $start || $(file_id "$proc/exe") != "$id" ||
               $(java_process_start "$pid") != "$start" ]]; then
-            raw= flavor= plus= module_hints= product_version=
+            raw= flavor= plus= module_hints= product_version= compiled_config=
             image_state=unverified
         elif [[ $image_state == matched ]]; then
             seen+="$id "
@@ -2720,8 +2978,8 @@ nginx2root_scan() {
         [ -n "$path" ] && [ -f "$path" ] || continue
         id=$(file_id "$path") || continue
         [[ $seen != *" $id "* ]] || continue
-        metadata=$(nginx2root_binary_metadata "$path")
-        IFS='|' read -r raw flavor plus module_hints product_version <<< "$metadata"
+        metadata=$(nginx2root_binary_metadata "$path" with_config)
+        IFS='|' read -r raw flavor plus module_hints product_version compiled_config <<< "$metadata"
         seen+="$id "
         package_hint=$(web_package_hint "$path")
         config_entry= row_config= config_source=

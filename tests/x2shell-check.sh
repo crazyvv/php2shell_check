@@ -305,6 +305,34 @@ NGINX
     flags=$(nginx2root_config "$fixture/entry.conf")
     [[ $flags == *'"files_examined":2,"skipped":1'* ]]
     [[ $flags == *'"hint":"http2_on","file":"'"$fixture/sites/site.conf"'","line":2'* ]]
+    cat > "$fixture/multiline.conf" <<'CONF'
+http {
+    access_by_lua_block {
+        local ignored = [=[http2 off; }]=]
+    }
+    http2
+        on;
+    proxy_pass "http://$backend/path";
+}
+CONF
+    flags=$(nginx2root_config "$fixture/multiline.conf")
+    [[ $flags == *'"skipped":0,'* && $flags == *'"http2_on":true'* &&
+        $flags == *'"http2_off":false'* && $flags == *'"dynamic_proxy_host":true'* ]]
+
+    printf '\177ELF nginx/1.25.3 --conf-path=/opt/NGINX/conf/nginx.conf' > "$fixture/nginx-elf"
+    nginx_rc=0
+    "$scanner" --nginx2root --nginx-path "$fixture/nginx-elf" --nginx-config "$fixture/empty-nginx.conf" --json \
+        > "$fixture/nginx-static.json" || nginx_rc=$?
+    [[ $nginx_rc == 1 ]]
+    grep -Fq '"compiled_config_path":"/opt/NGINX/conf/nginx.conf"' "$fixture/nginx-static.json"
+    grep -Fq '"status":"potential","feature":"http2","config_evidence":"condition_not_observed"' "$fixture/nginx-static.json"
+
+    printf '\177ELF Apache/2.4.70' > "$fixture/httpd-elf"
+    apache_rc=0
+    "$scanner" --apache2root --apache-path "$fixture/httpd-elf" --json > "$fixture/apache-static.json" || apache_rc=$?
+    [[ $apache_rc == 1 ]]
+    grep -Fq '"path":"'"$fixture/httpd-elf"'","version":"2.4.70","version_status":"potential"' "$fixture/apache-static.json"
+
     printf 'nginx: master process nginx -c %s -g daemon off;\0' "$fixture/entry.conf" > "$fixture/cmdline"
     [[ $(nginx_process_config_entry "$fixture") == "$fixture/entry.conf" ]]
     printf 'nginx\0-g\0daemon off;\0-c\0%s\0' "$fixture/entry.conf" > "$fixture/cmdline"
@@ -336,6 +364,11 @@ NGINX
     )
 fi
 
+[[ $(jstr $'path\twith\nnewline\n') == '"path\u0009with\nnewline\n"' ]]
+mkdir -p "$fixture/standalone/jre/bin" "$fixture/nested/jre/bin"
+touch "$fixture/nested/release"
+[[ $(java_root_of "$fixture/standalone/jre/bin/java") == "$fixture/standalone/jre" ]]
+[[ $(java_root_of "$fixture/nested/jre/bin/java") == "$fixture/nested" ]]
 [[ $(apache_reference 2.4.54) == outside_upstream_range ]]
 [[ $(apache_reference 2.4.55) == potential ]]
 [[ $(apache_reference 2.4.70) == potential ]]
