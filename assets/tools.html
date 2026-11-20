@@ -67,6 +67,7 @@ printf 'exit_code=%s\n' "$status"</code></pre>
         <dt><code>2</code></dt><dd>出现参数或采集错误。查看错误输出并检查报告是否完整。</dd>
         <dt><code>3</code></dt><dd>证据不足或覆盖不完整。检查权限、容器视图或平台支持。</dd>
       </dl>
+      <p>Java、NGINX 和 Apache 在自动盘点进程时，若检测到容器或受限的 <code>/proc</code> 挂载，会将 <code>coverage.process_visibility_limited</code> 标为 <code>true</code>。NGINX 和 Apache 也会标记仍存在但无法读取进程名称的 PID。已有风险命中仍返回 <code>1</code>，其余情况返回 <code>3</code>。需要核验整台主机时，应在能够看到宿主机进程的环境运行脚本。</p>
       <p class="fine">同时出现多个状态时，批量模式优先返回 2，其次 1，再其次 3。请结合各专项退出码阅读报告。</p>
     </section>
   </div>
@@ -85,7 +86,7 @@ printf 'exit_code=%s\n' "$status"</code></pre>
       <dl>
         <dt>进程和目录</dt><dd><code>PROCESS_SCAN_LIMIT=2048</code>、<code>WEB_PROCESS_MATCH_LIMIT=24</code> 和 <code>DIRECTORY_ENTRY_LIMIT=10000</code>。<code>ROOT_DEPTH=8</code> 和 <code>APPS_DEPTH=3</code> 是默认深度，可分别由 <code>--root-depth</code> 和 <code>--apps-depth</code> 覆盖。</dd>
         <dt>Web 文件读取</dt><dd><code>WEB_CONFIG_FILE_LIMIT=64</code>、<code>WEB_CONFIG_BYTE_LIMIT=65536</code>、<code>NGINX_INCLUDE_DEPTH_LIMIT=8</code>、<code>WEB_BINARY_BYTE_LIMIT=16777216</code> 和 <code>APACHE_MAPS_BYTE_LIMIT=1048576</code>。离线 CPU 信息另由 <code>CPUINFO_BYTE_LIMIT=1048576</code> 限制。带 <code>BYTE</code> 的值以字节计。</dd>
-        <dt>单次命令超时</dt><dd><code>PACKAGE_QUERY_TIMEOUT=2</code>、<code>JCMD_TIMEOUT=3</code> 和 <code>JAVA_VERSION_TIMEOUT=30</code>，单位为秒。主机需要有 <code>timeout</code> 工具。Java 版本查询也支持 <code>gtimeout</code>。</dd>
+        <dt>单次命令超时</dt><dd><code>PACKAGE_QUERY_TIMEOUT=2</code>、<code>JCMD_TIMEOUT=3</code> 和 <code>JAVA_VERSION_TIMEOUT=30</code>，单位为秒。软件包查询收到超时终止信号后还有 1 秒退出时间，随后会被强制终止。主机需要有 <code>timeout</code> 工具。Java 版本查询也支持 <code>gtimeout</code>。</dd>
       </dl>
     </details>
   </section>

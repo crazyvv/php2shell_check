@@ -420,6 +420,103 @@ CONF
     "$scanner" --nginx2root --nginx-path "$fixture/openresty/nginx/sbin/nginx" --nginx-config "$fixture/missing" --json > "$fixture/incomplete.json" || nginx_rc=$?
     [[ $nginx_rc == 1 ]]
     grep -Fq '"evidence_incomplete":true,"configuration_evidence_incomplete":true,"configuration_incomplete":true},"summary":{"risk_gate_hit":true' "$fixture/incomplete.json"
+    rc=0
+    (
+        scan_processes() { :; }
+        linux_process_visibility_limited() { return 0; }
+        java4shell_main --quiet --jdk "$fixture/jdk" --json
+    ) > "$fixture/java-limited.json" || rc=$?
+    [[ $rc == 3 ]]
+    grep -Fq '"status": "not_affected"' "$fixture/java-limited.json"
+    grep -Fq '"process_visibility_limited": true' "$fixture/java-limited.json"
+    (
+        linux_process_visibility_limited() { return 0; }
+        java4shell_main --quiet --no-processes --jdk "$fixture/jdk" --json > "$fixture/java-static-only.json"
+    )
+    grep -Fq '"process_visibility_limited": false' "$fixture/java-static-only.json"
+
+    if have timeout && timeout -k 1s 1s true >/dev/null 2>&1; then
+        mkdir -p "$fixture/package-tools" "$fixture/rpm-jdk/bin"
+        : > "$fixture/rpm-jdk/bin/java"
+        cat > "$fixture/package-tools/rpm" <<'RPM'
+#!/bin/sh
+trap '' TERM
+: > "$X2_RPM_STARTED"
+sleep 4
+: > "$X2_RPM_FINISHED"
+RPM
+        chmod +x "$fixture/package-tools/rpm"
+        (
+            export PATH="$fixture/package-tools:$PATH"
+            export X2_RPM_STARTED="$fixture/rpm-started" X2_RPM_FINISHED="$fixture/rpm-finished"
+            PACKAGE_QUERY_TIMEOUT=1
+            ! installation_rpm_metadata "$fixture/rpm-jdk"
+            [[ -e $X2_RPM_STARTED && ! -e $X2_RPM_FINISHED ]]
+        ) 2> "$fixture/rpm-timeout.err"
+    fi
+
+    # Exercise the mount parser and the verdict when the process view is limited.
+    mkdir -p "$fixture/proc-view/self" "$fixture/proc-view/1" "$fixture/proc-view/123"
+    : > "$fixture/proc-view/self/stat"
+    : > "$fixture/proc-view/1/comm"
+    (
+        container_hint() { :; }
+        procview=$fixture/proc-view
+        printf '%s\n' '31 23 0:4 / /proc rw,nosuid - proc proc rw,hidepid=off' > "$procview/self/mountinfo"
+        ! linux_process_visibility_limited "$procview"
+        printf '%s\n' '31 23 0:4 / /proc rw,nosuid - proc proc rw,hidepid=invisible' > "$procview/self/mountinfo"
+        linux_process_visibility_limited "$procview"
+        printf '%s\n' '31 23 0:4 /1 /proc rw,nosuid - proc proc rw' > "$procview/self/mountinfo"
+        linux_process_visibility_limited "$procview"
+        container_hint() { printf 'container'; }
+        printf '%s\n' '31 23 0:4 / /proc rw,nosuid - proc proc rw' > "$procview/self/mountinfo"
+        linux_process_visibility_limited "$procview"
+    )
+    (
+        web_process_paths() { :; }
+        linux_process_visibility_limited() { return 0; }
+        web_package_hint() { :; }
+        file_id() {
+            case $1 in "$fixture/"*) printf '%s' "$1" ;; *) return 1 ;; esac
+        }
+        rc=0
+        apache_inventory --apache-config "$fixture/apache.conf" --json > "$fixture/apache-limited.json" || rc=$?
+        [[ $rc == 3 ]]
+        grep -Fq '"status":"not_observed"' "$fixture/apache-limited.json"
+        grep -Fq '"process_visibility_limited":true' "$fixture/apache-limited.json"
+
+        printf '\177ELF nginx/1.31.9' > "$fixture/nginx-elf"
+        rc=0
+        nginx2root_scan --nginx-path "$fixture/nginx-elf" --nginx-config "$fixture/empty-nginx.conf" --json \
+            > "$fixture/nginx-limited.json" || rc=$?
+        [[ $rc == 3 ]]
+        grep -Fq '"status":"meets_upstream_reference"' "$fixture/nginx-limited.json"
+        grep -Fq '"process_visibility_limited":true,"evidence_incomplete":true' "$fixture/nginx-limited.json"
+
+        java4shell_main() { printf '{"status":"fixture"}'; }
+        rc=0
+        audit_all --nginx-path "$fixture/nginx-elf" --nginx-config "$fixture/empty-nginx.conf" \
+            --apache-config "$fixture/apache.conf" --json > "$fixture/all-limited.json" || rc=$?
+        [[ $rc == 3 ]]
+        grep -Fq '"exit_codes":{"java4shell":0,"nginx2root":3,"apache2root":3}' "$fixture/all-limited.json"
+
+        printf '\177ELF nginx/1.31.8' > "$fixture/nginx-elf"
+        rc=0
+        nginx2root_scan --nginx-path "$fixture/nginx-elf" --nginx-config "$fixture/empty-nginx.conf" --json \
+            > "$fixture/nginx-risk-limited.json" || rc=$?
+        [[ $rc == 1 ]]
+        grep -Fq '"process_visibility_limited":true' "$fixture/nginx-risk-limited.json"
+
+        linux_process_visibility_limited() { return 1; }
+        apache_inventory --apache-config "$fixture/apache.conf" --json > "$fixture/apache-visible.json"
+        grep -Fq '"process_visibility_limited":false' "$fixture/apache-visible.json"
+
+        web_process_paths() { printf '%s\n' "$fixture/proc-view/123"; }
+        rc=0
+        apache_inventory --apache-config "$fixture/apache.conf" > "$fixture/apache-unreadable.txt" || rc=$?
+        [[ $rc == 3 ]]
+        grep -Fq '进程视图受限' "$fixture/apache-unreadable.txt"
+    )
     web_coverage_incomplete false 0 '{"skipped":1}'
     ! web_coverage_incomplete false 0 '{"skipped":0}'
     (

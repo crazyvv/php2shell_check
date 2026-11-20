@@ -76,6 +76,7 @@ FAIL_ON="affected,potential"
 ASSUME_FEFF=0
 JCMD=0
 PROCESS_LIMIT_REACHED=false
+PROCESS_VISIBILITY_LIMITED=false
 ROOT_ENTRY_LIMIT_REACHED=false
 APPS_ENTRY_LIMIT_REACHED=false
 APPS_SCAN_ERRORS=0
@@ -416,7 +417,7 @@ installation_rpm_metadata() {
         "$root"/jre/lib/*/*/libjvm.so "$root/bin/java" "$root/jre/bin/java"; do
         [ -f "$file" ] || continue
         file=$(real_path "$(resolve_symlinks "$file")")
-        row=$(LC_ALL=C timeout "$PACKAGE_QUERY_TIMEOUT" rpm -qf --qf '%{NAME}\t%{VERSION}\t%{VENDOR}\n' -- "$file" 2>/dev/null) || continue
+        row=$(LC_ALL=C timeout -k 1s "$PACKAGE_QUERY_TIMEOUT" rpm -qf --qf '%{NAME}\t%{VERSION}\t%{VENDOR}\n' -- "$file" 2>/dev/null) || continue
         # 多包归属或非预期包名不作为确定版本证据。
         [[ $row != *$'\n'* ]] || continue
         IFS=$'\t' read -r name version vendor <<< "$row"
@@ -1924,9 +1925,9 @@ report_json() {
     printf '  "cpu": {"arch": %s, "state": %s, "required_features": %s, "counts": %s, "source": %s},\n' \
         "$(jstr "$ARCH_RAW")" "$(jstr "$CPU_STATE")" "$(jstr "$REQ_FEATURES")" "$(jstr "$CPU_COUNTS")" "$(jstr "$CPU_SOURCE")"
 
-    printf '  "coverage": {"root_max_depth": %s, "root_depth_boundaries": %s, "root_scan_errors": %s, "unreadable_process_maps": %s, "process_limit_reached": %s, "root_entry_limit_reached": %s, "apps_entry_limit_reached": %s, "apps_scan_errors": %s},\n' \
+    printf '  "coverage": {"root_max_depth": %s, "root_depth_boundaries": %s, "root_scan_errors": %s, "unreadable_process_maps": %s, "process_limit_reached": %s, "process_visibility_limited": %s, "root_entry_limit_reached": %s, "apps_entry_limit_reached": %s, "apps_scan_errors": %s},\n' \
         "$((10#$ROOT_DEPTH))" "$ROOT_DEPTH_BOUNDARIES" "$ROOT_SCAN_ERRORS" "$LIMITED_PROCS" \
-        "$PROCESS_LIMIT_REACHED" "$ROOT_ENTRY_LIMIT_REACHED" "$APPS_ENTRY_LIMIT_REACHED" "$APPS_SCAN_ERRORS"
+        "$PROCESS_LIMIT_REACHED" "$PROCESS_VISIBILITY_LIMITED" "$ROOT_ENTRY_LIMIT_REACHED" "$APPS_ENTRY_LIMIT_REACHED" "$APPS_SCAN_ERRORS"
 
     printf '  "warnings": ['
     first=1
@@ -2667,7 +2668,7 @@ linux_inventory_unavailable() {
 apache_module_rpm_version() {
     local path=$1 info name version
     have rpm && have timeout || return 0
-    info=$(timeout "$PACKAGE_QUERY_TIMEOUT" rpm -qf --qf '%{NAME}\t%{VERSION}\n' -- "$path" 2>/dev/null) || return 0
+    info=$(timeout -k 1s "$PACKAGE_QUERY_TIMEOUT" rpm -qf --qf '%{NAME}\t%{VERSION}\n' -- "$path" 2>/dev/null) || return 0
     [[ $info != *$'\n'* ]] || return 0
     IFS=$'\t' read -r name version <<< "$info"
     [[ $name == mod_http2 && $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
@@ -2676,7 +2677,7 @@ apache_module_rpm_version() {
 
 apache_inventory() {
     local format=txt proc name pid path id start row= seen=' ' rows=0 disk=0 comma= version reference mapped config
-    local inspected=0
+    local inspected=0 visibility_limited=false
     local gate=0 modules=0 unknown=0 explicit= proc_limit=false unresolved=0 image_state match package_hint http2_evidence disk_http2=condition_not_observed module_version_source
     local -a configs=()
     while (($#)); do
@@ -2703,11 +2704,14 @@ apache_inventory() {
     if [[ $config == *'"load_module":true'* || $config == *'"h2":true'* || $config == *'"h2c":true'* ]]; then
         disk_http2=disk_hints_present
     fi
-    for proc in /proc/[0-9]*; do
+    if linux_process_visibility_limited; then visibility_limited=true; fi
+    while IFS= read -r proc; do
         if (( inspected >= PROCESS_SCAN_LIMIT )); then proc_limit=true; break; fi
         inspected=$((inspected + 1))
-        [ -r "$proc/comm" ] || continue
-        IFS= read -r name < "$proc/comm" 2>/dev/null || continue
+        if ! IFS= read -r name 2>/dev/null < "$proc/comm"; then
+            if [ -d "$proc" ]; then visibility_limited=true; fi
+            continue
+        fi
         case $name in apache2|httpd) ;; *) continue ;; esac
         ((rows < WEB_PROCESS_MATCH_LIMIT)) || { proc_limit=true; break; }
         pid=${proc##*/}
@@ -2739,7 +2743,7 @@ apache_inventory() {
             printf 'Apache PID %s · %q · %s · %s · mod_http2 映射 %s · 磁盘身份 %s · HTTP/2 证据 %s\n' "$pid" "$path" "${version:-版本未知}" "$reference" "$mapped" "$image_state" "$http2_evidence"
         fi
         rows=$((rows + 1))
-    done
+    done < <(web_process_paths)
     for path in "$explicit" "$(type -P apache2 || :)" "$(type -P httpd || :)" /usr/sbin/apache2 /usr/sbin/httpd /usr/local/apache2/bin/httpd; do
         [ -n "$path" ] && [ -f "$path" ] || continue
         id=$(file_id "$path") || continue
@@ -2788,15 +2792,18 @@ apache_inventory() {
     local status=observed
     ((rows + disk + modules > 0)) || status=not_observed
     if [ "$format" = json ]; then
-        printf '{"status":"%s","cve":"CVE-2026-119618","patch_verified":false,"configuration":%s,"proc_limit_reached":%s,"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d},"findings":[%s]}' \
-            "$status" "$config" "$proc_limit" "$proc_limit" "$unresolved" "$row"
+        printf '{"status":"%s","cve":"CVE-2026-119618","patch_verified":false,"configuration":%s,"proc_limit_reached":%s,"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d,"process_visibility_limited":%s},"findings":[%s]}' \
+            "$status" "$config" "$proc_limit" "$proc_limit" "$unresolved" "$visibility_limited" "$row"
     else
         if [ "$status" = not_observed ]; then printf 'Apache · 当前范围未观察到安装或进程\n'; fi
         printf 'Apache CVE-2026-119618 · 磁盘配置线索: %s\n' "$config"
+        if [ "$visibility_limited" = true ]; then
+            printf '进程视图受限，无法完整核验运行状态。\n'
+        fi
         printf '进程覆盖 · 达到上限 %s · 证据不完整 %s\n' "$proc_limit" "$unresolved"
     fi
     if [ "$gate" -eq 1 ]; then return 1; fi
-    if web_coverage_incomplete "$proc_limit" "$unresolved" "$config" || [ "$unknown" -eq 1 ]; then return 3; fi
+    if web_coverage_incomplete "$proc_limit" "$unresolved" "$config" "$visibility_limited" || [ "$unknown" -eq 1 ]; then return 3; fi
     return 0
 }
 
@@ -2864,9 +2871,43 @@ web_identity_boolean() {
     case $1 in matched) printf true ;; mismatch|deleted) printf false ;; *) printf null ;; esac
 }
 
+web_process_paths() {
+    local proc count=0
+    for proc in /proc/[0-9]*; do
+        [ -d "$proc" ] || continue
+        printf '%s\n' "$proc"
+        count=$((count + 1))
+        if ((count > PROCESS_SCAN_LIMIT)); then break; fi
+    done
+}
+
+linux_process_visibility_limited() {
+    local procfs=${1:-/proc}
+    [ -r "$procfs/self/stat" ] && [ -r "$procfs/1/comm" ] &&
+        [ -r "$procfs/self/mountinfo" ] || return 0
+    if [[ -n $(container_hint "$procfs/self") ]]; then return 0; fi
+
+    # hidepid can appear in either the mount or the superblock options.
+    # Require a visible proc mount rooted at / to establish coverage.
+    ! awk '
+        $5 == "/proc" {
+            for (i = 7; i <= NF && $i != "-"; i++) {}
+            if ($(i + 1) != "proc") next
+            found = 1
+            if ($4 != "/") limited = 1
+            n = split($6 "," $(i + 3), options, ",")
+            for (j = 1; j <= n; j++)
+                if (options[j] ~ /^hidepid=/ && options[j] !~ /^hidepid=(0|off)$/)
+                    limited = 1
+        }
+        END { exit !(found && !limited) }
+    ' "$procfs/self/mountinfo" 2>/dev/null
+}
+
 web_coverage_incomplete() {
-    local limit=$1 unresolved=$2 config=$3
-    [[ $limit == true || $unresolved -gt 0 || $config =~ \"skipped\":[1-9] ]]
+    local limit=$1 unresolved=$2 config=$3 visibility_limited=${4:-false}
+    [[ $limit == true || $unresolved -gt 0 || $visibility_limited == true ||
+       $config =~ \"skipped\":[1-9] ]]
 }
 
 nginx_package_backport() {
@@ -2898,10 +2939,11 @@ web_package_hint() {
     have timeout || return 0
     [[ $path == /* ]] || return 0
     if have dpkg-query; then
-        owner=$(timeout "$PACKAGE_QUERY_TIMEOUT" dpkg-query -S -- "$path" 2>/dev/null | awk -F ': ' -v target="$path" '$2 == target { print $1 }')
+        owner=$(timeout -k 1s "$PACKAGE_QUERY_TIMEOUT" dpkg-query -S -- "$path" 2>/dev/null) || return 0
+        owner=$(awk -F ': ' -v target="$path" '$2 == target { print $1 }' <<< "$owner")
         [[ $owner =~ ^[[:alnum:].+:-]+$ ]] || return 0
         manager=dpkg
-        result=$(timeout "$PACKAGE_QUERY_TIMEOUT" dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\t${Architecture}\t${db:Status-Status}' -- "$owner" 2>/dev/null) || return 0
+        result=$(timeout -k 1s "$PACKAGE_QUERY_TIMEOUT" dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\t${Architecture}\t${db:Status-Status}' -- "$owner" 2>/dev/null) || return 0
         [[ $result != *$'\n'* ]] || return 0
         IFS=$'\t' read -r name version source source_version arch status <<< "$result"
         [[ $status == installed ]] || return 0
@@ -2913,7 +2955,7 @@ web_package_hint() {
         fi
     elif have rpm; then
         manager=rpm
-        result=$(timeout "$PACKAGE_QUERY_TIMEOUT" rpm -qf --qf '%{NAME} %{VERSION}-%{RELEASE}' -- "$path" 2>/dev/null) || return 0
+        result=$(timeout -k 1s "$PACKAGE_QUERY_TIMEOUT" rpm -qf --qf '%{NAME} %{VERSION}-%{RELEASE}' -- "$path" 2>/dev/null) || return 0
     else
         return 0
     fi
@@ -2923,7 +2965,7 @@ web_package_hint() {
 
 nginx2root_scan() {
     local format=txt explicit="" installed path proc pid id current raw matched
-    local inspected=0
+    local inspected=0 visibility_limited=false
     local seen=' ' rows=0 comma= gate=0 unknown=0 total=0 config_report sctp_report package_hint
     local start image_state proc_limit=false unresolved=0 self_ns process_ns self_root metadata flavor plus module_hints product_version compiled_config config_entry row_config config_source incomplete=false gate_hit=false
     local index package_count=0 condition_not_observed=0 potential_missing=0 unknown_missing=0 unattributed=0 incomplete_config=0 config_incomplete=false unmapped= unmapped_seen=" "
@@ -3022,11 +3064,14 @@ nginx2root_scan() {
 
     self_ns=$(readlink /proc/self/ns/mnt 2>/dev/null || :)
     self_root=$(file_id /proc/self/root || :)
-    for proc in /proc/[0-9]*; do
+    if linux_process_visibility_limited; then visibility_limited=true; fi
+    while IFS= read -r proc; do
         if (( inspected >= PROCESS_SCAN_LIMIT )); then proc_limit=true; break; fi
         inspected=$((inspected + 1))
-        [ -r "$proc/comm" ] || continue
-        IFS= read -r current < "$proc/comm" 2>/dev/null || continue
+        if ! IFS= read -r current 2>/dev/null < "$proc/comm"; then
+            if [ -d "$proc" ]; then visibility_limited=true; fi
+            continue
+        fi
         case $current in nginx|openresty|tengine) ;; *) continue ;; esac
         ((rows < WEB_PROCESS_MATCH_LIMIT)) || { proc_limit=true; break; }
         pid=${proc##*/}
@@ -3071,7 +3116,7 @@ nginx2root_scan() {
         fi
         nginx2root_row process "$pid" "$path" "$raw" "$matched" "$package_hint" "$image_state"
         rows=$((rows + 1))
-    done
+    done < <(web_process_paths)
     installed=$(type -P nginx || :)
     for path in "$explicit" "$installed" "$(type -P openresty || :)" "$(type -P tengine || :)" \
                 /usr/sbin/nginx /usr/local/nginx/sbin/nginx /usr/local/openresty/nginx/sbin/nginx /usr/local/tengine/sbin/nginx; do
@@ -3097,10 +3142,13 @@ nginx2root_scan() {
     done
     if [ "$gate" -eq 1 ]; then gate_hit=true; fi
     if (( unattributed > 0 || incomplete_config > 0 )); then config_incomplete=true; fi
-    if [ "$unknown" -eq 1 ] || [ "$total" -eq 0 ] || web_coverage_incomplete "$proc_limit" "$unresolved" "$config_report"; then incomplete=true; fi
+    if [ "$unknown" -eq 1 ] || [ "$total" -eq 0 ] || web_coverage_incomplete "$proc_limit" "$unresolved" "$config_report" "$visibility_limited"; then incomplete=true; fi
     if [ "$format" = json ]; then
-        printf '],"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d,"evidence_incomplete":%s,"configuration_evidence_incomplete":%s,"configuration_incomplete":%s},"summary":{"risk_gate_hit":%s,"condition_not_observed":%d,"potential_condition_not_observed":%d,"unknown_condition_not_observed":%d,"configuration_not_attributed":%d,"configuration_incomplete":%d,"unmapped_product_versions":[%s]}}\n' "$proc_limit" "$unresolved" "$incomplete" "$config_incomplete" "$config_incomplete" "$gate_hit" "$condition_not_observed" "$potential_missing" "$unknown_missing" "$unattributed" "$incomplete_config" "$unmapped"
+        printf '],"coverage":{"proc_limit_reached":%s,"incomplete_process_evidence":%d,"process_visibility_limited":%s,"evidence_incomplete":%s,"configuration_evidence_incomplete":%s,"configuration_incomplete":%s},"summary":{"risk_gate_hit":%s,"condition_not_observed":%d,"potential_condition_not_observed":%d,"unknown_condition_not_observed":%d,"configuration_not_attributed":%d,"configuration_incomplete":%d,"unmapped_product_versions":[%s]}}\n' "$proc_limit" "$unresolved" "$visibility_limited" "$incomplete" "$config_incomplete" "$config_incomplete" "$gate_hit" "$condition_not_observed" "$potential_missing" "$unknown_missing" "$unattributed" "$incomplete_config" "$unmapped"
     else
+        if [ "$visibility_limited" = true ]; then
+            printf '进程视图受限，无法完整核验运行状态。\n'
+        fi
         printf '进程覆盖 · 达到上限 %s · 证据不完整 %s\n' "$proc_limit" "$unresolved"
         printf '版本门禁命中 %s · 证据不完整 %s\n' "$gate_hit" "$incomplete"
         if [ -n "$unmapped" ]; then printf '未解析内核的衍生版本 · [%s]\n' "$unmapped"; fi
@@ -3187,6 +3235,10 @@ java4shell_main() {
     if [ "$NO_PROC" -eq 0 ]; then
         if [ "$OS" = "Linux" ]; then
             note_progress "检查运行中的 JVM 进程..."
+            if (( ${#PID_ARGS[@]} == 0 )) && linux_process_visibility_limited; then
+                PROCESS_VISIBILITY_LIMITED=true
+                warn "进程视图受限，无法完整核验运行中的 JVM。"
+            fi
             scan_processes
         elif [ "$OS" = "Darwin" ]; then
             note_progress "检查 Java 进程（启动器线索）..."
@@ -3216,9 +3268,12 @@ java4shell_main() {
         scan_apps "$APPS_DIR" "$APPS_DEPTH"
     fi
 
-    ROOT_DEPTH_BOUNDARIES=$(grep -cx boundary "$ROOT_COVERAGE_FILE")
-    ROOT_SCAN_ERRORS=$(grep -cx error "$ROOT_COVERAGE_FILE")
-    APPS_SCAN_ERRORS=$(grep -cx error "$WORK/apps-coverage")
+    ROOT_DEPTH_BOUNDARIES=$(awk '$0 == "boundary" {count++} END {print count + 0}' "$ROOT_COVERAGE_FILE") ||
+        die "无法读取 JDK 搜索覆盖记录"
+    ROOT_SCAN_ERRORS=$(awk '$0 == "error" {count++} END {print count + 0}' "$ROOT_COVERAGE_FILE") ||
+        die "无法读取 JDK 搜索覆盖记录"
+    APPS_SCAN_ERRORS=$(awk '$0 == "error" {count++} END {print count + 0}' "$WORK/apps-coverage") ||
+        die "无法读取应用搜索覆盖记录"
     if grep -qx entry_limit "$ROOT_COVERAGE_FILE"; then
         ROOT_ENTRY_LIMIT_REACHED=true
         warn "JDK 目录搜索达到 $DIRECTORY_ENTRY_LIMIT 个条目的上限。"
@@ -3245,9 +3300,10 @@ java4shell_main() {
     fi
 
     if [[ $FORMAT == csv ]] &&
-       [[ $PROCESS_LIMIT_REACHED == true || $ROOT_ENTRY_LIMIT_REACHED == true || $APPS_ENTRY_LIMIT_REACHED == true ]]; then
-        printf '覆盖不完整：进程上限=%s，JDK 目录条目上限=%s，应用目录条目上限=%s。\n' \
-            "$PROCESS_LIMIT_REACHED" "$ROOT_ENTRY_LIMIT_REACHED" "$APPS_ENTRY_LIMIT_REACHED" >&2
+       [[ $PROCESS_LIMIT_REACHED == true || $PROCESS_VISIBILITY_LIMITED == true ||
+          $ROOT_ENTRY_LIMIT_REACHED == true || $APPS_ENTRY_LIMIT_REACHED == true ]]; then
+        printf '覆盖不完整：进程上限=%s，进程视图受限=%s，JDK 目录条目上限=%s，应用目录条目上限=%s。\n' \
+            "$PROCESS_LIMIT_REACHED" "$PROCESS_VISIBILITY_LIMITED" "$ROOT_ENTRY_LIMIT_REACHED" "$APPS_ENTRY_LIMIT_REACHED" >&2
     fi
 
     # --- 输出 ---
@@ -3281,6 +3337,7 @@ java4shell_main() {
                            [ "$(total_count)" -eq 0 ] || [ "$LIMITED_PROCS" -gt 0 ] ||
                            [ "$ROOT_DEPTH_BOUNDARIES" -gt 0 ] || [ "$ROOT_SCAN_ERRORS" -gt 0 ] ||
                            [ "$APPS_SCAN_ERRORS" -gt 0 ] || [ "$PROCESS_LIMIT_REACHED" = true ] ||
+                           [ "$PROCESS_VISIBILITY_LIMITED" = true ] ||
                            [ "$ROOT_ENTRY_LIMIT_REACHED" = true ] || [ "$APPS_ENTRY_LIMIT_REACHED" = true ]; }; then
         rc=3
     fi
